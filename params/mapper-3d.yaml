@@ -1,0 +1,96 @@
+# ============================================================================
+# Configuration for mola::mapper_3d::Mapper3D
+# ============================================================================
+# Central 3D SLAM map: online fusion of LIO/VIO/IMU/GNSS/wheels into one
+# optimized world model, with loop closure and geo-referencing.
+#
+# Refer to:
+# https://docs.mola-slam.org/latest/
+# https://github.com/MOLAorg/mola_mapper_3d
+# ============================================================================
+
+params:
+  # --------------------------------------------------------------------------
+  # Reference Frame IDs
+  # --------------------------------------------------------------------------
+  vehicle_frame_name: "${MOLA_TF_BASE_LINK|base_link}"
+  reference_frame_name: "${MOLA_TF_MAP|map}"
+  enu_frame_name: "enu"
+
+  # --------------------------------------------------------------------------
+  # Kinematic Model & Motion Factors
+  # --------------------------------------------------------------------------
+  # Options: KinematicModel::ConstantVelocity, KinematicModel::Tricycle
+  kinematic_model: "${MOLA_MAPPER3D_KINEMATIC_MODEL|KinematicModel::ConstantVelocity}"
+
+  max_time_to_use_velocity_model: ${MOLA_MAX_TIME_TO_USE_VELOCITY_MODEL|0.75}
+  min_time_difference_to_create_new_frame: 0.05
+  time_between_frames_to_warning: 3.0
+  gnss_nearby_keyframe_stamp_tolerance: 1.0
+  imu_nearby_keyframe_stamp_tolerance: 0.10
+
+  # High-rate same-sensor decimation (0 = disabled). Wheel-odom drops are merged
+  # (anchor held across the dropped span); IMU drops are skipped.
+  odometry_min_sample_period: ${MOLA_MAPPER3D_ODOM_MIN_PERIOD|0.0}
+  imu_min_sample_period: ${MOLA_MAPPER3D_IMU_MIN_PERIOD|0.0}
+
+  sigma_random_walk_acceleration_linear: ${MOLA_SIGMA_RW_LINACC|1.0}
+  sigma_random_walk_acceleration_angular: ${MOLA_SIGMA_RW_ANGACC|10.0}
+  sigma_integrator_position: 0.10
+  sigma_integrator_orientation: 1.0
+
+  initial_twist_sigma_lin: 20.0
+  initial_twist_sigma_ang: 3.0
+
+  enforce_planar_motion: ${MOLA_MAPPER3D_ENFORCE_PLANAR_MOTION|false}
+
+  # Pin the first frame to the reference origin (use 1e-6 for pure-odometry or
+  # when estimating geo-referencing; leave empty for pre-built geo-ref maps):
+  link_first_pose_to_reference_origin_sigma: ${MOLA_LINK_FIRST_POSE_SIGMA|}
+
+  # --------------------------------------------------------------------------
+  # IMU Related
+  # --------------------------------------------------------------------------
+  imu_attitude_sigma_deg: "${MOLA_IMU_ATTITUDE_SIGMA|2.0}"
+  imu_attitude_azimuth_offset_deg: "${MOLA_IMU_ATTITUDE_AZIMUTH_OFFSET|0.0}"
+  imu_normalized_gravity_alignment_sigma: "${MOLA_IMU_GRAVITY_ALIGNMENT_SIGMA|0.4}"
+  # If > 0 and the IMU provides angular velocity, add a body-frame gyro prior on
+  # the keyframe's W variable with this sigma [deg/s]. 0 disables it.
+  imu_angular_velocity_sigma_deg: ${MOLA_IMU_ANGVEL_SIGMA|0.0}
+
+  # --------------------------------------------------------------------------
+  # Geo-referencing
+  # --------------------------------------------------------------------------
+  estimate_geo_reference: "${MOLA_ESTIMATE_GEO_REF|false}"
+  convergence_max_position_sigma: 1.0
+  convergence_max_orientation_sigma_deg: 5.0
+  publish_estimated_georef_on_convergence: true
+
+  # --------------------------------------------------------------------------
+  # Nonlinear Optimization
+  # --------------------------------------------------------------------------
+  additional_isam2_update_steps: 3
+
+  # --------------------------------------------------------------------------
+  # High-rate pose publisher
+  # --------------------------------------------------------------------------
+  high_rate_pose_publish_rate_hz: ${MOLA_MAPPER3D_PUBLISH_RATE_HZ|0.0}
+  high_rate_use_latest_sensors: true
+
+  # --------------------------------------------------------------------------
+  # Map save/load (single externalized .simplemap)
+  # --------------------------------------------------------------------------
+  load_simplemap_file: "${MOLA_MAPPER3D_LOAD_SM|}"
+  save_simplemap_file: "${MOLA_MAPPER3D_SAVE_SM|}"
+  externalize_after_seconds: 30.0
+
+  # --------------------------------------------------------------------------
+  # Sensor Input Filtering (Regex Patterns)
+  # --------------------------------------------------------------------------
+  do_process_imu_labels_re: "${MOLA_MAPPER3D_IMU_LABELS_RE|.*}"
+  do_process_odometry_labels_re: "${MOLA_MAPPER3D_ODOMETRY_LABELS_RE|.*}"
+  do_process_gnss_labels_re: "${MOLA_MAPPER3D_GNSS_LABELS_RE|.*}"
+
+# ============================================================================
+# End of Configuration
+# ============================================================================

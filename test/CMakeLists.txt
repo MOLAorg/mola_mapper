@@ -1,0 +1,28 @@
+# Unit tests:
+mola_add_test(
+  TARGET  test-mapper3d-basic
+  SOURCES test-mapper3d-basic.cpp
+  LINK_LIBRARIES
+    mola::mola_mapper_3d
+)
+
+mola_add_test(
+  TARGET  test-navstate-fusion
+  SOURCES test-navstate-fusion.cpp
+  LINK_LIBRARIES
+    mola::mola_mapper_3d
+)
+
+mola_add_test(
+  TARGET  test-imu-gnss-fusion
+  SOURCES test-imu-gnss-fusion.cpp
+  LINK_LIBRARIES
+    mola::mola_mapper_3d
+)
+
+mola_add_test(
+  TARGET  test-keyframe-ingestion
+  SOURCES test-keyframe-ingestion.cpp
+  LINK_LIBRARIES
+    mola::mola_mapper_3d
+)

@@ -1,0 +1,83 @@
+# -----------------------------------------------------------------------------
+#                        SLAM system definition for MOLA
+# -----------------------------------------------------------------------------
+# Integration validation: mola_mapper_3d::Mapper3D acts as BOTH the
+# `NavStateFilter` that `LidarOdometry` queries for short-term prediction
+# (replacing mola_state_estimation_{simple,smoother}) AND the
+# `SharedKeyframeMap` sink it pushes sparse central-map keyframes to.
+#
+# GUI is ON by default (mola::MolaVizImGui, the MOLA-recommended ImGui-based
+# viewer; see mola_demos/mola-cli-launchs/kitti_just_replay.yaml). Disable it
+# for headless/automated runs with MOLA_WITH_GUI=false, or switch back to the
+# older nanogui-based mola::MolaViz with MOLA_GUI_MODULE=mola::MolaViz.
+#
+# Usage:
+#   export KITTI_BASE_DIR=/path/to/kitti_root
+#   export MOLA_ODOMETRY_PIPELINE_YAML=$(ros2 pkg prefix mola_lidar_odometry)/share/mola_lidar_odometry/pipelines/lidar3d-default.yaml
+#   KITTI_SEQ=04 MOLA_LINK_FIRST_POSE_SIGMA=1e-6 mola-cli lidar_odometry_mapper3d_from_kitti.yaml
+#
+# MOLA_LINK_FIRST_POSE_SIGMA is REQUIRED for pure-odometry runs like this one
+# (no GNSS/fixed_geo_reference to fix the gauge): without it, mapper_3d's
+# whole graph is gauge-free (only relative geometry is determined), so
+# estimated_navstate() returns ~1e6-sigma absolute poses and LidarOdometry
+# discards the motion model every step ("Discarding motion model ... due to
+# large uncertainty"), which starves the local map of updates and the
+# SharedKeyframeMap sink of keyframes. See Parameters.h's
+# link_first_pose_to_reference_origin_sigma doc.
+# -----------------------------------------------------------------------------
+
+modules:
+  # =====================
+  # MolaViz / MolaVizImGui
+  # =====================
+  - name: viz
+    type: ${MOLA_GUI_MODULE|mola::MolaVizImGui}
+    enabled: ${MOLA_WITH_GUI|true}
+    verbosity_level: "${MOLA_VERBOSITY_MOLA_VIZ|INFO}"
+    params:
+      # Persist ImGui window layout/docking across runs (no-op for MolaViz).
+      # Set to "" to disable persistence. Ignored by mola::MolaViz.
+      imgui_app_name: mapper3d_kitti
+
+  # =====================
+  # KittiOdometryDataset
+  # =====================
+  - name: dataset_input
+    type: mola::KittiOdometryDataset
+    execution_rate: 20 # Hz
+    quit_mola_app_on_dataset_end: ${MOLA_QUIT_ON_DATASET_END|true}
+
+    gui_preview_sensors:
+      - raw_sensor_label: lidar
+        decimation: 1
+        win_pos: 5 70 400 400
+
+    params:
+      base_dir: ${KITTI_BASE_DIR}
+      sequence: ${KITTI_SEQ}
+      time_warp_scale: ${MOLA_TIME_WARP|1.0}
+      start_paused: ${MOLA_DATASET_START_PAUSED|false}
+      publish_lidar: true
+      publish_image_0: false
+      publish_image_1: false
+      publish_ground_truth: true
+
+  # =====================
+  # LidarOdometry
+  # =====================
+  - name: lidar_odom
+    type: mola::LidarOdometry
+    verbosity_level: "${MOLA_VERBOSITY_MOLA_LO|INFO}"
+    raw_data_source: "dataset_input"
+    # This includes here a whole block "params: (...)"
+    # with the LIDAR-Odometry pipeline configuration:
+    params: "${MOLA_ODOMETRY_PIPELINE_YAML}"
+
+  # =====================
+  # mola_mapper_3d (NavStateFilter + SharedKeyframeMap sink)
+  # =====================
+  - name: mapper3d
+    type: mola::mapper_3d::Mapper3D
+    verbosity_level: "${MOLA_VERBOSITY_MAPPER3D|INFO}"
+    # This includes here a whole block "params: (...)":
+    params: "${MOLA_MAPPER3D_YAML|../params/mapper-3d.yaml}"

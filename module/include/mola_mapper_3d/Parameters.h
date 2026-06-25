@@ -94,6 +94,23 @@ public:
   double odometry_min_sample_period = 0.0;  // [s]
   double imu_min_sample_period = 0.0;       // [s]
 
+  /// When true, high-rate IMU and wheel odometry do NOT each spawn their own
+  /// keyframe. They share keyframes created at a bounded cadence
+  /// (sensor_keyframe_min_period), and wheel odometry is aggregated into a
+  /// single relative-pose edge between consecutive keyframes (the "consecutive
+  /// frame edge" model) instead of one absolute factor per sample. This bounds
+  /// central-graph growth from direct high-rate sensors. Keyframes requested by
+  /// LIO/VIO via SharedKeyframeMap are unaffected (still inserted as requested);
+  /// dense per-scan LIO/VIO fuse_pose() is a separate concern (predictor
+  /// separation, plan 6.2b).
+  bool aggregate_high_rate_into_edges = false;
+
+  /// Keyframe "close enough" window for direct high-rate sensors when
+  /// aggregate_high_rate_into_edges is on: a sample within this period of an
+  /// existing keyframe reuses it (a common coarse keyframe clock shared by IMU
+  /// and wheels), so direct-sensor keyframes are created at most ~1/this rate.
+  double sensor_keyframe_min_period = 0.5;  // [s]
+
   double sigma_random_walk_acceleration_linear = 1.0;   // [m/s^2]
   double sigma_random_walk_acceleration_angular = 1.0;  // [rad/s^2]
   double sigma_integrator_position = 0.10;              // [m]

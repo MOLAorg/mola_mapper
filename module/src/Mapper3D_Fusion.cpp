@@ -387,6 +387,52 @@ void Mapper3D::fuse_odometry(
     }
   }
 
+  // Aggregation mode: do NOT spawn a keyframe (nor an absolute F(wheels) factor)
+  // per sample. Share keyframes at the bounded sensor cadence and emit ONE
+  // relative-pose edge Between(T(prev_kf), T(cur_kf)) per keyframe transition,
+  // using the net wheel motion since the anchor (the "consecutive frame edge"
+  // model, like the SharedKeyframeMap chaining). Frame-invariant, so no
+  // {odom_wheels} frame variable is needed at all.
+  if (params_.aggregate_high_rate_into_edges) {
+    const auto kfId =
+      create_or_get_keyframe_by_timestamp_locked(odom.timestamp, params_.sensor_keyframe_min_period);
+
+    if (!wheel_chain_last_kf_.has_value()) {
+      wheel_chain_last_kf_ = kfId;
+      wheel_chain_anchor_odom_ = odom.odometry;
+    } else if (*wheel_chain_last_kf_ != kfId) {
+      const auto increment = odom.odometry - *wheel_chain_anchor_odom_;
+
+      mrpt::obs::CActionRobotMovement2D odoAct;
+      odoAct.motionModelConfiguration.modelSelection =
+        mrpt::obs::CActionRobotMovement2D::mmGaussian;
+      odoAct.motionModelConfiguration.gaussianModel.minStdXY = 1e-3;
+      odoAct.motionModelConfiguration.gaussianModel.minStdPHI = mrpt::DEG2RAD(0.1);
+      odoAct.computeFromOdometry(increment, odoAct.motionModelConfiguration);
+
+      mrpt::poses::CPose3DPDFGaussian relPdf;
+      relPdf.copyFrom(*odoAct.poseChange);
+      relPdf.cov.asEigen().diagonal().array() += 1e-4;
+
+      gtsam::Pose3 rel;
+      gtsam::Matrix6 relCov;
+      mrpt::gtsam_wrappers::to_gtsam_se3_cov6(relPdf, rel, relCov);
+      state_.gtsam->newFactors.emplace_shared<gtsam::BetweenFactor<gtsam::Pose3>>(
+        T(*wheel_chain_last_kf_), T(kfId), rel, gtsam::noiseModel::Gaussian::Covariance(relCov));
+      state_.add_kf_connectivity(*wheel_chain_last_kf_, kfId);
+
+      wheel_chain_last_kf_ = kfId;
+      wheel_chain_anchor_odom_ = odom.odometry;
+    }
+
+    last_wheels_odometry_name_ = odomName;
+    last_wheels_odometry_ = odom.odometry;
+    last_wheels_odometry_stamp_ = odom.timestamp;
+
+    notify_optimizer();
+    return;
+  }
+
   const mrpt::poses::CPose2D lastOdom = *last_wheels_odometry_;
 
   // Probabilistic motion model for the increment uncertainty:
@@ -445,8 +491,14 @@ void Mapper3D::fuse_imu(const mrpt::obs::CObservationIMU & imu)
   }
   last_processed_imu_stamp_ = imu.timestamp;
 
-  const auto this_kf_id = create_or_get_keyframe_by_timestamp_locked(
-    imu.timestamp, params_.imu_nearby_keyframe_stamp_tolerance);
+  // In aggregation mode, attach to the shared bounded-rate keyframe clock (the
+  // same one wheel odometry uses), so IMU does not spawn its own dense
+  // keyframes either.
+  const double imuKfTolerance = params_.aggregate_high_rate_into_edges
+                                  ? params_.sensor_keyframe_min_period
+                                  : params_.imu_nearby_keyframe_stamp_tolerance;
+  const auto this_kf_id =
+    create_or_get_keyframe_by_timestamp_locked(imu.timestamp, imuKfTolerance);
 
   const auto sensorOnVehicle = mrpt::gtsam_wrappers::toPose3(imu.sensorPose);
 

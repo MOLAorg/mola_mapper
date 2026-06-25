@@ -40,3 +40,10 @@ mola_add_test(
   LINK_LIBRARIES
     mola::mola_mapper_3d
 )
+
+mola_add_test(
+  TARGET  test-highrate-aggregation
+  SOURCES test-highrate-aggregation.cpp
+  LINK_LIBRARIES
+    mola::mola_mapper_3d
+)

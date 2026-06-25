@@ -89,13 +89,24 @@ test/                            Unit tests (plain main() + MRPT ASSERT_ macros,
   `advertiseUpdatedLocalization()` at `high_rate_pose_publish_rate_hz` (gated on
   a subscriber existing). This is the first thing that actually drives the
   `LocalizationSourceBase` output.
-- **Graph growth is NOT yet bounded** (known): even decimated, each high-rate
-  IMU/wheel sample still spawns its own keyframe variable (~2300 KFs for a 150 s
-  BotanicGarden run). The optimizer thread makes this survivable by moving the
-  cost off the query path, but the real fix is high-rate IMU/wheels
-  preintegration into inter-keyframe edges (plan section 4.12, near-term) +
-  spatial paging (4.11 / Phase 10). Always set `imu_min_sample_period` /
-  `odometry_min_sample_period` for real high-rate sources until then.
+- **High-rate IMU/wheels aggregation** (`aggregate_high_rate_into_edges`, opt-in;
+  default false so unit tests are unchanged; true in the BotanicGarden launch):
+  IMU and wheels no longer each spawn a keyframe per sample. They SHARE a
+  bounded-rate keyframe clock (`sensor_keyframe_min_period`, default 0.5 s), and
+  wheel odometry is aggregated into ONE relative-pose edge
+  `Between(T(prev_kf), T(cur_kf))` per keyframe transition (the "consecutive
+  frame edge" model; no `{odom_wheels}` frame variable created). Synthetic test:
+  201 IMU+wheel samples -> 9 keyframes with the trajectory recovered
+  (`test-highrate-aggregation`). On BotanicGarden the IMU/wheels now reuse LIO's
+  denser scan keyframes, adding ~zero extra. See `Mapper3D_Fusion.cpp::
+  fuse_odometry` / `fuse_imu`.
+- **Graph growth is still only PARTIALLY bounded** (known): the IMU/wheels
+  explosion is fixed (above), but LIO's DENSE per-scan `fuse_pose()` (used for
+  short-term prediction, plan 6.2b) still creates a keyframe per scan
+  (~10 Hz, ~990 KFs for a 150 s BotanicGarden run) and is NOT aggregated. The
+  optimizer thread keeps queries fast regardless (37 us avg there). Remaining
+  fixes: full gtsam IMU preintegration + bias (plan 4.12), predictor/central-map
+  separation for the dense LIO path (6.2b), and spatial paging (4.11 / Phase 10).
 - Out-of-order keyframe guard (mandatory): in
   `create_or_get_keyframe_by_timestamp_locked()`, a request older than the
   newest keyframe snaps to the nearest existing keyframe instead of inserting a

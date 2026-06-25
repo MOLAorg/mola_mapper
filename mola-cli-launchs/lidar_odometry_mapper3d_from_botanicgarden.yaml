@@ -157,6 +157,15 @@ modules:
       odometry_min_sample_period: ${MOLA_MAPPER3D_ODOM_MIN_PERIOD|0.05}
       imu_min_sample_period: ${MOLA_MAPPER3D_IMU_MIN_PERIOD|0.05}
 
+      # High-rate IMU/wheels aggregation: do NOT spawn a keyframe per sample.
+      # IMU and wheels share keyframes created every sensor_keyframe_min_period,
+      # and wheel odometry is aggregated into ONE relative-pose edge per
+      # keyframe interval. Bounds central-graph growth from these two direct
+      # high-rate sensors (plan 4.12). (LIO's own sparse SharedKeyframeMap
+      # keyframes are unaffected; LIO's dense per-scan fuse_pose() is separate.)
+      aggregate_high_rate_into_edges: ${MOLA_MAPPER3D_AGGREGATE|true}
+      sensor_keyframe_min_period: ${MOLA_MAPPER3D_SENSOR_KF_PERIOD|0.5}
+
       sigma_random_walk_acceleration_linear: ${MOLA_SIGMA_RW_LINACC|1.0}
       sigma_random_walk_acceleration_angular: ${MOLA_SIGMA_RW_ANGACC|10.0}
       sigma_integrator_position: 0.10

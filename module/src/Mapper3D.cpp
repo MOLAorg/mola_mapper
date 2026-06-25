@@ -67,6 +67,7 @@ void Mapper3D::initialize(const mrpt::containers::yaml & cfg)
 
     state_.clear();
     reinitialize_gtsam_locked();
+    reset_sensor_anchors_locked();
   }
 
   // Start the background optimizer thread (if enabled) AFTER state is ready.
@@ -133,6 +134,19 @@ void Mapper3D::reset()
   auto lck = mrpt::lockHelper(stateMutex_);
   state_.clear();
   reinitialize_gtsam_locked();
+  reset_sensor_anchors_locked();
+}
+
+void Mapper3D::reset_sensor_anchors_locked()
+{
+  last_wheels_odometry_.reset();
+  last_wheels_odometry_name_.reset();
+  last_wheels_odometry_stamp_.reset();
+  last_processed_imu_stamp_.reset();
+  wheel_chain_last_kf_.reset();
+  wheel_chain_anchor_odom_.reset();
+  keyframe_ingestion_state_by_source_.clear();
+  last_publish_wallclock_.reset();
 }
 
 void Mapper3D::spinOnce()

@@ -47,6 +47,10 @@ void Parameters::loadFrom(const mrpt::containers::yaml & cfg)
   ASSERT_GE_(odometry_min_sample_period, .0);
   ASSERT_GE_(imu_min_sample_period, .0);
 
+  MCP_LOAD_OPT(cfg, aggregate_high_rate_into_edges);
+  MCP_LOAD_OPT(cfg, sensor_keyframe_min_period);
+  ASSERT_GT_(sensor_keyframe_min_period, .0);
+
   MCP_LOAD_OPT(cfg, sigma_random_walk_acceleration_linear);
   MCP_LOAD_OPT(cfg, sigma_random_walk_acceleration_angular);
   MCP_LOAD_OPT(cfg, sigma_integrator_position);

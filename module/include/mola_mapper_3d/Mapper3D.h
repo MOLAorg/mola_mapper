@@ -180,6 +180,14 @@ private:
   std::optional<mrpt::Clock::time_point> last_wheels_odometry_stamp_;
   std::optional<mrpt::Clock::time_point> last_processed_imu_stamp_;
 
+  // Wheel-odometry relative-chaining aggregation (aggregate_high_rate_into_edges):
+  // the keyframe the wheel chain last attached to, and the absolute wheel
+  // odometry reading at that keyframe. On a keyframe transition, ONE relative
+  // edge Between(T(last_kf), T(new_kf)) is emitted using the net wheel motion
+  // since the anchor (no per-sample keyframe / absolute factor).
+  std::optional<KeyFrameID> wheel_chain_last_kf_;
+  std::optional<mrpt::poses::CPose2D> wheel_chain_anchor_odom_;
+
   // Per-source bookkeeping for keyframe-insertion requests (SharedKeyframeMap
   // sink): the last keyframe id and the front end's own pose_in_source mean it
   // was inserted with, used to chain consecutive requests via their
@@ -218,6 +226,10 @@ private:
 
   /// (Re)builds the GTSAM/iSAM2 state and the persistent T_enu_to_map variable.
   void reinitialize_gtsam_locked();
+
+  /// Clears the per-source high-rate integration anchors (wheel odometry,
+  /// IMU/publish stamps, keyframe-ingestion chains, wheel aggregation chain).
+  void reset_sensor_anchors_locked();
 
   /// Core pose-fusion entry: adds a prior (reference frame) or a between-factor
   /// (odometry frame) relating F(frame) and T(keyframe).

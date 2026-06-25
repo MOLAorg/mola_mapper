@@ -118,6 +118,7 @@ void Parameters::loadFrom(const mrpt::containers::yaml & cfg)
   // Nonlinear optimization
   // -----------------------------------------------------
   MCP_LOAD_OPT(cfg, additional_isam2_update_steps);
+  MCP_LOAD_OPT(cfg, enable_optimizer_thread);
 
   // High-rate pose publisher
   // -----------------------------------------------------

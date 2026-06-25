@@ -51,8 +51,13 @@ namespace mola::mapper_3d
 std::optional<SharedKeyframeMap::KeyFrameID> Mapper3D::requestInsertKeyframe(
   const SharedKeyframeMap::KeyframeInsertRequest & req)
 {
-  auto lck = mrpt::lockHelper(stateMutex_);
-  return request_insert_keyframe_locked(req);
+  KeyFrameID kfId = 0;
+  {
+    auto lck = mrpt::lockHelper(stateMutex_);
+    kfId = request_insert_keyframe_locked(req);
+  }
+  notify_optimizer();
+  return kfId;
 }
 
 KeyFrameID Mapper3D::request_insert_keyframe_locked(

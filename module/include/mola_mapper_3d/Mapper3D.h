@@ -34,12 +34,15 @@
 #include <mrpt/poses/CPose2D.h>
 #include <mrpt/poses/CPose3DPDFGaussian.h>
 
+#include <atomic>
+#include <condition_variable>
 #include <map>
 #include <mutex>
 #include <optional>
 #include <regex>
 #include <set>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -156,6 +159,20 @@ private:
   WorldModelState state_;
   mutable std::recursive_mutex stateMutex_;
 
+  // --- Background optimizer thread (so queries return from cached estimates
+  //     instead of paying the growing iSAM2 solve cost; see optimize_and_refresh
+  //     and the plan's "quickly returning queries / high-rate publisher" goal).
+  std::thread optimizer_thread_;
+  std::mutex optimizer_wakeup_mutex_;
+  std::condition_variable optimizer_wakeup_cv_;
+  bool optimizer_pending_ = false;  // guarded by optimizer_wakeup_mutex_
+  std::atomic_bool optimizer_should_exit_{false};
+  // Serializes the actual iSAM2 solve (background thread vs. a synchronous
+  // flush), so only one thread ever touches the iSAM2/estimate objects.
+  std::mutex solve_mutex_;
+  // Throttle anchor for the high-rate publisher (wall-clock).
+  std::optional<mrpt::Clock::time_point> last_publish_wallclock_;
+
   // Wheel-odometry integration anchor (last absolute reading per single source).
   std::optional<mrpt::poses::CPose2D> last_wheels_odometry_;
   std::optional<std::string> last_wheels_odometry_name_;
@@ -223,8 +240,28 @@ private:
   /// Adds kinematic factors between two time-adjacent keyframes (once).
   void add_kinematic_factor_between(KeyFrameID from, KeyFrameID to);
 
-  /// Runs the incremental iSAM2 update and refreshes the cached estimates.
-  void process_pending_gtsam_updates_locked();
+  /// Drains pending factors/values, runs the incremental iSAM2 update and
+  /// refreshes the cached estimates. Does its OWN locking in three phases
+  /// (grab-pending -> heavy solve without stateMutex_ -> commit caches), so the
+  /// caller must NOT hold stateMutex_ when calling it. Serialized by
+  /// solve_mutex_. No-op when nothing is pending.
+  void optimize_and_refresh();
+
+  /// Background thread body: waits for pending work and calls
+  /// optimize_and_refresh() (only started when enable_optimizer_thread).
+  void optimizer_thread_loop();
+
+  /// Wakes the optimizer thread after new data was enqueued (no-op when the
+  /// thread is disabled).
+  void notify_optimizer();
+
+  /// Stops and joins the optimizer thread if running. Must be called with NO
+  /// lock held (it joins a thread that itself takes stateMutex_).
+  void stop_optimizer_thread();
+
+  /// Publishes the latest extrapolated reference-frame pose via
+  /// advertiseUpdatedLocalization, throttled to high_rate_pose_publish_rate_hz.
+  void publish_high_rate_pose();
 
   /// Returns the optimized NavState (pose+twist+covariances) of a keyframe.
   [[nodiscard]] NavState get_latest_state_and_covariance(KeyFrameID idx) const;

@@ -71,6 +71,12 @@ params:
   # --------------------------------------------------------------------------
   additional_isam2_update_steps: 3
 
+  # Run the (growing) iSAM2 solve on a background thread so estimated_navstate()
+  # and the high-rate publisher return immediately from cached estimates. Keep
+  # true for any real online run; unit tests build their own config and default
+  # it to false for deterministic single-threaded behavior.
+  enable_optimizer_thread: ${MOLA_MAPPER3D_OPTIMIZER_THREAD|true}
+
   # --------------------------------------------------------------------------
   # High-rate pose publisher
   # --------------------------------------------------------------------------

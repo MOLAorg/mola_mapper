@@ -27,6 +27,7 @@
 #include <mrpt/graphs/CDirectedGraph.h>
 #include <mrpt/graphs/dijkstra.h>
 #include <mrpt/maps/CSimpleMap.h>
+#include <mrpt/math/CMatrixFixed.h>
 #include <mrpt/math/TTwist3D.h>
 #include <mrpt/obs/CSensoryFrame.h>
 #include <mrpt/poses/CPose3D.h>
@@ -100,6 +101,13 @@ public:
     mrpt::poses::CPose3D pose;   //!< in the reference (map) frame
     mrpt::math::TTwist3D twist;  //!< in the local (body) frame
     std::set<KeyFrameID> kinematic_links_to;
+
+    /// Cached marginal covariances (SE(3) [x y z yaw pitch roll] and twist
+    /// [vx vy vz wx wy wz]). The optimizer fills these for the latest keyframe
+    /// each solve so the query path (estimated_navstate / the high-rate
+    /// publisher) never has to touch iSAM2. Empty when not yet computed.
+    std::optional<mrpt::math::CMatrixDouble66> pose_cov;
+    std::optional<mrpt::math::CMatrixDouble66> twist_cov;
   };
 
   /// Latest optimized per-keyframe states (updated after each iSAM2 solve).

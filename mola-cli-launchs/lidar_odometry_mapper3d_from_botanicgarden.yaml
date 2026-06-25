@@ -1,0 +1,206 @@
+# -----------------------------------------------------------------------------
+#                        SLAM system definition for MOLA
+# -----------------------------------------------------------------------------
+# Integration validation: mola_mapper_3d::Mapper3D acts as BOTH the
+# `NavStateFilter` that `LidarOdometry` queries for short-term prediction
+# (replacing mola_state_estimation_{simple,smoother}) AND the
+# `SharedKeyframeMap` sink it pushes sparse central-map keyframes to.
+#
+# Dataset: BotanicGarden (https://github.com/robot-pesg/BotanicGarden), read
+# directly from its ROS 1 ".bag" file via mola::Rosbag1Dataset (no ROS 1
+# install required). Sensor inventory of the "LIO" bag, confirmed with
+# `rosbag1-info <bag>` (see mola_input_rosbag1/apps/rosbag1-info.cpp):
+#   /imu/data         sensor_msgs/Imu        Xsens MTi-680G, ~400 Hz (base_link)
+#   /livox/imu        sensor_msgs/Imu        BMI088 (Livox-built-in), ~200 Hz (unused here)
+#   /velodyne_points  sensor_msgs/PointCloud2 Velodyne VLP-16, ~10 Hz
+#   /livox/lidar      livox_ros_driver/CustomMsg  Livox AVIA, ~10 Hz (unused here)
+#   /odom             nav_msgs/Odometry      wheel odometry, ~200 Hz
+# NO GNSS/GPS topic exists in this bag (the Xsens has D-GNSS/INS hardware, but
+# it is not published -- see ~/datasets/botanic/AGENTS.md). So this launcher
+# fuses LiDAR + IMU + wheel odometry (the three available modalities), NOT
+# GNSS. mapper3d's `estimate_geo_reference` stays at its default `false`.
+#
+# This launcher is SELF-CONTAINED: the safe defaults that mapper3d needs for
+# this dataset are baked into its inline `params:` block below, so it runs out
+# of the box with only BOTANICGARDEN_LIO_BAG + MOLA_ODOMETRY_PIPELINE_YAML set
+# (every default is still overridable via the same env vars). Two of those
+# defaults are NOT the ones in ../params/mapper-3d.yaml and are mandatory here:
+#
+#  - `link_first_pose_to_reference_origin_sigma` (default 1e-6 here, empty in
+#    the shared params file): fixes the graph gauge. Without it the whole graph
+#    floats, iSAM2 throws gtsam::IndeterminantLinearSystemException a few
+#    seconds in, and LidarOdometry then discards its motion model and dies.
+#
+#  - `imu_min_sample_period` / `odometry_min_sample_period` (default 0.05 = 20 Hz
+#    here, 0.0 = undecimated in the shared params file): decimate the IMU
+#    (~400 Hz) and wheel-odometry (~200 Hz) inputs before they reach mapper3d.
+#    KITTI/MulRan never exercised this (no IMU/wheel data fed directly into
+#    mapper3d there); here, undecimated 400+200 Hz input keeps growing the
+#    single, never-marginalized ISAM2 graph (mapper_3d has no spatial paging
+#    yet -- see plan section 4.11 / Phase 10) and `estimated_navstate()` was
+#    observed to slow from single-digit ms to a 174 ms average (690 ms worst
+#    case) over this ~150 s bag. 0.05 brings the average to ~37 ms.
+#
+# BotanicGarden has no /tf or /tf_static: all sensor extrinsics below are
+# `fixed_sensor_pose` values taken from
+# BotanicGarden/calib/extrinsics/calib_chain.yaml (see
+# mola_input_rosbag1/mola-cli-launchs/rosbag1_botanicgarden.yaml, which this
+# file's sensor wiring mirrors), with the Xsens IMU (/imu/data) as base_link.
+#
+# Usage (works out of the box, no magic env vars needed):
+#   export BOTANICGARDEN_LIO_BAG=$HOME/datasets/botanic/1018_00_LIO.bag
+#   export MOLA_ODOMETRY_PIPELINE_YAML=$(ros2 pkg prefix mola_lidar_odometry)/share/mola_lidar_odometry/pipelines/lidar3d-default.yaml
+#   mola-cli lidar_odometry_mapper3d_from_botanicgarden.yaml
+# Optional: export BOTANICGARDEN_GT_BAG=$HOME/datasets/botanic/gt_1018_00_qnew.bag
+#   to also replay /gt_poses (not consumed by mapper3d; for manual comparison
+#   only). GUI is on by default (MOLA_WITH_GUI=false for headless).
+# -----------------------------------------------------------------------------
+
+modules:
+  # =====================
+  # MolaViz / MolaVizImGui
+  # =====================
+  - name: viz
+    type: ${MOLA_GUI_MODULE|mola::MolaVizImGui}
+    enabled: ${MOLA_WITH_GUI|true}
+    verbosity_level: "${MOLA_VERBOSITY_MOLA_VIZ|INFO}"
+    params:
+      imgui_app_name: mapper3d_botanicgarden
+
+  # =====================
+  # Rosbag1Dataset (BotanicGarden)
+  # =====================
+  - name: dataset_input
+    type: mola::Rosbag1Dataset
+    execution_rate: 50 # Hz
+    quit_mola_app_on_dataset_end: ${MOLA_QUIT_ON_DATASET_END|true}
+
+    gui_preview_sensors:
+      - raw_sensor_label: lidar
+        decimation: 1
+        enabled: ${MOLA_WITH_GUI|true}
+        win_pos: 5 5 400 400
+
+    params:
+      rosbag_filename:
+        - ${BOTANICGARDEN_LIO_BAG}
+        - ${BOTANICGARDEN_GT_BAG|}
+
+      base_link_frame_id: xsens
+      time_warp_scale: ${MOLA_TIME_WARP|1.0}
+      start_paused: ${MOLA_DATASET_START_PAUSED|false}
+
+      ground_truth_topic: /gt_poses
+
+      sensors:
+        - topic: /imu/data # Xsens MTi-680G, ~400 Hz: this IS base_link
+          type: CObservationIMU
+          sensorLabel: imu
+          fixed_sensor_pose: "0 0 0 0 0 0"
+          use_fixed_sensor_pose: true
+
+        - topic: /velodyne_points # Velodyne VLP-16, ~10 Hz
+          type: CObservationPointCloud
+          sensorLabel: lidar
+          fixed_sensor_pose: "0.0584868 0.0084042 0.1689155 -1.448155 0.097462 0.444791" # T_xsens_vlp16
+          use_fixed_sensor_pose: true
+
+        - topic: /odom # Wheel odometry, ~200 Hz
+          type: CObservationOdometry
+          sensorLabel: odom_wheels
+
+        - topic: /gt_poses # Ground truth (only present if BOTANICGARDEN_GT_BAG is set)
+          type: CObservationRobotPose
+          sensorLabel: ground_truth
+
+  # =====================
+  # LidarOdometry
+  # =====================
+  - name: lidar_odom
+    type: mola::LidarOdometry
+    verbosity_level: "${MOLA_VERBOSITY_MOLA_LO|INFO}"
+    raw_data_source: "dataset_input"
+    params: "${MOLA_ODOMETRY_PIPELINE_YAML}"
+
+  # =====================
+  # mola_mapper_3d (NavStateFilter + SharedKeyframeMap sink + direct IMU/wheels)
+  # =====================
+  - name: mapper3d
+    type: mola::mapper_3d::Mapper3D
+    verbosity_level: "${MOLA_VERBOSITY_MAPPER3D|INFO}"
+    # Subscribe directly to the dataset's IMU ("imu") and wheel-odometry
+    # ("odom_wheels") observations (lidar_odom's keyframes arrive separately,
+    # via the SharedKeyframeMap sink, not through this subscription):
+    raw_data_source: "dataset_input"
+
+    # Inline params (self-contained). Mirrors ../params/mapper-3d.yaml, but with
+    # this dataset's mandatory safe defaults baked in (see the header comment):
+    # the gauge anchor and the 20 Hz IMU/odom decimation. All values stay
+    # env-var overridable.
+    params:
+      # --- Reference frame IDs ---
+      vehicle_frame_name: "${MOLA_TF_BASE_LINK|base_link}"
+      reference_frame_name: "${MOLA_TF_MAP|map}"
+      enu_frame_name: "enu"
+
+      # --- Kinematic model & motion factors ---
+      kinematic_model: "${MOLA_MAPPER3D_KINEMATIC_MODEL|KinematicModel::ConstantVelocity}"
+      max_time_to_use_velocity_model: ${MOLA_MAX_TIME_TO_USE_VELOCITY_MODEL|0.75}
+      min_time_difference_to_create_new_frame: 0.05
+      time_between_frames_to_warning: 3.0
+      gnss_nearby_keyframe_stamp_tolerance: 1.0
+      imu_nearby_keyframe_stamp_tolerance: 0.10
+
+      # High-rate same-sensor decimation. DEFAULT 0.05 (20 Hz) here, NOT 0.0:
+      # this dataset feeds ~400 Hz IMU + ~200 Hz wheel odometry directly into
+      # mapper3d (see header).
+      odometry_min_sample_period: ${MOLA_MAPPER3D_ODOM_MIN_PERIOD|0.05}
+      imu_min_sample_period: ${MOLA_MAPPER3D_IMU_MIN_PERIOD|0.05}
+
+      sigma_random_walk_acceleration_linear: ${MOLA_SIGMA_RW_LINACC|1.0}
+      sigma_random_walk_acceleration_angular: ${MOLA_SIGMA_RW_ANGACC|10.0}
+      sigma_integrator_position: 0.10
+      sigma_integrator_orientation: 1.0
+
+      initial_twist_sigma_lin: 20.0
+      initial_twist_sigma_ang: 3.0
+
+      enforce_planar_motion: ${MOLA_MAPPER3D_ENFORCE_PLANAR_MOTION|false}
+
+      # MANDATORY gauge anchor. DEFAULT 1e-6 here, NOT empty: this is a
+      # pure-odometry run (no GNSS), so without it the graph floats and iSAM2
+      # throws IndeterminantLinearSystemException (see header).
+      link_first_pose_to_reference_origin_sigma: ${MOLA_LINK_FIRST_POSE_SIGMA|1e-6}
+
+      # --- IMU (Xsens MTi-680G: orientation quaternion + accel + gyro) ---
+      imu_attitude_sigma_deg: "${MOLA_IMU_ATTITUDE_SIGMA|2.0}"
+      imu_attitude_azimuth_offset_deg: "${MOLA_IMU_ATTITUDE_AZIMUTH_OFFSET|0.0}"
+      imu_normalized_gravity_alignment_sigma: "${MOLA_IMU_GRAVITY_ALIGNMENT_SIGMA|0.4}"
+      imu_angular_velocity_sigma_deg: ${MOLA_IMU_ANGVEL_SIGMA|0.0}
+
+      # --- Geo-referencing: OFF (this dataset has no GNSS) ---
+      estimate_geo_reference: "${MOLA_ESTIMATE_GEO_REF|false}"
+      convergence_max_position_sigma: 1.0
+      convergence_max_orientation_sigma_deg: 5.0
+      publish_estimated_georef_on_convergence: true
+
+      # --- Nonlinear optimization ---
+      additional_isam2_update_steps: 3
+      # Solve on a background thread so LidarOdometry's per-scan
+      # estimated_navstate() query returns immediately from cached estimates
+      # instead of paying the growing iSAM2 solve cost on the calling thread.
+      enable_optimizer_thread: ${MOLA_MAPPER3D_OPTIMIZER_THREAD|true}
+
+      # --- High-rate pose publisher ---
+      high_rate_pose_publish_rate_hz: ${MOLA_MAPPER3D_PUBLISH_RATE_HZ|20.0}
+      high_rate_use_latest_sensors: true
+
+      # --- Map save/load ---
+      load_simplemap_file: "${MOLA_MAPPER3D_LOAD_SM|}"
+      save_simplemap_file: "${MOLA_MAPPER3D_SAVE_SM|}"
+      externalize_after_seconds: 30.0
+
+      # --- Sensor input filtering ---
+      do_process_imu_labels_re: "${MOLA_MAPPER3D_IMU_LABELS_RE|.*}"
+      do_process_odometry_labels_re: "${MOLA_MAPPER3D_ODOMETRY_LABELS_RE|.*}"
+      do_process_gnss_labels_re: "${MOLA_MAPPER3D_GNSS_LABELS_RE|.*}"

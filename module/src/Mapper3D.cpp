@@ -21,7 +21,9 @@
 
 #include <mola_mapper_3d/Mapper3D.h>
 #include <mrpt/core/lock_helper.h>
+#include <mrpt/system/datetime.h>
 
+#include <chrono>
 #include <string>
 
 // arguments: class_name, parent_class, class namespace
@@ -37,7 +39,7 @@ Mapper3D::Mapper3D()
   ExecutableBase::setModuleInstanceName("Mapper3D");
 }
 
-Mapper3D::~Mapper3D() = default;
+Mapper3D::~Mapper3D() { stop_optimizer_thread(); }
 
 void Mapper3D::initialize(const mrpt::containers::yaml & cfg)
 {
@@ -49,22 +51,81 @@ void Mapper3D::initialize(const mrpt::containers::yaml & cfg)
   ASSERTMSG_(
     cfg.has("params"), "YAML configuration must have a `params` entry with the module options.");
 
-  auto lck = mrpt::lockHelper(stateMutex_);
+  // Stop any previously-running optimizer thread BEFORE touching state (must be
+  // done with no lock held: the thread itself takes stateMutex_).
+  stop_optimizer_thread();
 
-  params_.loadFrom(cfg["params"]);
-  params_loaded_ = true;
+  {
+    auto lck = mrpt::lockHelper(stateMutex_);
 
-  imu_labels_re_ = std::regex(params_.do_process_imu_labels_re);
-  odometry_labels_re_ = std::regex(params_.do_process_odometry_labels_re);
-  gnss_labels_re_ = std::regex(params_.do_process_gnss_labels_re);
+    params_.loadFrom(cfg["params"]);
+    params_loaded_ = true;
 
-  reset();
+    imu_labels_re_ = std::regex(params_.do_process_imu_labels_re);
+    odometry_labels_re_ = std::regex(params_.do_process_odometry_labels_re);
+    gnss_labels_re_ = std::regex(params_.do_process_gnss_labels_re);
+
+    state_.clear();
+    reinitialize_gtsam_locked();
+  }
+
+  // Start the background optimizer thread (if enabled) AFTER state is ready.
+  if (params_.enable_optimizer_thread) {
+    optimizer_should_exit_.store(false);
+    optimizer_thread_ = std::thread(&Mapper3D::optimizer_thread_loop, this);
+  }
 
   MRPT_LOG_INFO_STREAM(
     "Initialized Mapper3D with reference_frame='"
-    << params_.reference_frame_name << "', vehicle_frame='" << params_.vehicle_frame_name << "'");
+    << params_.reference_frame_name << "', vehicle_frame='" << params_.vehicle_frame_name
+    << "', optimizer_thread=" << (params_.enable_optimizer_thread ? "on" : "off"));
 
   MRPT_END
+}
+
+void Mapper3D::optimizer_thread_loop()
+{
+  while (!optimizer_should_exit_.load()) {
+    {
+      std::unique_lock<std::mutex> lk(optimizer_wakeup_mutex_);
+      // Wake on new data, on shutdown, or periodically (a safety net so a
+      // missed notification cannot stall the backend indefinitely).
+      optimizer_wakeup_cv_.wait_for(lk, std::chrono::milliseconds(50), [this] {
+        return optimizer_pending_ || optimizer_should_exit_.load();
+      });
+      optimizer_pending_ = false;
+    }
+    if (optimizer_should_exit_.load()) {
+      break;
+    }
+    try {
+      optimize_and_refresh();
+    } catch (const std::exception & e) {
+      MRPT_LOG_ERROR_STREAM("[optimizer thread] " << e.what());
+    }
+  }
+}
+
+void Mapper3D::notify_optimizer()
+{
+  if (!params_.enable_optimizer_thread) {
+    return;
+  }
+  {
+    std::lock_guard<std::mutex> lk(optimizer_wakeup_mutex_);
+    optimizer_pending_ = true;
+  }
+  optimizer_wakeup_cv_.notify_one();
+}
+
+void Mapper3D::stop_optimizer_thread()
+{
+  optimizer_should_exit_.store(true);
+  optimizer_wakeup_cv_.notify_all();
+  if (optimizer_thread_.joinable()) {
+    optimizer_thread_.join();
+  }
+  optimizer_should_exit_.store(false);
 }
 
 void Mapper3D::reset()
@@ -77,22 +138,82 @@ void Mapper3D::reset()
 void Mapper3D::spinOnce()
 {
   MRPT_START
-  // Nothing periodic yet. Future phases:
-  //  - high-rate pose publisher
-  //  - background loop closure trigger
-  //  - keyframe externalization
-  //  - diagnostics publication
-  if (module_is_time_to_publish_diagnostics()) {
-    // (diagnostics are pulled via getDiagnostics(); nothing to push here yet)
-  }
+  // High-rate extrapolated pose publication. The heavy iSAM2 solve runs on the
+  // optimizer thread (when enabled), so this stays cheap: read the latest
+  // committed anchor + extrapolate.
+  publish_high_rate_pose();
+  // Future phases: background loop-closure trigger, keyframe externalization.
   MRPT_END
+}
+
+void Mapper3D::publish_high_rate_pose()
+{
+  if (params_.high_rate_pose_publish_rate_hz <= 0) {
+    return;
+  }
+  if (!anyUpdateLocalizationSubscriber()) {
+    return;
+  }
+
+  // Throttle to the configured rate using wall-clock time:
+  const auto nowWall = mrpt::Clock::now();
+  if (last_publish_wallclock_.has_value()) {
+    const double dt = mrpt::system::timeDifference(*last_publish_wallclock_, nowWall);
+    if (dt < 1.0 / params_.high_rate_pose_publish_rate_hz) {
+      return;
+    }
+  }
+
+  // Publish at the latest fused keyframe time (the freshest data instant):
+  std::optional<mrpt::Clock::time_point> stamp;
+  {
+    auto lck = mrpt::lockHelper(stateMutex_);
+    if (!state_.time_to_kf_id.empty()) {
+      stamp = state_.time_to_kf_id.getDirectMap().rbegin()->first;
+    }
+  }
+  if (!stamp.has_value()) {
+    return;
+  }
+
+  const auto nv = estimated_navstate(*stamp, params_.reference_frame_name);
+  if (!nv) {
+    MRPT_LOG_THROTTLE_WARN(5.0, "[publish] Cannot publish pose yet (no usable estimate).");
+    return;
+  }
+  last_publish_wallclock_ = nowWall;
+
+  LocalizationUpdate lu;
+  lu.child_frame = params_.vehicle_frame_name;
+  lu.reference_frame = params_.reference_frame_name;
+  const auto & fullName = getModuleInstanceName();
+  const auto colonPos = fullName.rfind(':');
+  lu.method = (colonPos != std::string::npos) ? fullName.substr(colonPos + 1) : fullName;
+  lu.quality = 1;
+  lu.timestamp = *stamp;
+  lu.pose = nv->pose.getPoseMean().asTPose();
+  lu.cov = nv->pose.cov_inv.inverse_LLt();
+
+  advertiseUpdatedLocalization(lu);
 }
 
 bool Mapper3D::has_converged_localization(mrpt::poses::CPose3DPDFGaussian & pose_in_map) const
 {
-  // not implemented yet.
-  (void)pose_in_map;
-  return false;
+  auto lck = mrpt::lockHelper(stateMutex_);
+
+  // Converged if we were told to estimate geo-referencing, and the
+  // convergence-gated publication in optimize_and_refresh()
+  // has already published one (see that function for the actual sigma
+  // thresholds against convergence_max_position_sigma /
+  // convergence_max_orientation_sigma_deg).
+  const bool converged = params_.estimate_geo_reference && state_.geo_reference.has_value();
+
+  if (converged && !state_.time_to_kf_id.empty()) {
+    const NavState ns = get_latest_state_and_covariance(state_.last_kf_id());
+    pose_in_map.copyFrom(ns.pose);
+  }
+
+  return converged;
 }
 
 void Mapper3D::getDiagnostics(std::vector<mola::DiagnosticStatusMsg> & status)

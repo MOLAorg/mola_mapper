@@ -26,3 +26,17 @@ mola_add_test(
   LINK_LIBRARIES
     mola::mola_mapper_3d
 )
+
+mola_add_test(
+  TARGET  test-georef-convergence
+  SOURCES test-georef-convergence.cpp
+  LINK_LIBRARIES
+    mola::mola_mapper_3d
+)
+
+mola_add_test(
+  TARGET  test-optimizer-thread
+  SOURCES test-optimizer-thread.cpp
+  LINK_LIBRARIES
+    mola::mola_mapper_3d
+)

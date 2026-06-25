@@ -78,6 +78,16 @@ void enforce_planar_twist(mrpt::math::TTwist3D & tw)
   tw.wx = 0;
   tw.wy = 0;
 }
+
+/// Returns (max position sigma [m], max orientation sigma [deg]) from an SE(3)
+/// covariance using MRPT's (x, y, z, yaw, pitch, roll) convention.
+std::pair<double, double> max_pos_and_orientation_sigma(const mrpt::math::CMatrixDouble66 & cov)
+{
+  const double maxPosSigma = std::sqrt(std::max({cov(0, 0), cov(1, 1), cov(2, 2)}));
+  const double maxOriSigmaDeg =
+    mrpt::RAD2DEG(std::sqrt(std::max({cov(3, 3), cov(4, 4), cov(5, 5)})));
+  return {maxPosSigma, maxOriSigmaDeg};
+}
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -306,8 +316,11 @@ void Mapper3D::fuse_pose(
   const mrpt::Clock::time_point & timestamp, const mrpt::poses::CPose3DPDFGaussian & pose,
   const std::string & frame_id)
 {
-  auto lck = mrpt::lockHelper(stateMutex_);
-  fuse_pose_locked(timestamp, pose, frame_id);
+  {
+    auto lck = mrpt::lockHelper(stateMutex_);
+    fuse_pose_locked(timestamp, pose, frame_id);
+  }
+  notify_optimizer();
 }
 
 void Mapper3D::fuse_pose_locked(
@@ -396,6 +409,8 @@ void Mapper3D::fuse_odometry(
   last_wheels_odometry_stamp_ = odom.timestamp;
 
   fuse_pose_locked(odom.timestamp, newOdomPosePdf, odomName);
+
+  notify_optimizer();
 }
 
 void Mapper3D::fuse_twist(
@@ -411,6 +426,8 @@ void Mapper3D::fuse_twist(
 
   const auto this_kf_id = create_or_get_keyframe_by_timestamp_locked(timestamp);
   add_twist_priors(state_.gtsam->newFactors, this_kf_id, v, vCov, w, wCov);
+
+  notify_optimizer();
 }
 
 void Mapper3D::fuse_imu(const mrpt::obs::CObservationIMU & imu)
@@ -484,6 +501,8 @@ void Mapper3D::fuse_imu(const mrpt::obs::CObservationIMU & imu)
       gtsam::noiseModel::Isotropic::Sigma(3, mrpt::DEG2RAD(params_.imu_angular_velocity_sigma_deg));
     state_.gtsam->newFactors.addPrior(W(this_kf_id), wBody, wNoise);
   }
+
+  notify_optimizer();
 }
 
 void Mapper3D::fuse_gnss(const mrpt::obs::CObservationGPS & gps)
@@ -542,112 +561,234 @@ void Mapper3D::fuse_gnss(const mrpt::obs::CObservationGPS & gps)
 
   state_.gtsam->newFactors.emplace_shared<mola::factors::FactorGnssMapEnu>(
     symbol_T_enu_to_map, T(this_kf_id), sensorOnVehicle, observedEnu, enuNoiseModel);
+
+  notify_optimizer();
 }
 
 // ---------------------------------------------------------------------------
 // Optimization + estimate extraction
 // ---------------------------------------------------------------------------
-void Mapper3D::process_pending_gtsam_updates_locked()
+// Three-phase, self-locking solve so the heavy GTSAM work does NOT hold
+// stateMutex_ (which would block estimated_navstate() / the high-rate
+// publisher / the ingest path for the full, growing solve time):
+//   (A) brief stateMutex_: move out pending factors/values + snapshot which
+//       keyframes/frames to refresh.
+//   (B) no stateMutex_ (solve_mutex_ held): iSAM2 update + calculateEstimate +
+//       marginals into local temporaries. Only this code path touches iSAM2.
+//   (C) brief stateMutex_: commit the refreshed poses/twists/covariances,
+//       frame transforms and (convergence-gated) geo-reference into the caches.
+void Mapper3D::optimize_and_refresh()
 {
+  std::scoped_lock solveLock(solve_mutex_);
+
   auto & gd = *state_.gtsam;
   ASSERT_(gd.isam2.has_value());
 
-  try {
-    if (!gd.newFactors.empty() || !gd.newValues.empty()) {
-      gd.isam2->update(gd.newFactors, gd.newValues);
-    } else {
+  // ---- Phase A: grab pending work + snapshot (brief lock) ----
+  gtsam::NonlinearFactorGraph localFactors;
+  gtsam::Values localValues;
+  std::vector<KeyFrameID> snapshotKfIds;
+  std::vector<OdometryFrameID> snapshotFrameIds;
+  KeyFrameID latestKfId = 0;
+  bool haveKfs = false;
+  bool estimateGeoref = false;
+  bool fixedGeoref = false;
+  std::optional<mrpt::topography::TGeodeticCoords> tentativeGeo;
+  {
+    auto lck = mrpt::lockHelper(stateMutex_);
+    if (gd.newFactors.empty() && gd.newValues.empty()) {
       return;  // nothing pending
     }
+    localFactors = gd.newFactors;
+    gd.newFactors.resize(0);
+    localValues = gd.newValues;
+    gd.newValues.clear();
+
+    snapshotKfIds.reserve(state_.last_estimated_states.size());
+    for (const auto & [id, kf] : state_.last_estimated_states) {
+      (void)kf;
+      snapshotKfIds.push_back(id);
+    }
+    for (const auto & [name, fid] : state_.known_odom_frames.getDirectMap()) {
+      (void)name;
+      snapshotFrameIds.push_back(fid);
+    }
+    haveKfs = !state_.time_to_kf_id.empty();
+    if (haveKfs) {
+      latestKfId = state_.last_kf_id();
+    }
+    estimateGeoref = params_.estimate_geo_reference;
+    fixedGeoref = params_.fixed_geo_reference.has_value();
+    tentativeGeo = state_.tentative_geo_coord_reference;
+  }
+
+  // ---- Phase B: heavy solve, NO stateMutex_ (solve_mutex_ held) ----
+  try {
+    gd.isam2->update(localFactors, localValues);
     for (unsigned int i = 1; i < params_.additional_isam2_update_steps; ++i) {
       gd.isam2->update();
     }
-  } catch (const std::exception & e) {
-    MRPT_LOG_ERROR_STREAM(
-      "[process_pending_gtsam_updates] iSAM2 update failed (graph may be underconstrained). "
-      "Discarding pending data. Exception:\n"
-      << e.what());
-    gd.newFactors.resize(0);
-    gd.newValues.clear();
-    return;
-  }
-
-  try {
     gd.estimate = gd.isam2->calculateEstimate();
   } catch (const std::exception & e) {
     MRPT_LOG_ERROR_STREAM(
-      "[process_pending_gtsam_updates] calculateEstimate() failed:\n"
+      "[optimize] iSAM2 update/estimate failed (graph may be underconstrained). "
+      "Discarding this batch. Exception:\n"
       << e.what());
-    gd.newFactors.resize(0);
-    gd.newValues.clear();
     return;
   }
 
-  // Refresh cached per-keyframe states:
-  for (auto & [kfIdx, kf] : state_.last_estimated_states) {
-    const auto pose = gd.estimate.at<gtsam::Pose3>(T(kfIdx));
-    const auto linV = gd.estimate.at<gtsam::Vector3>(V(kfIdx));
-    const auto angV = gd.estimate.at<gtsam::Vector3>(W(kfIdx));
+  struct TmpKf
+  {
+    mrpt::poses::CPose3D pose;
+    mrpt::math::TTwist3D twist;
+  };
+  std::map<KeyFrameID, TmpKf> tmpStates;
+  std::optional<mrpt::math::CMatrixDouble66> latestPoseCov;
+  std::optional<mrpt::math::CMatrixDouble66> latestTwistCov;
+  std::map<OdometryFrameID, mrpt::poses::CPose3DPDFGaussian> tmpFrames;
+  std::optional<mrpt::poses::CPose3DPDFGaussian> tmpEnu;
+  std::optional<mola::Georeferencing> tmpGeoRef;
 
-    kf.pose = mrpt::poses::CPose3D(mrpt::gtsam_wrappers::toTPose3D(pose));
-    kf.twist = {linV.x(), linV.y(), linV.z(), angV.x(), angV.y(), angV.z()};
+  try {
+    for (const KeyFrameID id : snapshotKfIds) {
+      if (!gd.estimate.exists(T(id))) {
+        continue;
+      }
+      TmpKf t;
+      t.pose = mrpt::poses::CPose3D(mrpt::gtsam_wrappers::toTPose3D(gd.estimate.at<gtsam::Pose3>(T(id))));
+      const auto linV = gd.estimate.at<gtsam::Vector3>(V(id));
+      const auto angV = gd.estimate.at<gtsam::Vector3>(W(id));
+      t.twist = {linV.x(), linV.y(), linV.z(), angV.x(), angV.y(), angV.z()};
+      if (params_.enforce_planar_motion) {
+        enforce_planar_pose(t.pose);
+        enforce_planar_twist(t.twist);
+      }
+      tmpStates.emplace(id, t);
+    }
 
-    if (params_.enforce_planar_motion) {
-      enforce_planar_pose(kf.pose);
-      enforce_planar_twist(kf.twist);
+    // Marginal covariance ONLY for the latest keyframe (the predictor's anchor
+    // in steady state): cheap, and keeps the query path iSAM2-free.
+    if (haveKfs && gd.estimate.exists(T(latestKfId))) {
+      latestPoseCov = mrpt::gtsam_wrappers::to_mrpt_se3_cov6(
+        gtsam::Matrix6(gd.isam2->marginalCovariance(T(latestKfId))));
+      mrpt::math::CMatrixDouble66 twCov;
+      twCov.setZero();
+      twCov.asEigen().block<3, 3>(0, 0) = gd.isam2->marginalCovariance(V(latestKfId));
+      twCov.asEigen().block<3, 3>(3, 3) = gd.isam2->marginalCovariance(W(latestKfId));
+      latestTwistCov = twCov;
+    }
+
+    for (const OdometryFrameID fid : snapshotFrameIds) {
+      const auto Fpose = gd.estimate.at<gtsam::Pose3>(symbol_T_map_to_odom_i_base + fid);
+      const auto Fcov = gd.isam2->marginalCovariance(symbol_T_map_to_odom_i_base + fid);
+      mrpt::poses::CPose3DPDFGaussian pdf;
+      pdf.mean = mrpt::poses::CPose3D(mrpt::gtsam_wrappers::toTPose3D(Fpose));
+      pdf.cov = mrpt::gtsam_wrappers::to_mrpt_se3_cov6(Fcov);
+      tmpFrames.emplace(fid, pdf);
+    }
+
+    if (estimateGeoref) {
+      const auto Te = gd.estimate.at<gtsam::Pose3>(symbol_T_enu_to_map);
+      const auto Tecov = gd.isam2->marginalCovariance(symbol_T_enu_to_map);
+      mrpt::poses::CPose3DPDFGaussian pdf;
+      pdf.mean = mrpt::poses::CPose3D(mrpt::gtsam_wrappers::toTPose3D(Te));
+      pdf.cov = mrpt::gtsam_wrappers::to_mrpt_se3_cov6(Tecov);
+      tmpEnu = pdf;
+
+      // Convergence-gated geo_reference: BOTH the T_enu_to_map estimate AND the
+      // latest keyframe's pose in {map} must clear the configured sigma
+      // thresholds (mirrors mola_state_estimation_smoother).
+      if (tentativeGeo.has_value() && !fixedGeoref && haveKfs && latestPoseCov.has_value()) {
+        const auto [enuPosSigma, enuOriSigmaDeg] = max_pos_and_orientation_sigma(pdf.cov);
+        const auto [kfPosSigma, kfOriSigmaDeg] = max_pos_and_orientation_sigma(*latestPoseCov);
+        const bool converged =
+          std::max(enuPosSigma, kfPosSigma) <= params_.convergence_max_position_sigma &&
+          std::max(enuOriSigmaDeg, kfOriSigmaDeg) <= params_.convergence_max_orientation_sigma_deg;
+        if (converged) {
+          mola::Georeferencing gr;
+          gr.geo_coord = *tentativeGeo;
+          gr.T_enu_to_map = pdf;
+          tmpGeoRef = gr;
+        }
+      }
+    }
+  } catch (const std::exception & e) {
+    MRPT_LOG_ERROR_STREAM("[optimize] estimate extraction failed:\n" << e.what());
+    return;
+  }
+
+  // ---- Phase C: commit caches (brief lock) ----
+  {
+    auto lck = mrpt::lockHelper(stateMutex_);
+    for (const auto & [id, t] : tmpStates) {
+      const auto it = state_.last_estimated_states.find(id);
+      if (it == state_.last_estimated_states.end()) {
+        continue;  // keyframe deleted meanwhile
+      }
+      it->second.pose = t.pose;
+      it->second.twist = t.twist;
+      it->second.pose_cov.reset();
+      it->second.twist_cov.reset();
+    }
+    if (haveKfs) {
+      const auto it = state_.last_estimated_states.find(latestKfId);
+      if (it != state_.last_estimated_states.end()) {
+        it->second.pose_cov = latestPoseCov;
+        it->second.twist_cov = latestTwistCov;
+      }
+    }
+    for (const auto & [fid, pdf] : tmpFrames) {
+      state_.last_estimated_frames[fid] = pdf;
+    }
+    if (tmpEnu.has_value()) {
+      state_.last_estimated_frames[REFERENCE_FRAME_ID] = *tmpEnu;
+    }
+    if (tmpGeoRef.has_value()) {
+      state_.geo_reference = tmpGeoRef;
     }
   }
-
-  // Refresh cached odometry-frame transforms (T_map_to_odom_k):
-  for (const auto & [name, frameId] : state_.known_odom_frames.getDirectMap()) {
-    (void)name;
-    const auto Fpose = gd.estimate.at<gtsam::Pose3>(symbol_T_map_to_odom_i_base + frameId);
-    const auto Fcov = gd.isam2->marginalCovariance(symbol_T_map_to_odom_i_base + frameId);
-    auto & pdf = state_.last_estimated_frames[frameId];
-    pdf.mean = mrpt::poses::CPose3D(mrpt::gtsam_wrappers::toTPose3D(Fpose));
-    pdf.cov = mrpt::gtsam_wrappers::to_mrpt_se3_cov6(Fcov);
-  }
-
-  // Refresh T_enu_to_map when estimating geo-referencing:
-  if (params_.estimate_geo_reference) {
-    const auto Te = gd.estimate.at<gtsam::Pose3>(symbol_T_enu_to_map);
-    const auto Tecov = gd.isam2->marginalCovariance(symbol_T_enu_to_map);
-    auto & pdf = state_.last_estimated_frames[REFERENCE_FRAME_ID];
-    pdf.mean = mrpt::poses::CPose3D(mrpt::gtsam_wrappers::toTPose3D(Te));
-    pdf.cov = mrpt::gtsam_wrappers::to_mrpt_se3_cov6(Tecov);
-
-    // Mirror the estimate into geo_reference (geo_coord = tentative ENU origin;
-    // T_enu_to_map = current optimizer estimate). Convergence-gated publication
-    // is a later phase; here we just keep current_georeferencing() queryable.
-    if (
-      state_.tentative_geo_coord_reference.has_value() &&
-      !params_.fixed_geo_reference.has_value()) {
-      auto & gr = state_.geo_reference.emplace();
-      gr.geo_coord = *state_.tentative_geo_coord_reference;
-      gr.T_enu_to_map = pdf;
-    }
-  }
-
-  gd.newFactors.resize(0);
-  gd.newValues.clear();
 }
 
 NavState Mapper3D::get_latest_state_and_covariance(KeyFrameID idx) const
 {
   const auto & frame = state_.last_estimated_states.at(idx);
-  const auto & isam2 = *state_.gtsam->isam2;
 
   NavState ns;
   ns.pose.mean = frame.pose;
-  const auto poseCov = gtsam::Matrix6(isam2.marginalCovariance(T(idx)));
-  ns.pose.cov_inv = mrpt::gtsam_wrappers::to_mrpt_se3_cov6(poseCov).inverse_LLt();
-
   ns.twist = frame.twist;
-  const auto vCov = gtsam::Matrix3(isam2.marginalCovariance(V(idx)));
-  const auto wCov = gtsam::Matrix3(isam2.marginalCovariance(W(idx)));
-  gtsam::Matrix6 twCov = gtsam::Matrix6::Zero();
-  twCov.block<3, 3>(0, 0) = vCov;
-  twCov.block<3, 3>(3, 3) = wCov;
-  ns.twist_inv_cov = twCov.inverse();
+
+  // Covariances come from the cache (filled by optimize_and_refresh for the
+  // latest keyframe), so this query path never touches iSAM2 and can run
+  // concurrently with the background optimizer. Prefer this keyframe's own
+  // cached covariance; fall back to the latest keyframe's; last resort a large
+  // default.
+  std::optional<mrpt::math::CMatrixDouble66> poseCov = frame.pose_cov;
+  std::optional<mrpt::math::CMatrixDouble66> twistCov = frame.twist_cov;
+  if (!poseCov.has_value() && !state_.time_to_kf_id.empty()) {
+    const auto it = state_.last_estimated_states.find(state_.last_kf_id());
+    if (it != state_.last_estimated_states.end()) {
+      poseCov = it->second.pose_cov;
+      twistCov = it->second.twist_cov;
+    }
+  }
+
+  mrpt::math::CMatrixDouble66 pc;
+  if (poseCov.has_value()) {
+    pc = *poseCov;
+  } else {
+    pc.setIdentity();
+    pc *= 1e6;
+  }
+  ns.pose.cov_inv = pc.inverse_LLt();
+
+  mrpt::math::CMatrixDouble66 tc;
+  if (twistCov.has_value()) {
+    tc = *twistCov;
+  } else {
+    tc.setIdentity();
+    tc *= 1e6;
+  }
+  ns.twist_inv_cov = tc.inverse_LLt();
 
   return ns;
 }
@@ -655,10 +796,16 @@ NavState Mapper3D::get_latest_state_and_covariance(KeyFrameID idx) const
 std::optional<NavState> Mapper3D::estimated_navstate(
   const mrpt::Clock::time_point & timestamp, const std::string & frame_id)
 {
-  auto lck = mrpt::lockHelper(stateMutex_);
+  // 1) Ensure cached estimates are up to date. With the background optimizer
+  // thread, the caches are refreshed off the query path (so this returns
+  // quickly from the last committed solve); otherwise flush synchronously here
+  // (deterministic single-threaded path, e.g. unit tests). NOTE: called with NO
+  // lock held, since optimize_and_refresh() does its own (brief) locking.
+  if (!params_.enable_optimizer_thread) {
+    optimize_and_refresh();
+  }
 
-  // 1) Flush pending sensor data into the graph and refresh cached estimates.
-  process_pending_gtsam_updates_locked();
+  auto lck = mrpt::lockHelper(stateMutex_);
 
   if (state_.last_estimated_states.empty()) {
     return {};

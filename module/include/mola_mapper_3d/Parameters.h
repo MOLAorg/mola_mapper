@@ -160,6 +160,14 @@ public:
   /// Each new keyframe triggers an iSAM2 update plus this many refining steps.
   uint32_t additional_isam2_update_steps = 3;
 
+  /// If true, the (growing) iSAM2 solve runs on a dedicated background thread,
+  /// so estimated_navstate() and the high-rate publisher return immediately
+  /// from cached estimates instead of paying the solve cost on the calling
+  /// thread. Recommended for any real online run. Keep false for deterministic
+  /// single-threaded use (e.g. unit tests), where every query first flushes and
+  /// solves synchronously so it reflects all data fused so far.
+  bool enable_optimizer_thread = false;
+
   /** @} */
 
   /** @name High-rate pose publisher

@@ -31,15 +31,16 @@
 #    floats, iSAM2 throws gtsam::IndeterminantLinearSystemException a few
 #    seconds in, and LidarOdometry then discards its motion model and dies.
 #
-#  - `imu_min_sample_period` / `odometry_min_sample_period` (default 0.05 = 20 Hz
-#    here, 0.0 = undecimated in the shared params file): decimate the IMU
-#    (~400 Hz) and wheel-odometry (~200 Hz) inputs before they reach mapper3d.
-#    KITTI/MulRan never exercised this (no IMU/wheel data fed directly into
-#    mapper3d there); here, undecimated 400+200 Hz input keeps growing the
-#    single, never-marginalized ISAM2 graph (mapper_3d has no spatial paging
-#    yet -- see plan section 4.11 / Phase 10) and `estimated_navstate()` was
-#    observed to slow from single-digit ms to a 174 ms average (690 ms worst
-#    case) over this ~150 s bag. 0.05 brings the average to ~37 ms.
+#  - `imu_max_insert_rate_hz` / `odometry_max_insert_rate_hz` (default 5 Hz both,
+#    in the shared params file too): bound the IMU (~400 Hz) and wheel-odometry
+#    (~200 Hz) inputs before they grow the graph. The IMU path SUMMARIZES
+#    (averaged accel+gyro, latest orientation) at most N obs/s rather than
+#    dropping. KITTI/MulRan barely exercised this; here, unbounded 400+200 Hz
+#    input keeps growing the single, never-marginalized ISAM2 graph (mapper_3d
+#    has no spatial paging yet -- see plan section 4.11 / Phase 10) and
+#    `estimated_navstate()` was observed to slow from single-digit ms to a
+#    174 ms average (690 ms worst case) over this ~150 s bag; the 5 Hz caps +
+#    the background optimizer thread keep it fast.
 #
 # BotanicGarden has no /tf or /tf_static: all sensor extrinsics below are
 # `fixed_sensor_pose` values taken from
@@ -133,83 +134,19 @@ modules:
     # via the SharedKeyframeMap sink, not through this subscription):
     raw_data_source: "dataset_input"
 
-    # Inline params (self-contained). Mirrors ../params/mapper-3d.yaml, but with
-    # this dataset's mandatory safe defaults baked in (see the header comment):
-    # the gauge anchor and the 20 Hz IMU/odom decimation. All values stay
-    # env-var overridable.
     params:
-      # --- Reference frame IDs ---
-      vehicle_frame_name: "${MOLA_TF_BASE_LINK|base_link}"
-      reference_frame_name: "${MOLA_TF_MAP|map}"
-      enu_frame_name: "enu"
+      # Import the shared defaults and override ONLY the BotanicGarden-specific
+      # keys (mola_yaml `$import`: imported file is the base; siblings override):
+      $import: ../params/mapper-3d-common.yaml
 
-      # --- Kinematic model & motion factors ---
-      kinematic_model: "${MOLA_MAPPER3D_KINEMATIC_MODEL|KinematicModel::ConstantVelocity}"
-      max_time_to_use_velocity_model: ${MOLA_MAX_TIME_TO_USE_VELOCITY_MODEL|0.75}
-      min_time_difference_to_create_new_frame: 0.05
-      time_between_frames_to_warning: 3.0
-      gnss_nearby_keyframe_stamp_tolerance: 1.0
-      imu_nearby_keyframe_stamp_tolerance: 0.10
-
-      # High-rate same-sensor decimation. DEFAULT 0.05 (20 Hz) here, NOT 0.0:
-      # this dataset feeds ~400 Hz IMU + ~200 Hz wheel odometry directly into
-      # mapper3d (see header).
-      odometry_min_sample_period: ${MOLA_MAPPER3D_ODOM_MIN_PERIOD|0.05}
-      imu_min_sample_period: ${MOLA_MAPPER3D_IMU_MIN_PERIOD|0.05}
-
-      # High-rate IMU/wheels aggregation: do NOT spawn a keyframe per sample.
-      # IMU and wheels share keyframes created every sensor_keyframe_min_period,
-      # and wheel odometry is aggregated into ONE relative-pose edge per
-      # keyframe interval. Bounds central-graph growth from these two direct
-      # high-rate sensors (plan 4.12). (LIO's own sparse SharedKeyframeMap
-      # keyframes are unaffected; LIO's dense per-scan fuse_pose() is separate.)
-      aggregate_high_rate_into_edges: ${MOLA_MAPPER3D_AGGREGATE|true}
-      sensor_keyframe_min_period: ${MOLA_MAPPER3D_SENSOR_KF_PERIOD|0.5}
-
-      sigma_random_walk_acceleration_linear: ${MOLA_SIGMA_RW_LINACC|1.0}
-      sigma_random_walk_acceleration_angular: ${MOLA_SIGMA_RW_ANGACC|10.0}
-      sigma_integrator_position: 0.10
-      sigma_integrator_orientation: 1.0
-
-      initial_twist_sigma_lin: 20.0
-      initial_twist_sigma_ang: 3.0
-
-      enforce_planar_motion: ${MOLA_MAPPER3D_ENFORCE_PLANAR_MOTION|false}
-
-      # MANDATORY gauge anchor. DEFAULT 1e-6 here, NOT empty: this is a
-      # pure-odometry run (no GNSS), so without it the graph floats and iSAM2
-      # throws IndeterminantLinearSystemException (see header).
+      # MANDATORY gauge anchor: this is a pure-odometry run (no GNSS), so without
+      # it the graph floats and iSAM2 throws IndeterminantLinearSystemException
+      # (see header). estimate_geo_reference stays false (the common default).
       link_first_pose_to_reference_origin_sigma: ${MOLA_LINK_FIRST_POSE_SIGMA|1e-6}
 
-      # --- IMU (Xsens MTi-680G: orientation quaternion + accel + gyro) ---
-      imu_attitude_sigma_deg: "${MOLA_IMU_ATTITUDE_SIGMA|2.0}"
-      imu_attitude_azimuth_offset_deg: "${MOLA_IMU_ATTITUDE_AZIMUTH_OFFSET|0.0}"
-      imu_normalized_gravity_alignment_sigma: "${MOLA_IMU_GRAVITY_ALIGNMENT_SIGMA|0.4}"
-      imu_angular_velocity_sigma_deg: ${MOLA_IMU_ANGVEL_SIGMA|0.0}
+      # ~400 Hz IMU + ~200 Hz wheels: aggregate the high-rate streams into
+      # bounded-rate shared keyframes + relative edges (see header).
+      aggregate_high_rate_into_edges: ${MOLA_MAPPER3D_AGGREGATE|true}
 
-      # --- Geo-referencing: OFF (this dataset has no GNSS) ---
-      estimate_geo_reference: "${MOLA_ESTIMATE_GEO_REF|false}"
-      convergence_max_position_sigma: 1.0
-      convergence_max_orientation_sigma_deg: 5.0
-      publish_estimated_georef_on_convergence: true
-
-      # --- Nonlinear optimization ---
-      additional_isam2_update_steps: 3
-      # Solve on a background thread so LidarOdometry's per-scan
-      # estimated_navstate() query returns immediately from cached estimates
-      # instead of paying the growing iSAM2 solve cost on the calling thread.
-      enable_optimizer_thread: ${MOLA_MAPPER3D_OPTIMIZER_THREAD|true}
-
-      # --- High-rate pose publisher ---
+      # Publish the extrapolated reference-frame pose at 20 Hz.
       high_rate_pose_publish_rate_hz: ${MOLA_MAPPER3D_PUBLISH_RATE_HZ|20.0}
-      high_rate_use_latest_sensors: true
-
-      # --- Map save/load ---
-      load_simplemap_file: "${MOLA_MAPPER3D_LOAD_SM|}"
-      save_simplemap_file: "${MOLA_MAPPER3D_SAVE_SM|}"
-      externalize_after_seconds: 30.0
-
-      # --- Sensor input filtering ---
-      do_process_imu_labels_re: "${MOLA_MAPPER3D_IMU_LABELS_RE|.*}"
-      do_process_odometry_labels_re: "${MOLA_MAPPER3D_ODOMETRY_LABELS_RE|.*}"
-      do_process_gnss_labels_re: "${MOLA_MAPPER3D_GNSS_LABELS_RE|.*}"

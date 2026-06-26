@@ -91,11 +91,22 @@ params:
   externalize_after_seconds: 30.0
 
   # --------------------------------------------------------------------------
+  # Optional visualization (MolaViz / MolaVizImGui). 
+  # --------------------------------------------------------------------------
+  # Renders the keyframe tree + graph edges in {map}, and repositions each
+  # odometry source's movable {odom_i} frame node (the LidarOdometry above draws its dense
+  # clouds / local map under it via render_in_movable_frame).
+  visualization:
+    update_rate_hz: 5.0
+    keyframe_corner_size: 0.5
+
+  # --------------------------------------------------------------------------
   # Sensor Input Filtering (Regex Patterns)
   # --------------------------------------------------------------------------
   do_process_imu_labels_re: "${MOLA_MAPPER3D_IMU_LABELS_RE|.*}"
   do_process_odometry_labels_re: "${MOLA_MAPPER3D_ODOMETRY_LABELS_RE|.*}"
   do_process_gnss_labels_re: "${MOLA_MAPPER3D_GNSS_LABELS_RE|.*}"
+
 
 # ============================================================================
 # End of Configuration

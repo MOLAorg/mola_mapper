@@ -122,6 +122,7 @@ endif()
 install(
   DIRECTORY
     params
+    mola-cli-launchs
   DESTINATION
     share/${PROJECT_NAME}
 )

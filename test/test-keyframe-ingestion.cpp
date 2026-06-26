@@ -66,6 +66,8 @@ void test_keyframe_ingestion_basic()
 params:
   vehicle_frame_name: "base_link"
   reference_frame_name: "map"
+  imu_max_insert_rate_hz: 0.0
+  odometry_max_insert_rate_hz: 0.0
   kinematic_model: KinematicModel::ConstantVelocity
   max_time_to_use_velocity_model: 2.0
   sigma_random_walk_acceleration_linear: 1.0
@@ -125,6 +127,8 @@ void test_keyframe_ingestion_imu_corrects_drift()
 params:
   vehicle_frame_name: "base_link"
   reference_frame_name: "map"
+  imu_max_insert_rate_hz: 0.0
+  odometry_max_insert_rate_hz: 0.0
   kinematic_model: KinematicModel::ConstantVelocity
   max_time_to_use_velocity_model: 2.0
   sigma_random_walk_acceleration_linear: 2.0

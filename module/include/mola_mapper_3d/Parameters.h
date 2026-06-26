@@ -88,11 +88,23 @@ public:
   /// Permissive temporal tolerance to attach IMU attitude/gravity factors.
   double imu_nearby_keyframe_stamp_tolerance = 0.10;  // [s]
 
-  /// High-rate same-sensor decimation (0 = disabled). Caps how often wheel-odom
-  /// / IMU readings spawn factors. Wheel-odom drops are merged (anchor held);
-  /// IMU drops are skipped.
-  double odometry_min_sample_period = 0.0;  // [s]
-  double imu_min_sample_period = 0.0;       // [s]
+  /// Maximum rate [Hz] of SUMMARIZED IMU observations actually inserted into the
+  /// graph (0 = disabled = insert every reading). When > 0, the high-rate IMU
+  /// stream is buffered and at most this many summarized observations per second
+  /// are fused: each carries the AVERAGED accelerometer (a less-noisy
+  /// gravity/leveling estimate), the averaged angular velocity, and the latest
+  /// absolute orientation, instead of just dropping the in-between samples. This
+  /// bounds BOTH the inserted-factor rate AND the IMU-driven keyframe-creation
+  /// rate (the keyframe-reuse window becomes 1/rate), keeping the central graph
+  /// tractable for real ~100-400 Hz IMUs without a fixed decimation ratio.
+  double imu_max_insert_rate_hz = 5.0;  // [Hz]
+
+  /// Maximum rate [Hz] of wheel-odometry increments inserted into the graph
+  /// (0 = disabled = insert every reading). Readings arriving sooner than 1/rate
+  /// after the last kept one are dropped WITHOUT advancing the integration anchor
+  /// (so the next kept reading fuses the full accumulated motion + covariance);
+  /// no information is thrown away, only the factor/keyframe cadence is bounded.
+  double odometry_max_insert_rate_hz = 5.0;  // [Hz]
 
   /// When true, high-rate IMU and wheel odometry do NOT each spawn their own
   /// keyframe. They share keyframes created at a bounded cadence

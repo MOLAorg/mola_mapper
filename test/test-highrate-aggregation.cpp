@@ -56,6 +56,8 @@ params:
   sigma_random_walk_acceleration_angular: 1.0
   imu_normalized_gravity_alignment_sigma: 0.5
   sensor_keyframe_min_period: 0.5
+  imu_max_insert_rate_hz: 0.0
+  odometry_max_insert_rate_hz: 0.0
   aggregate_high_rate_into_edges: )###") +
          (aggregate ? "true" : "false") + "\n";
 }

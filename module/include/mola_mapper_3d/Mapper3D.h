@@ -37,6 +37,7 @@
 #include <mrpt/poses/CPose2D.h>
 #include <mrpt/poses/CPose3DPDFGaussian.h>
 
+#include <array>
 #include <atomic>
 #include <condition_variable>
 #include <map>
@@ -179,9 +180,33 @@ private:
   // Wheel-odometry integration anchor (last absolute reading per single source).
   std::optional<mrpt::poses::CPose2D> last_wheels_odometry_;
   std::optional<std::string> last_wheels_odometry_name_;
-  // Stamps of the last *processed* (not decimated) high-rate readings.
+  // Stamp of the last *kept* (not rate-capped) wheel-odometry reading.
   std::optional<mrpt::Clock::time_point> last_wheels_odometry_stamp_;
-  std::optional<mrpt::Clock::time_point> last_processed_imu_stamp_;
+
+  // --- High-rate IMU max-rate summarization (imu_max_insert_rate_hz) ---
+  // Buffers incoming IMU samples and inserts at most imu_max_insert_rate_hz
+  // SUMMARIZED observations/second (averaged accel + gyro, latest orientation),
+  // bounding both the factor and the IMU-keyframe creation rate. See fuse_imu().
+  struct ImuAccumulator
+  {
+    std::size_t n_acc = 0;
+    std::size_t n_gyro = 0;
+    std::array<double, 3> acc_sum = {0, 0, 0};
+    std::array<double, 3> gyro_sum = {0, 0, 0};
+    bool has_quat = false;
+    std::array<double, 4> quat_wxyz = {1, 0, 0, 0};  //!< latest absolute orientation
+    mrpt::poses::CPose3D sensor_pose;
+    mrpt::Clock::time_point last_stamp;
+    [[nodiscard]] bool empty() const { return n_acc == 0 && n_gyro == 0 && !has_quat; }
+    void clear() { *this = ImuAccumulator{}; }
+  };
+  ImuAccumulator imu_accum_;
+  std::optional<mrpt::Clock::time_point> last_imu_summary_stamp_;
+
+  // --- Geo-referencing diagnostics counters (guarded by stateMutex_) ---
+  std::size_t gnss_factors_inserted_ = 0;
+  std::size_t imu_factors_inserted_ = 0;
+  bool georef_converged_announced_ = false;
 
   // Wheel-odometry relative-chaining aggregation (aggregate_high_rate_into_edges):
   // the keyframe the wheel chain last attached to, and the absolute wheel
@@ -238,6 +263,10 @@ private:
     mola::gui::LiveString::Ptr lbOdomFrames;
     mola::gui::LiveString::Ptr lbGeoref;
     mola::gui::LiveString::Ptr lbConverged;
+    mola::gui::LiveString::Ptr lbGnss;
+    mola::gui::LiveString::Ptr lbEnu;
+    mola::gui::LiveString::Ptr lbDrift;
+    mola::gui::LiveString::Ptr lbImu;
   };
   GuiData gui_;
 
@@ -293,6 +322,19 @@ private:
 
   /// Adds kinematic factors between two time-adjacent keyframes (once).
   void add_kinematic_factor_between(KeyFrameID from, KeyFrameID to);
+
+  /// Adds an IMU observation's attitude / gravity-leveling / gyro factors to a
+  /// keyframe selected by the given keyframe-reuse tolerance. Shared by the
+  /// per-sample and the summarized (max-rate) IMU paths.
+  void apply_imu_observation_locked(
+    const mrpt::obs::CObservationIMU & imu, double keyframe_reuse_tolerance);
+
+  /// Accumulates one raw IMU sample into imu_accum_ (max-rate summarization).
+  void accumulate_imu_sample_locked(const mrpt::obs::CObservationIMU & imu);
+
+  /// Builds a summarized CObservationIMU from imu_accum_ (averaged accel/gyro,
+  /// latest orientation) and clears the accumulator. False if nothing buffered.
+  [[nodiscard]] bool build_summarized_imu_locked(mrpt::obs::CObservationIMU & out);
 
   /// Drains pending factors/values, runs the incremental iSAM2 update and
   /// refreshes the cached estimates. Does its OWN locking in three phases

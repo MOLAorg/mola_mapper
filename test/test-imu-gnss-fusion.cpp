@@ -53,6 +53,8 @@ void test_imu_leveling()
 params:
   vehicle_frame_name: "base_link"
   reference_frame_name: "map"
+  imu_max_insert_rate_hz: 0.0
+  odometry_max_insert_rate_hz: 0.0
   kinematic_model: KinematicModel::ConstantVelocity
   max_time_to_use_velocity_model: 2.0
   sigma_random_walk_acceleration_linear: 2.0
@@ -129,6 +131,8 @@ void run_static_gnss_imu(const mrpt::poses::CPose3D & vehiclePose, double yaw_gt
 params:
   vehicle_frame_name: "base_link"
   reference_frame_name: "map"
+  imu_max_insert_rate_hz: 0.0
+  odometry_max_insert_rate_hz: 0.0
   kinematic_model: KinematicModel::ConstantVelocity
   max_time_to_use_velocity_model: 2.0
   min_time_difference_to_create_new_frame: 0.05
@@ -264,6 +268,8 @@ void test_twist_fusion()
 params:
   vehicle_frame_name: "base_link"
   reference_frame_name: "map"
+  imu_max_insert_rate_hz: 0.0
+  odometry_max_insert_rate_hz: 0.0
   kinematic_model: KinematicModel::ConstantVelocity
   max_time_to_use_velocity_model: 2.0
   link_first_pose_to_reference_origin_sigma: 1e-3

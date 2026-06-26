@@ -37,7 +37,7 @@ module/src/
   Mapper3D.cpp                   Lifecycle: initialize/spinOnce/reset/diagnostics + IMPLEMENTS_MRPT_OBJECT
   Mapper3D_Fusion.cpp            Keyframe management + factor-graph fusion + estimated_navstate
   Mapper3D_KeyframeIngestion.cpp SharedKeyframeMap sink: requestInsertKeyframe() (anchor-once + consecutive chain)
-  Mapper3D_GUI.cpp               Optional MolaViz/MolaVizImGui viz: KF tree + graph edges + per-source movable {odom_i} frames + GuiWidgetDescription control panel
+  Mapper3D_GUI.cpp               Optional MolaViz/MolaVizImGui viz: KF tree + graph edges + per-source movable {odom_i} frames + GuiWidgetDescription panel (Status / Geo-ref / View tabs: KF/edge/IMU-factor counts, geo-ref T_enu_to_map + GNSS factors + per-source odom drift vs ENU)
   Mapper3D_SensorCallbacks.cpp   onNewObservation dispatch -> fuse_*()
   WorldModelState.cpp            GtsamData pimpl (ISAM2/Values/NonlinearFactorGraph) + map helpers
   Parameters.cpp                 loadFrom(yaml)
@@ -183,19 +183,25 @@ GUI runs confirmed working too: `mola-cli-launchs/lidar_odometry_mapper3d_from_k
 now ships with a `viz: mola::MolaVizImGui` module (`enabled: ${MOLA_WITH_GUI|true}`,
 the standard `mola_launcher` per-module `enabled` flag) on by default.
 
-6. **Decimate any IMU/wheel-odometry feeding mapper3d directly
-   (`imu_min_sample_period` / `odometry_min_sample_period`, both `0.0` =
-   undecimated by default in `params/mapper-3d.yaml`).** KITTI/MulRan never
-   hit this (no IMU/wheel data goes directly into mapper3d there). Validating
-   against BotanicGarden's real ~400 Hz IMU + ~200 Hz wheel odometry
-   (`lidar_odometry_mapper3d_from_botanicgarden.yaml`) with NO decimation set
-   slowed `estimated_navstate()` from single-digit ms to a 174 ms average
-   (690 ms worst case) over a ~150 s bag: undecimated high-rate input keeps
-   growing the single, never-marginalized ISAM2 graph (mapper_3d has no
-   spatial paging yet, plan section 4.11 / Phase 10). Setting both to `0.05`
-   (20 Hz) brought the average down to ~37 ms. This is mapper_3d's most
-   concrete real-world case yet for why Phase 10 (spatial paging) matters;
-   until then, ALWAYS set these two for any real high-rate IMU/wheel source.
+6. **Bound any high-rate IMU/wheel-odometry feeding mapper3d directly via the
+   max-insert-rate caps (`imu_max_insert_rate_hz` / `odometry_max_insert_rate_hz`,
+   both default `5.0` Hz; `0` = insert every reading).** These REPLACED the older
+   `imu_min_sample_period` / `odometry_min_sample_period` decimation knobs
+   (2026-06-26): a positive max RATE is the natural spelling and lets us
+   SUMMARIZE rather than drop. The IMU path buffers samples and inserts at most
+   N summarized observations/second -- each carries the AVERAGED accelerometer
+   (less-noisy gravity/leveling), averaged angular velocity, and the latest
+   absolute orientation -- bounding BOTH the inserted-factor rate AND the
+   IMU-driven keyframe-creation rate (keyframe-reuse window = 1/rate). Wheel
+   odometry is merged (anchor held) up to its rate. Unit tests set both to `0`
+   to stay deterministic (default-on otherwise). Validated on real data:
+   BotanicGarden's ~400 Hz IMU + ~200 Hz wheels used to slow
+   `estimated_navstate()` to ~174 ms average undecimated; MulRan DCC01's ~100 Hz
+   Xsens IMU + the background optimizer thread now keeps `estimated_navstate()`
+   at a **42 us average / 730 us max** over 5406 LIO queries with the 5 Hz cap
+   on (the un-marginalized single ISAM2 graph still grows, plan 4.11 / Phase 10,
+   but the cap + thread keep the query path fast). ALWAYS keep these on (or set
+   `enable_optimizer_thread`) for any real high-rate IMU/wheel source.
    (A `gui_preview_sensors` GOTCHA found along the way too: a per-entry
    `enabled:` flag, not just the module-level one, is needed if a
    `dataset_input` module both declares `gui_preview_sensors` AND might run
@@ -220,13 +226,44 @@ KITTI_SEQ=04 MOLA_LINK_FIRST_POSE_SIGMA=1e-6 \
 # MOLA_WITH_GUI=false for headless; MOLA_TIME_WARP=N to speed up/slow down.
 ```
 
-MulRan launcher (`lidar_odometry_mapper3d_from_mulran.yaml`) is prepared and
-dry-run validated (YAML parses, modules wire up, `raw_data_source` resolves)
-but NOT yet run against real MulRan data (no dataset copied locally as of
-this writing). It self-contains `estimate_geo_reference: true` and
-`link_first_pose_to_reference_origin_sigma: 1e-6` as defaults since it needs
-both active out of the box (see the YAML's own header comment for why and
-for the required `MULRAN_BASE_DIR`/`MULRAN_SEQ` env vars).
+MulRan launcher (`lidar_odometry_mapper3d_from_mulran.yaml`), RUN for real end
+to end on DCC01 (2026-06-26, `MULRAN_BASE_DIR=.../MulRan MULRAN_SEQ=DCC01`,
+headless, full ~550 s / 69262-message sequence). This is the first run
+exercising LiDAR + IMU + **GNSS** together (KITTI/BotanicGarden have no GPS).
+It self-contains `estimate_geo_reference: true` and
+`link_first_pose_to_reference_origin_sigma: 1e-6` (needs both out of the box),
+plus `enable_optimizer_thread: true` and `imu_max_insert_rate_hz: 5.0` so it
+runs fast by default. Findings:
+- **Query speed**: LIO's per-scan `estimated_navstate()` averaged **42 us**
+  (max 730 us) over 5406 calls -- the >100 ms synchronous-solve problem is gone
+  (optimizer thread + the 5 Hz IMU summarization that bounds graph growth).
+- **Auto geo-referencing WORKS**: `T_enu_to_map` converges in a few seconds /
+  ~10-23 GNSS factors; yaw locks to ~0.2-0.66 deg (the Xsens absolute-attitude
+  `Pose3RotationFactor`), position sigma floors at ~1.1-1.5 m (GNSS noise).
+- **Convergence criterion fix** (2026-06-26): the geo-ref convergence gate no
+  longer includes the latest keyframe's ABSOLUTE position sigma. Unlike the
+  smoother's sliding window, the central map pins a far gauge anchor, so that
+  sigma grows with distance from it (GNSS-floored, a few meters) -- it is the
+  expected DRIFT of odom_kf wrt ENU, not a geo-ref-quality signal, and gating on
+  it prevented convergence from ever latching on long trajectories. The gate is
+  now `enuPos <= conv_pos_sigma && max(enuOri, kfOri) <= conv_ori_sigma`
+  (`Mapper3D_Fusion.cpp` `optimize_and_refresh`). MulRan's
+  `convergence_max_position_sigma` was loosened 1.0 -> 1.5 m (its GNSS floors
+  ~1.1 m). The `[geo-ref] convergence check: enu(...) kf(... [drift, not gated])`
+  DEBUG trace shows the live sigmas + the growing kf drift.
+- **Front-end reset no longer wipes the central map** (fixed 2026-06-26):
+  `LidarOdometry` calls `navstate_fuse->reset()` once during its initial
+  (re)localization (`LidarOdometry_InitialLocalization.cpp`). Mapper3D's
+  `reset()` USED to do a full `state_.clear()` + `reinitialize_gtsam_locked()`,
+  wiping the whole central map (keyframes + tentative geo origin) accumulated
+  during LIO warmup (geo-ref converged, got wiped, re-converged -- CONVERGED
+  announced twice). `reset()` now resets ONLY the short-term per-source
+  integration anchors (wheel/IMU/ingestion chains) via
+  `reset_sensor_anchors_locked()`; the keyframes, factor graph, geo-referencing,
+  diagnostic counters and converged-announcement persist (the map is the
+  shared, persistent world model and must survive one front end relocalizing).
+  Verified on DCC01: tentative origin + CONVERGED now appear exactly once. See
+  the YAML's own header comment and the `MULRAN_BASE_DIR`/`MULRAN_SEQ` env vars.
 
 BotanicGarden launcher (`lidar_odometry_mapper3d_from_botanicgarden.yaml`),
 RUN for real end to end:
@@ -245,7 +282,7 @@ just the two env vars above (all still overridable). It used to die a few
 seconds in with `gtsam::IndeterminantLinearSystemException` (gauge-free graph)
 when run without the magic env vars; that is fixed. All values remain
 overridable, e.g. `MOLA_MAPPER3D_OPTIMIZER_THREAD=false` to force the
-deterministic synchronous solve, `MOLA_MAPPER3D_IMU_MIN_PERIOD=...`, etc.
+deterministic synchronous solve, `MOLA_MAPPER3D_IMU_MAX_RATE_HZ=...`, etc.
 
 Reads a ROS 1 `.bag` directly (no ROS 1 install) via `mola::Rosbag1Dataset`
 (`mola_input_rosbag1`); use that package's `rosbag1-info <bag>` CLI tool to
@@ -253,7 +290,7 @@ confirm a dataset's sensor inventory before wiring a new launcher (don't
 trust a dataset's own README/AGENTS.md blindly -- BotanicGarden's actually
 HAS a `/odom` wheel-odometry topic the dataset's own AGENTS.md note didn't
 mention). This dataset has LiDAR + IMU + wheels, NO GNSS. See lesson 6 above
-for the required `MOLA_MAPPER3D_IMU_MIN_PERIOD`/`MOLA_MAPPER3D_ODOM_MIN_PERIOD`.
+for the `MOLA_MAPPER3D_IMU_MAX_RATE_HZ`/`MOLA_MAPPER3D_ODOM_MAX_RATE_HZ` caps.
 
 ## Code style
 

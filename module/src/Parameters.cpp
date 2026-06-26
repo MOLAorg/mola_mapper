@@ -42,10 +42,10 @@ void Parameters::loadFrom(const mrpt::containers::yaml & cfg)
   MCP_LOAD_OPT(cfg, gnss_nearby_keyframe_stamp_tolerance);
   MCP_LOAD_OPT(cfg, imu_nearby_keyframe_stamp_tolerance);
 
-  MCP_LOAD_OPT(cfg, odometry_min_sample_period);
-  MCP_LOAD_OPT(cfg, imu_min_sample_period);
-  ASSERT_GE_(odometry_min_sample_period, .0);
-  ASSERT_GE_(imu_min_sample_period, .0);
+  MCP_LOAD_OPT(cfg, imu_max_insert_rate_hz);
+  MCP_LOAD_OPT(cfg, odometry_max_insert_rate_hz);
+  ASSERT_GE_(imu_max_insert_rate_hz, .0);
+  ASSERT_GE_(odometry_max_insert_rate_hz, .0);
 
   MCP_LOAD_OPT(cfg, aggregate_high_rate_into_edges);
   MCP_LOAD_OPT(cfg, sensor_keyframe_min_period);

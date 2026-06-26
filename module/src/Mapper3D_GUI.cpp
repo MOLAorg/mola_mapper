@@ -66,6 +66,10 @@ void Mapper3D::updateVisualization()
   std::vector<std::pair<std::string, mrpt::poses::CPose3D>> odomFrames;
   std::optional<mrpt::poses::CPose3D> latestVehiclePose;
   bool hasGeoref = false;
+  std::size_t gnssFactors = 0;
+  std::size_t imuFactors = 0;
+  std::optional<mrpt::topography::TGeodeticCoords> tentativeGeo;
+  std::optional<mrpt::poses::CPose3DPDFGaussian> enuToMap;
 
   {
     auto lck = mrpt::lockHelper(stateMutex_);
@@ -114,6 +118,13 @@ void Mapper3D::updateVisualization()
     }
 
     hasGeoref = state_.geo_reference.has_value();
+    gnssFactors = gnss_factors_inserted_;
+    imuFactors = imu_factors_inserted_;
+    tentativeGeo = state_.tentative_geo_coord_reference;
+    if (const auto itEnu = state_.last_estimated_frames.find(0);
+        itEnu != state_.last_estimated_frames.end()) {
+      enuToMap = itEnu->second;
+    }
   }
 
   // --- Keyframe tree (corners + trajectory polyline) ---
@@ -208,6 +219,41 @@ void Mapper3D::updateVisualization()
     mrpt::poses::CPose3DPDFGaussian convPose;
     const bool converged = has_converged_localization(convPose);
     gui_.lbConverged->set(std::string("Localization: ") + (converged ? "converged" : "(no)"));
+
+    // GNSS + tentative ENU origin:
+    if (tentativeGeo.has_value()) {
+      gui_.lbGnss->set(mrpt::format(
+        "GNSS factors: %zu  origin(%.5f, %.5f)", gnssFactors, tentativeGeo->lat.decimal_value,
+        tentativeGeo->lon.decimal_value));
+    } else {
+      gui_.lbGnss->set(mrpt::format("GNSS factors: %zu  (no fix yet)", gnssFactors));
+    }
+
+    // T_enu_to_map estimate (the geo-referencing transform) + its sigmas:
+    if (enuToMap.has_value()) {
+      const auto & m = enuToMap->mean;
+      const double sPos =
+        std::sqrt(std::max({enuToMap->cov(0, 0), enuToMap->cov(1, 1), enuToMap->cov(2, 2)}));
+      const double sYawDeg = mrpt::RAD2DEG(std::sqrt(enuToMap->cov(3, 3)));
+      gui_.lbEnu->set(mrpt::format(
+        "T_enu_map: (%.1f,%.1f,%.1f) yaw=%.1fdeg s_pos=%.2fm s_yaw=%.2fdeg", m.x(), m.y(), m.z(),
+        mrpt::RAD2DEG(m.yaw()), sPos, sYawDeg));
+    } else {
+      gui_.lbEnu->set("T_enu_map: (not estimated)");
+    }
+
+    // Per-source odom-frame drift vs the map: |translation| of T_map_to_odom_i,
+    // i.e. how far each front-end odometry frame has been pulled to correct its
+    // own drift (grows as GNSS/IMU re-place it against the geo-referenced map).
+    std::string driftStr = "Odom drift:";
+    if (odomFrames.empty()) {
+      driftStr += " (none)";
+    }
+    for (const auto & [name, pose] : odomFrames) {
+      driftStr += mrpt::format(" %s=%.2fm", name.c_str(), pose.translation().norm());
+    }
+    gui_.lbDrift->set(driftStr);
+    gui_.lbImu->set(mrpt::format("IMU factors: %zu", imuFactors));
   }
 }
 
@@ -221,6 +267,10 @@ void Mapper3D::internalBuildGUI()
   gui_.lbOdomFrames = std::make_shared<LiveString>(" ");
   gui_.lbGeoref = std::make_shared<LiveString>(" ");
   gui_.lbConverged = std::make_shared<LiveString>(" ");
+  gui_.lbGnss = std::make_shared<LiveString>(" ");
+  gui_.lbEnu = std::make_shared<LiveString>(" ");
+  gui_.lbDrift = std::make_shared<LiveString>(" ");
+  gui_.lbImu = std::make_shared<LiveString>(" ");
 
   WindowDescription desc;
   desc.title = "mola_mapper_3d";
@@ -234,8 +284,19 @@ void Mapper3D::internalBuildGUI()
     tab.widgets.emplace_back(Label{gui_.lbKeyframes});
     tab.widgets.emplace_back(Label{gui_.lbEdges});
     tab.widgets.emplace_back(Label{gui_.lbOdomFrames});
-    tab.widgets.emplace_back(Label{gui_.lbGeoref});
+    tab.widgets.emplace_back(Label{gui_.lbImu});
     tab.widgets.emplace_back(Label{gui_.lbConverged});
+    desc.tabs.emplace_back(std::move(tab));
+  }
+
+  // Geo-referencing tab:
+  {
+    Tab tab;
+    tab.title = "Geo-ref";
+    tab.widgets.emplace_back(Label{gui_.lbGeoref});
+    tab.widgets.emplace_back(Label{gui_.lbGnss});
+    tab.widgets.emplace_back(Label{gui_.lbEnu});
+    tab.widgets.emplace_back(Label{gui_.lbDrift});
     desc.tabs.emplace_back(std::move(tab));
   }
 

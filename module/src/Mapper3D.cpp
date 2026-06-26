@@ -20,6 +20,8 @@
  */
 
 #include <mola_mapper_3d/Mapper3D.h>
+#include <mrpt/core/bits_math.h>
+#include <mrpt/core/format.h>
 #include <mrpt/core/lock_helper.h>
 #include <mrpt/system/datetime.h>
 
@@ -68,6 +70,11 @@ void Mapper3D::initialize(const mrpt::containers::yaml & cfg)
     state_.clear();
     reinitialize_gtsam_locked();
     reset_sensor_anchors_locked();
+    // Full (re)initialization wipes the map, so the diagnostic counters and the
+    // geo-ref-converged announcement reset too (reset() does NOT, see below).
+    gnss_factors_inserted_ = 0;
+    imu_factors_inserted_ = 0;
+    georef_converged_announced_ = false;
   }
 
   // Optional visualization config + attach to a visualizer module (MolaViz /
@@ -148,8 +155,16 @@ void Mapper3D::stop_optimizer_thread()
 void Mapper3D::reset()
 {
   auto lck = mrpt::lockHelper(stateMutex_);
-  state_.clear();
-  reinitialize_gtsam_locked();
+  // A reset() request (e.g. a front end re-localizing, like LidarOdometry's
+  // startup `navstate_fuse->reset()`) means "forget the short-term per-source
+  // integration state", NOT "wipe the central world model". The keyframes,
+  // factor graph and geo-referencing are the persistent, shared map: they MUST
+  // survive a single front end's relocalization, otherwise LIO's startup reset
+  // would erase the IMU/GNSS keyframes + tentative geo-reference Mapper3D
+  // accumulated during LIO's warmup (and geo-ref would converge, get wiped, then
+  // re-converge). So only the per-source high-rate integration anchors and the
+  // keyframe-ingestion chains are reset, so each source re-anchors cleanly; the
+  // map, the diagnostic counters and the geo-ref-converged announcement persist.
   reset_sensor_anchors_locked();
 }
 
@@ -158,7 +173,8 @@ void Mapper3D::reset_sensor_anchors_locked()
   last_wheels_odometry_.reset();
   last_wheels_odometry_name_.reset();
   last_wheels_odometry_stamp_.reset();
-  last_processed_imu_stamp_.reset();
+  imu_accum_.clear();
+  last_imu_summary_stamp_.reset();
   wheel_chain_last_kf_.reset();
   wheel_chain_anchor_odom_.reset();
   keyframe_ingestion_state_by_source_.clear();
@@ -259,6 +275,26 @@ void Mapper3D::getDiagnostics(std::vector<mola::DiagnosticStatusMsg> & status)
   msg.values.push_back({"keyframes", std::to_string(state_.time_to_kf_id.size())});
   msg.values.push_back({"odometry_frames", std::to_string(state_.known_odom_frames.size())});
   msg.values.push_back({"geo_referenced", state_.geo_reference.has_value() ? "yes" : "no"});
+  msg.values.push_back({"gnss_factors", std::to_string(gnss_factors_inserted_)});
+  msg.values.push_back({"imu_factors", std::to_string(imu_factors_inserted_)});
+
+  // Geo-referencing transform + per-source odometry-frame drift vs {map}.
+  if (const auto itEnu = state_.last_estimated_frames.find(0);
+      itEnu != state_.last_estimated_frames.end()) {
+    const auto & m = itEnu->second.mean;
+    msg.values.push_back(
+      {"T_enu_to_map",
+       mrpt::format(
+         "(%.2f, %.2f, %.2f, yaw=%.2fdeg)", m.x(), m.y(), m.z(), mrpt::RAD2DEG(m.yaw()))});
+  }
+  for (const auto & [name, id] : state_.known_odom_frames.getDirectMap()) {
+    const auto itF = state_.last_estimated_frames.find(id);
+    if (itF == state_.last_estimated_frames.end()) {
+      continue;
+    }
+    msg.values.push_back(
+      {"drift_" + name, mrpt::format("%.2fm", itF->second.mean.translation().norm())});
+  }
 
   status.push_back(std::move(msg));
 }

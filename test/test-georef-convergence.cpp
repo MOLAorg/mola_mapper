@@ -81,6 +81,8 @@ const char * navStateParams =
 params:
   vehicle_frame_name: "base_link"
   reference_frame_name: "map"
+  imu_max_insert_rate_hz: 0.0
+  odometry_max_insert_rate_hz: 0.0
   max_time_to_use_velocity_model: 2.0
   min_time_difference_to_create_new_frame: 0.01
   sigma_random_walk_acceleration_linear: 1.0

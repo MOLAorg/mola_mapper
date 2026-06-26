@@ -377,12 +377,12 @@ void Mapper3D::fuse_odometry(
     last_wheels_odometry_name_.has_value() && *last_wheels_odometry_name_ == odomName,
     "More than one different 'odomName's received for wheels odometry!");
 
-  // High-rate decimation/merge: if this reading arrives too soon after the last
-  // *processed* one, drop it WITHOUT advancing the anchor, so the next kept
+  // High-rate cap/merge: if this reading arrives sooner than 1/max_rate after
+  // the last *kept* one, drop it WITHOUT advancing the anchor, so the next kept
   // reading fuses the full accumulated increment + accumulated covariance.
-  if (params_.odometry_min_sample_period > 0 && last_wheels_odometry_stamp_.has_value()) {
+  if (params_.odometry_max_insert_rate_hz > 0 && last_wheels_odometry_stamp_.has_value()) {
     const double dt = mrpt::system::timeDifference(*last_wheels_odometry_stamp_, odom.timestamp);
-    if (dt < params_.odometry_min_sample_period) {
+    if (dt < 1.0 / params_.odometry_max_insert_rate_hz) {
       return;
     }
   }
@@ -394,8 +394,8 @@ void Mapper3D::fuse_odometry(
   // model, like the SharedKeyframeMap chaining). Frame-invariant, so no
   // {odom_wheels} frame variable is needed at all.
   if (params_.aggregate_high_rate_into_edges) {
-    const auto kfId =
-      create_or_get_keyframe_by_timestamp_locked(odom.timestamp, params_.sensor_keyframe_min_period);
+    const auto kfId = create_or_get_keyframe_by_timestamp_locked(
+      odom.timestamp, params_.sensor_keyframe_min_period);
 
     if (!wheel_chain_last_kf_.has_value()) {
       wheel_chain_last_kf_ = kfId;
@@ -480,27 +480,110 @@ void Mapper3D::fuse_imu(const mrpt::obs::CObservationIMU & imu)
 {
   auto lck = mrpt::lockHelper(stateMutex_);
 
-  // High-rate decimation: skip readings arriving too soon after the last
-  // processed one (attitude/gravity are absolute, so dropping just lowers the
-  // redundant-factor rate; no increment merging needed).
-  if (params_.imu_min_sample_period > 0 && last_processed_imu_stamp_.has_value()) {
-    const double dt = mrpt::system::timeDifference(*last_processed_imu_stamp_, imu.timestamp);
-    if (dt < params_.imu_min_sample_period) {
+  // Path A: max-rate summarization (preferred for real high-rate IMUs). Buffer
+  // every sample and insert at most imu_max_insert_rate_hz SUMMARIZED
+  // observations/second: averaged accelerometer (less-noisy gravity/leveling),
+  // averaged angular velocity, latest absolute orientation. This bounds BOTH the
+  // factor rate AND the IMU-driven keyframe creation rate (the keyframe-reuse
+  // window becomes 1/rate), without a fixed decimation ratio that would just
+  // throw the in-between information away.
+  if (params_.imu_max_insert_rate_hz > 0) {
+    accumulate_imu_sample_locked(imu);
+
+    const double period = 1.0 / params_.imu_max_insert_rate_hz;
+    if (last_imu_summary_stamp_.has_value()) {
+      const double dt = mrpt::system::timeDifference(*last_imu_summary_stamp_, imu.timestamp);
+      if (dt < period) {
+        return;  // keep accumulating; a summary is inserted once 1/rate elapses
+      }
+    }
+    mrpt::obs::CObservationIMU summarized;
+    if (!build_summarized_imu_locked(summarized)) {
       return;
     }
+    last_imu_summary_stamp_ = summarized.timestamp;
+    apply_imu_observation_locked(summarized, period);
+    notify_optimizer();
+    return;
   }
-  last_processed_imu_stamp_ = imu.timestamp;
 
+  // Path B: no rate cap (imu_max_insert_rate_hz == 0): insert every reading.
   // In aggregation mode, attach to the shared bounded-rate keyframe clock (the
   // same one wheel odometry uses), so IMU does not spawn its own dense
   // keyframes either.
   const double imuKfTolerance = params_.aggregate_high_rate_into_edges
                                   ? params_.sensor_keyframe_min_period
                                   : params_.imu_nearby_keyframe_stamp_tolerance;
+  apply_imu_observation_locked(imu, imuKfTolerance);
+  notify_optimizer();
+}
+
+void Mapper3D::accumulate_imu_sample_locked(const mrpt::obs::CObservationIMU & imu)
+{
+  if (imu.has(mrpt::obs::IMU_X_ACC)) {
+    imu_accum_.acc_sum[0] += imu.get(mrpt::obs::IMU_X_ACC);
+    imu_accum_.acc_sum[1] += imu.get(mrpt::obs::IMU_Y_ACC);
+    imu_accum_.acc_sum[2] += imu.get(mrpt::obs::IMU_Z_ACC);
+    imu_accum_.n_acc++;
+  }
+  if (imu.has(mrpt::obs::IMU_WX)) {
+    imu_accum_.gyro_sum[0] += imu.get(mrpt::obs::IMU_WX);
+    imu_accum_.gyro_sum[1] += imu.get(mrpt::obs::IMU_WY);
+    imu_accum_.gyro_sum[2] += imu.get(mrpt::obs::IMU_WZ);
+    imu_accum_.n_gyro++;
+  }
+  if (imu.has(mrpt::obs::IMU_ORI_QUAT_W)) {
+    // Orientation can't be linearly averaged; keep the latest (window is short
+    // at >= a few Hz). It is the absolute-attitude observation for this summary.
+    imu_accum_.quat_wxyz[0] = imu.get(mrpt::obs::IMU_ORI_QUAT_W);
+    imu_accum_.quat_wxyz[1] = imu.get(mrpt::obs::IMU_ORI_QUAT_X);
+    imu_accum_.quat_wxyz[2] = imu.get(mrpt::obs::IMU_ORI_QUAT_Y);
+    imu_accum_.quat_wxyz[3] = imu.get(mrpt::obs::IMU_ORI_QUAT_Z);
+    imu_accum_.has_quat = true;
+  }
+  imu_accum_.sensor_pose = imu.sensorPose;
+  imu_accum_.last_stamp = imu.timestamp;
+}
+
+bool Mapper3D::build_summarized_imu_locked(mrpt::obs::CObservationIMU & out)
+{
+  if (imu_accum_.empty()) {
+    return false;
+  }
+  out.sensorLabel = "imu_summary";
+  out.timestamp = imu_accum_.last_stamp;
+  out.sensorPose = imu_accum_.sensor_pose;
+  if (imu_accum_.n_acc > 0) {
+    const double inv = 1.0 / static_cast<double>(imu_accum_.n_acc);
+    out.set(mrpt::obs::IMU_X_ACC, imu_accum_.acc_sum[0] * inv);
+    out.set(mrpt::obs::IMU_Y_ACC, imu_accum_.acc_sum[1] * inv);
+    out.set(mrpt::obs::IMU_Z_ACC, imu_accum_.acc_sum[2] * inv);
+  }
+  if (imu_accum_.n_gyro > 0) {
+    const double inv = 1.0 / static_cast<double>(imu_accum_.n_gyro);
+    out.set(mrpt::obs::IMU_WX, imu_accum_.gyro_sum[0] * inv);
+    out.set(mrpt::obs::IMU_WY, imu_accum_.gyro_sum[1] * inv);
+    out.set(mrpt::obs::IMU_WZ, imu_accum_.gyro_sum[2] * inv);
+  }
+  if (imu_accum_.has_quat) {
+    out.set(mrpt::obs::IMU_ORI_QUAT_W, imu_accum_.quat_wxyz[0]);
+    out.set(mrpt::obs::IMU_ORI_QUAT_X, imu_accum_.quat_wxyz[1]);
+    out.set(mrpt::obs::IMU_ORI_QUAT_Y, imu_accum_.quat_wxyz[2]);
+    out.set(mrpt::obs::IMU_ORI_QUAT_Z, imu_accum_.quat_wxyz[3]);
+  }
+  imu_accum_.clear();
+  return true;
+}
+
+void Mapper3D::apply_imu_observation_locked(
+  const mrpt::obs::CObservationIMU & imu, double keyframe_reuse_tolerance)
+{
   const auto this_kf_id =
-    create_or_get_keyframe_by_timestamp_locked(imu.timestamp, imuKfTolerance);
+    create_or_get_keyframe_by_timestamp_locked(imu.timestamp, keyframe_reuse_tolerance);
 
   const auto sensorOnVehicle = mrpt::gtsam_wrappers::toPose3(imu.sensorPose);
+
+  bool addedFactor = false;
 
   // (1) Absolute attitude / azimuth observation (IMU orientation quaternion):
   if (imu.has(mrpt::obs::IMU_ORI_QUAT_W)) {
@@ -523,6 +606,7 @@ void Mapper3D::fuse_imu(const mrpt::obs::CObservationIMU & imu)
         gtsam::noiseModel::Isotropic::Sigma(3, mrpt::DEG2RAD(params_.imu_attitude_sigma_deg));
       state_.gtsam->newFactors.emplace_shared<mola::factors::Pose3RotationFactor>(
         symbol_T_enu_to_map, T(this_kf_id), sensorOnVehicle, measuredRotation, rotationNoise);
+      addedFactor = true;
     }
   }
 
@@ -539,6 +623,7 @@ void Mapper3D::fuse_imu(const mrpt::obs::CObservationIMU & imu)
         3, mrpt::DEG2RAD(params_.imu_normalized_gravity_alignment_sigma));
       state_.gtsam->newFactors.emplace_shared<mola::factors::MeasuredGravityFactor>(
         symbol_T_enu_to_map, T(this_kf_id), sensorOnVehicle, measuredGravityNormalized, accNoise);
+      addedFactor = true;
     }
   }
 
@@ -552,9 +637,15 @@ void Mapper3D::fuse_imu(const mrpt::obs::CObservationIMU & imu)
     auto wNoise =
       gtsam::noiseModel::Isotropic::Sigma(3, mrpt::DEG2RAD(params_.imu_angular_velocity_sigma_deg));
     state_.gtsam->newFactors.addPrior(W(this_kf_id), wBody, wNoise);
+    addedFactor = true;
   }
 
-  notify_optimizer();
+  if (addedFactor) {
+    imu_factors_inserted_++;
+  }
+  MRPT_LOG_THROTTLE_DEBUG_FMT(
+    5.0, "[fuse_imu] kf=%zu attitude/gravity/gyro factors so far=%zu",
+    static_cast<size_t>(this_kf_id), imu_factors_inserted_);
 }
 
 void Mapper3D::fuse_gnss(const mrpt::obs::CObservationGPS & gps)
@@ -580,6 +671,10 @@ void Mapper3D::fuse_gnss(const mrpt::obs::CObservationGPS & gps)
   } else if (params_.estimate_geo_reference) {
     if (!state_.tentative_geo_coord_reference.has_value()) {
       state_.tentative_geo_coord_reference = geoCoords;
+      MRPT_LOG_INFO_FMT(
+        "[fuse_gnss] Set tentative ENU origin from first GNSS fix: lat=%.8f lon=%.8f h=%.2f "
+        "(geo-ref will be estimated live as more fixes arrive).",
+        geoCoords.lat.decimal_value, geoCoords.lon.decimal_value, geoCoords.height);
     }
     refGeoCoords = state_.tentative_geo_coord_reference;
   }
@@ -613,6 +708,12 @@ void Mapper3D::fuse_gnss(const mrpt::obs::CObservationGPS & gps)
 
   state_.gtsam->newFactors.emplace_shared<mola::factors::FactorGnssMapEnu>(
     symbol_T_enu_to_map, T(this_kf_id), sensorOnVehicle, observedEnu, enuNoiseModel);
+  gnss_factors_inserted_++;
+
+  MRPT_LOG_THROTTLE_DEBUG_FMT(
+    2.0, "[fuse_gnss] kf=%zu ENU=(%.2f, %.2f, %.2f) fix_quality=%d factors=%zu",
+    static_cast<size_t>(this_kf_id), ENU_point.x, ENU_point.y, ENU_point.z,
+    static_cast<int>(gga.fields.fix_quality), gnss_factors_inserted_);
 
   notify_optimizer();
 }
@@ -707,7 +808,8 @@ void Mapper3D::optimize_and_refresh()
         continue;
       }
       TmpKf t;
-      t.pose = mrpt::poses::CPose3D(mrpt::gtsam_wrappers::toTPose3D(gd.estimate.at<gtsam::Pose3>(T(id))));
+      t.pose =
+        mrpt::poses::CPose3D(mrpt::gtsam_wrappers::toTPose3D(gd.estimate.at<gtsam::Pose3>(T(id))));
       const auto linV = gd.estimate.at<gtsam::Vector3>(V(id));
       const auto angV = gd.estimate.at<gtsam::Vector3>(W(id));
       t.twist = {linV.x(), linV.y(), linV.z(), angV.x(), angV.y(), angV.z()};
@@ -753,9 +855,26 @@ void Mapper3D::optimize_and_refresh()
       if (tentativeGeo.has_value() && !fixedGeoref && haveKfs && latestPoseCov.has_value()) {
         const auto [enuPosSigma, enuOriSigmaDeg] = max_pos_and_orientation_sigma(pdf.cov);
         const auto [kfPosSigma, kfOriSigmaDeg] = max_pos_and_orientation_sigma(*latestPoseCov);
+        // Geo-ref convergence gates on the geo-reference TRANSFORM quality
+        // (T_enu_to_map position + orientation) plus the keyframe ORIENTATION
+        // (leveling/attitude well-determined). It deliberately does NOT gate on
+        // the latest keyframe's ABSOLUTE position sigma: unlike the smoother's
+        // sliding window, the central map pins a far-away gauge anchor, so that
+        // absolute sigma legitimately grows with distance from the anchor (it is
+        // GNSS-floored, a few meters) -- it measures the expected drift of the
+        // vehicle/odometry frame wrt ENU, not whether the geo-reference itself is
+        // trustworthy. Gating on it would prevent convergence from ever latching
+        // on long trajectories.
         const bool converged =
-          std::max(enuPosSigma, kfPosSigma) <= params_.convergence_max_position_sigma &&
+          enuPosSigma <= params_.convergence_max_position_sigma &&
           std::max(enuOriSigmaDeg, kfOriSigmaDeg) <= params_.convergence_max_orientation_sigma_deg;
+        MRPT_LOG_THROTTLE_DEBUG_FMT(
+          2.0,
+          "[geo-ref] convergence check: enu(pos=%.3f m, ori=%.3f deg) "
+          "kf(pos=%.3f m [drift, not gated], ori=%.3f deg) thresh(pos=%.2f m, ori=%.2f deg) -> %s",
+          enuPosSigma, enuOriSigmaDeg, kfPosSigma, kfOriSigmaDeg,
+          params_.convergence_max_position_sigma, params_.convergence_max_orientation_sigma_deg,
+          converged ? "CONVERGED" : "not yet");
         if (converged) {
           mola::Georeferencing gr;
           gr.geo_coord = *tentativeGeo;
@@ -796,6 +915,17 @@ void Mapper3D::optimize_and_refresh()
       state_.last_estimated_frames[REFERENCE_FRAME_ID] = *tmpEnu;
     }
     if (tmpGeoRef.has_value()) {
+      if (!georef_converged_announced_) {
+        georef_converged_announced_ = true;
+        const auto [posSigma, oriSigmaDeg] =
+          max_pos_and_orientation_sigma(tmpGeoRef->T_enu_to_map.cov);
+        const auto & m = tmpGeoRef->T_enu_to_map.mean;
+        MRPT_LOG_INFO_FMT(
+          "[geo-ref] CONVERGED: T_enu_to_map=(%.2f, %.2f, %.2f, yaw=%.2f deg) "
+          "sigma_pos=%.3f m sigma_ori=%.3f deg after %zu GNSS factors.",
+          m.x(), m.y(), m.z(), mrpt::RAD2DEG(m.yaw()), posSigma, oriSigmaDeg,
+          gnss_factors_inserted_);
+      }
       state_.geo_reference = tmpGeoRef;
     }
   }

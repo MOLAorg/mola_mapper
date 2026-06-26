@@ -21,13 +21,16 @@
  */
 #pragma once
 
+#include <mola_kernel/GuiWidgetDescription.h>
 #include <mola_kernel/interfaces/DiagnosticsProvider.h>
 #include <mola_kernel/interfaces/LocalizationSourceBase.h>
 #include <mola_kernel/interfaces/MapSourceBase.h>
 #include <mola_kernel/interfaces/NavStateFilter.h>
 #include <mola_kernel/interfaces/SharedKeyframeMap.h>
+#include <mola_kernel/interfaces/VizInterface.h>
 #include <mola_mapper_3d/Parameters.h>
 #include <mola_mapper_3d/WorldModelState.h>
+#include <mrpt/containers/yaml.h>
 #include <mrpt/obs/CObservationGPS.h>
 #include <mrpt/obs/CObservationIMU.h>
 #include <mrpt/obs/CObservationOdometry.h>
@@ -207,6 +210,45 @@ private:
   std::regex imu_labels_re_;
   std::regex odometry_labels_re_;
   std::regex gnss_labels_re_;
+
+  // --- Visualization (optional MolaViz / MolaVizImGui via VizInterface) ---
+  // Discovered in initialize() via findService<VizInterface>(); null if no
+  // visualizer module is loaded (e.g. headless runs / unit tests).
+  mola::VizInterface::Ptr visualizer_;
+  // Raw "visualization" YAML sub-section (sibling of "params"); keys read
+  // on demand, mirroring mola_mapper_2d / mola_lidar_odometry.
+  mrpt::containers::yaml viz_params_ = mrpt::containers::yaml::Map();
+  std::mutex state_gui_mtx_;
+  bool gui_created_ = false;
+  std::optional<mrpt::Clock::time_point> last_viz_update_wallclock_;
+
+  // Runtime view toggles, driven from the GUI "Control" tab. Written from the
+  // GUI thread, read from the spinOnce/viz thread (atomic to avoid a data race;
+  // a stale-by-one-frame read only delays a checkbox by one update).
+  std::atomic_bool viz_show_keyframes_{true};
+  std::atomic_bool viz_show_edges_{true};
+  std::atomic_bool viz_show_odom_frames_{true};
+  std::atomic_bool viz_camera_follows_vehicle_{false};
+
+  // LiveStrings shared between the module (writer) and the GUI (reader).
+  struct GuiData
+  {
+    mola::gui::LiveString::Ptr lbKeyframes;
+    mola::gui::LiveString::Ptr lbEdges;
+    mola::gui::LiveString::Ptr lbOdomFrames;
+    mola::gui::LiveString::Ptr lbGeoref;
+    mola::gui::LiveString::Ptr lbConverged;
+  };
+  GuiData gui_;
+
+  /// Renders the keyframe tree, graph edges and per-source movable {odom_i}
+  /// frames into the visualizer, and creates/updates the GUI sub-window.
+  /// Throttled to visualization.update_rate_hz. No-op when no visualizer is
+  /// attached. (Mapper3D_GUI.cpp)
+  void updateVisualization();
+
+  /// Builds the backend-agnostic GUI sub-window (status + control tabs) once.
+  void internalBuildGUI();
 
   // --- helpers implemented across the Mapper3D_*.cpp translation units ---
 

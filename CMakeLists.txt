@@ -38,6 +38,7 @@ find_package(mola_imu_preintegration REQUIRED)
 set(LIB_SOURCES
   module/src/Mapper3D.cpp
   module/src/Mapper3D_Fusion.cpp
+  module/src/Mapper3D_GUI.cpp
   module/src/Mapper3D_KeyframeIngestion.cpp
   module/src/Mapper3D_SensorCallbacks.cpp
   module/src/WorldModelState.cpp

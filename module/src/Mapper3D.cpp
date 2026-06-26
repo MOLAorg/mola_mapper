@@ -70,6 +70,22 @@ void Mapper3D::initialize(const mrpt::containers::yaml & cfg)
     reset_sensor_anchors_locked();
   }
 
+  // Optional visualization config + attach to a visualizer module (MolaViz /
+  // MolaVizImGui). Both implement mola::VizInterface; absence is fine (headless
+  // runs, unit tests).
+  if (cfg.has("visualization")) {
+    viz_params_ = cfg["visualization"];
+  }
+  {
+    auto viz = findService<VizInterface>();
+    if (viz.size() == 1) {
+      visualizer_ = std::dynamic_pointer_cast<VizInterface>(viz[0]);
+      ASSERT_(visualizer_);
+      gui_created_ = false;
+      MRPT_LOG_INFO("Attached to a VizInterface module");
+    }
+  }
+
   // Start the background optimizer thread (if enabled) AFTER state is ready.
   if (params_.enable_optimizer_thread) {
     optimizer_should_exit_.store(false);
@@ -156,6 +172,8 @@ void Mapper3D::spinOnce()
   // optimizer thread (when enabled), so this stays cheap: read the latest
   // committed anchor + extrapolate.
   publish_high_rate_pose();
+  // Refresh the 3D scene + GUI (throttled, no-op without a visualizer).
+  updateVisualization();
   // Future phases: background loop-closure trigger, keyframe externalization.
   MRPT_END
 }

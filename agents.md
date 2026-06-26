@@ -37,6 +37,7 @@ module/src/
   Mapper3D.cpp                   Lifecycle: initialize/spinOnce/reset/diagnostics + IMPLEMENTS_MRPT_OBJECT
   Mapper3D_Fusion.cpp            Keyframe management + factor-graph fusion + estimated_navstate
   Mapper3D_KeyframeIngestion.cpp SharedKeyframeMap sink: requestInsertKeyframe() (anchor-once + consecutive chain)
+  Mapper3D_GUI.cpp               Optional MolaViz/MolaVizImGui viz: KF tree + graph edges + per-source movable {odom_i} frames + GuiWidgetDescription control panel
   Mapper3D_SensorCallbacks.cpp   onNewObservation dispatch -> fuse_*()
   WorldModelState.cpp            GtsamData pimpl (ISAM2/Values/NonlinearFactorGraph) + map helpers
   Parameters.cpp                 loadFrom(yaml)

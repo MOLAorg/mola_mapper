@@ -104,6 +104,7 @@ void WorldModelState::clear()
   keyframe_observations.clear();
   last_estimated_states.clear();
   last_estimated_frames.clear();
+  last_raw_pose_by_source.clear();
   kf_connectivity.clearEdges();
   known_odom_frames.clear();
   next_odom_frame_id = 1;

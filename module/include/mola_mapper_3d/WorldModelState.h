@@ -117,6 +117,20 @@ public:
   /// (and T_enu_to_map under REFERENCE_FRAME_ID=0 when geo-referencing).
   std::map<OdometryFrameID, mrpt::poses::CPose3DPDFGaussian> last_estimated_frames;
 
+  /// The last raw pose received from each odometry source, expressed in that
+  /// source's OWN frame {odom_i} (NOT in {map}), together with its timestamp.
+  /// This is the anchor `estimated_navstate(t, {odom_i})` extrapolates from, so
+  /// the short-term prediction stays continuous in the front end's own frame
+  /// and immune to {map} corrections (geo-ref / loop closure / optimizer jitter)
+  /// that would otherwise leak in if the pose were reconstructed globally as
+  /// X(kf) (-) T_map_to_odom_i over the non-windowed central map.
+  struct RawSourcePose
+  {
+    mrpt::Clock::time_point stamp;
+    mrpt::poses::CPose3DPDFGaussian pose;  //!< in {odom_i}
+  };
+  std::map<OdometryFrameID, RawSourcePose> last_raw_pose_by_source;
+
   /// Topological connectivity for radius queries and loop-closure gating.
   KeyFrameConnectivity kf_connectivity;
 

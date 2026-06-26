@@ -115,10 +115,13 @@ void test_threaded_query_converges()
   ASSERT_NEAR_(pose_err(ret->pose.mean, expected), 0.0, 0.1);
 
   // Constant-velocity extrapolation past the last keyframe must also work from
-  // the cached anchor (no fresh solve on the query path):
-  const auto extra = nav.estimated_navstate(mrpt::Clock::fromDouble(lastT + 0.2), "odom");
-  ASSERT_(extra.has_value());
+  // the cached anchor (no fresh solve on the query path). For an {odom}-frame
+  // query the absolute pose is served immediately from the source's own last
+  // raw pose, but the velocity used to extrapolate comes from the background
+  // solve, so poll until the body-twist estimate has converged:
   const auto expectedExtra = mrpt::poses::CPose3D::FromXYZYawPitchRoll(lastT + 0.2, 0, 0, 0, 0, 0);
+  const auto extra = poll_until_converged(nav, lastT + 0.2, lastT + 0.2, 0.1, 5.0);
+  ASSERT_(extra.has_value());
   ASSERT_NEAR_(pose_err(extra->pose.mean, expectedExtra), 0.0, 0.15);
 }
 

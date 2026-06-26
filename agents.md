@@ -115,6 +115,29 @@ test/                            Unit tests (plain main() + MRPT ASSERT_ macros,
 - Frame model mirrors `mola_state_estimation_smoother`: one `{odom_i}` per
   source, plus `{map}` and `{enu}`; the graph estimates `T_map_to_odom_i` and
   `T_enu_to_map`. Reuse `mola_gtsam_factors` for kinematic/IMU/GNSS factors.
+- **`estimated_navstate(t, {odom_i})` is frame-local, NOT reconstructed through
+  `{map}`** (`Mapper3D_Fusion.cpp`). A non-reference-frame prediction anchors on
+  the source's OWN last raw pose in `{odom_i}` (stored per source in
+  `WorldModelState::last_raw_pose_by_source` by `fuse_pose_locked()`) and
+  extrapolates it forward by the body-twist increment via `body_twist_delta()`
+  (which honors `kinematic_model`: full SE(3) `exp` for ConstantVelocity, the
+  planar arc mirroring `FactorTricycleKinematic` for Tricycle). It does NOT
+  compute `X(kf) (-) T_map_to_odom_i`. Why: over the NON-windowed central map a
+  single rigid `T_map_to_odom_i` cannot represent the non-rigid {map}
+  deformation that geo-ref/IMU/loop-closure apply, and the background optimizer
+  re-jitters both `X(kf)` and `T_map_to_odom_i` every solve -- so the global
+  reconstruction leaks meter/degree jumps into the short-term prediction. On
+  MulRan DCC01 that wrecked LIO's ICP initial guess right after geo-ref
+  convergence (ICP goodness collapsed 89%->0% permanently, 1215 zero-goodness
+  scans); the frame-local anchor fixed it (0 zero-goodness scans, ICP holds
+  ~85%). The smoother uses the same `X(kf) (-) T_map_to_odom` code but its short
+  fixed-lag window keeps `{map}` ~ `{odom_i}` locally, so the leak stays
+  negligible there; this central-map (non-windowed) variant is what makes it
+  catastrophic. The frame-local prediction covariance is also built locally
+  (raw-anchor cov + constant-accel growth over dt), NOT from the `{map}`-frame
+  keyframe covariance, which grows unboundedly with gauge distance and would
+  make front ends reject the motion model. Falls back to the global conversion
+  only before this source's first `fuse_pose()` lands (when `{map}=={odom_i}`).
 - Closest existing templates to study: `mola_mapper_2d` (structure + 2D
   pose-graph SLAM) and `mola_state_estimation_smoother` (multi-frame fusion,
   factor builders, FastPredictor).
@@ -264,6 +287,21 @@ runs fast by default. Findings:
   shared, persistent world model and must survive one front end relocalizing).
   Verified on DCC01: tentative origin + CONVERGED now appear exactly once. See
   the YAML's own header comment and the `MULRAN_BASE_DIR`/`MULRAN_SEQ` env vars.
+- **LIO's ICP no longer collapses to 0% after geo-ref convergence** (fixed
+  2026-06-26): the short-term prediction `estimated_navstate(t, {odom})` LIO
+  queries each scan used to be reconstructed globally as
+  `X(kf) (-) T_map_to_odom`. The instant GNSS+IMU geo-ref converged and began
+  pulling `{map}` (non-rigidly) away from LIO's `{odom}`, that reconstruction
+  injected the accumulated/per-solve map correction into the odom-frame ICP
+  initial guess -- meter/degree jumps between consecutive 30 ms scans -- so ICP
+  diverged and stayed at 0% goodness for the rest of the run (DCC01: collapse
+  ~3 s after CONVERGED, 1215 zero-goodness scans). Now the odom-frame prediction
+  is frame-local (anchored on LIO's own last reported pose, twist-extrapolated;
+  see the design note above). Re-validated on DCC01 (time-warp 10, 247k log
+  lines): **0** zero-goodness scans, ICP goodness holds ~85% across the whole
+  post-convergence trajectory, `Est.twist` populated with healthy `cov_inv`
+  (motion model accepted, not discarded), 0 exceptions, geo-ref still converges
+  identically (CONVERGED at the same point).
 
 BotanicGarden launcher (`lidar_odometry_mapper3d_from_botanicgarden.yaml`),
 RUN for real end to end:

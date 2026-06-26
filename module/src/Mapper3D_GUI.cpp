@@ -28,6 +28,8 @@
 #include <mrpt/opengl/stock_objects.h>
 #include <mrpt/system/datetime.h>
 
+#include <algorithm>
+#include <cmath>
 #include <set>
 #include <utility>
 
@@ -66,6 +68,7 @@ void Mapper3D::updateVisualization()
   std::vector<std::pair<std::string, mrpt::poses::CPose3D>> odomFrames;
   std::optional<mrpt::poses::CPose3D> latestVehiclePose;
   bool hasGeoref = false;
+  bool estimatingGeoref = false;
   std::size_t gnssFactors = 0;
   std::size_t imuFactors = 0;
   std::optional<mrpt::topography::TGeodeticCoords> tentativeGeo;
@@ -118,6 +121,7 @@ void Mapper3D::updateVisualization()
     }
 
     hasGeoref = state_.geo_reference.has_value();
+    estimatingGeoref = params_.estimate_geo_reference || params_.fixed_geo_reference.has_value();
     gnssFactors = gnss_factors_inserted_;
     imuFactors = imu_factors_inserted_;
     tentativeGeo = state_.tentative_geo_coord_reference;
@@ -191,6 +195,24 @@ void Mapper3D::updateVisualization()
       glText->setPose(pose);
       glMarkers->insert(glText);
     }
+
+    // The {enu} geo-reference frame (id 0 = T_enu_to_map). It is skipped in the
+    // odomFrames loop above (it is not an odometry source), but the user still
+    // wants to SEE where ENU sits relative to {map}. last_estimated_frames[0]
+    // stores T_enu_to_map (pose of {map} in {enu}), so the ENU origin in {map}
+    // is its inverse. Drawn only while geo-referencing (otherwise it is just the
+    // weak-prior identity). A larger, distinct-color corner + "enu" label.
+    if (estimatingGeoref && enuToMap.has_value() && viz_show_odom_frames_.load()) {
+      const mrpt::poses::CPose3D enuInMap = mrpt::poses::CPose3D() - enuToMap->mean;
+      auto glEnu = mrpt::opengl::stock_objects::CornerXYZ(2.0f);
+      glEnu->setPose(enuInMap);
+      glMarkers->insert(glEnu);
+
+      auto glEnuText = mrpt::opengl::CText::Create("enu");
+      glEnuText->setColor_u8(0x00, 0xff, 0xff, 0xff);  // cyan, distinct from odom
+      glEnuText->setPose(enuInMap);
+      glMarkers->insert(glEnuText);
+    }
     visualizer_->update_3d_object("mapper3d/odom_frames", glMarkers);
   }
 
@@ -242,15 +264,26 @@ void Mapper3D::updateVisualization()
       gui_.lbEnu->set("T_enu_map: (not estimated)");
     }
 
-    // Per-source odom-frame drift vs the map: |translation| of T_map_to_odom_i,
-    // i.e. how far each front-end odometry frame has been pulled to correct its
-    // own drift (grows as GNSS/IMU re-place it against the geo-referenced map).
+    // Per-source odom-frame correction vs {map}: T_map_to_odom_i as a
+    // translation magnitude AND a rotation magnitude. This is how far each front
+    // end's {odom_i} frame has been pulled to absorb its own drift; for LIO the
+    // characteristic drift is z/tilt, so the ROTATION term is the informative
+    // one (the translation often stays near zero because the tight
+    // consecutive-keyframe edges keep {map} and {odom} aligned in position).
+    // Note: a SharedKeyframeMap sink frame (e.g. "odom_kf") is anchored to the
+    // first keyframe only, so it stays ~0 by design; the dense fuse_pose() frame
+    // (e.g. "odom") is the one that tracks ongoing drift.
     std::string driftStr = "Odom drift:";
     if (odomFrames.empty()) {
       driftStr += " (none)";
     }
     for (const auto & [name, pose] : odomFrames) {
-      driftStr += mrpt::format(" %s=%.2fm", name.c_str(), pose.translation().norm());
+      // Rotation magnitude (geodesic angle) of T_map_to_odom_i from its rotation
+      // matrix: angle = acos((trace(R) - 1) / 2).
+      const double cosAngle = std::clamp((pose.getRotationMatrix().trace() - 1.0) * 0.5, -1.0, 1.0);
+      const double angleDeg = mrpt::RAD2DEG(std::acos(cosAngle));
+      driftStr +=
+        mrpt::format(" %s=%.2fm/%.1fdeg", name.c_str(), pose.translation().norm(), angleDeg);
     }
     gui_.lbDrift->set(driftStr);
     gui_.lbImu->set(mrpt::format("IMU factors: %zu", imuFactors));

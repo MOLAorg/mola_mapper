@@ -25,7 +25,9 @@
 #include <mrpt/core/lock_helper.h>
 #include <mrpt/system/datetime.h>
 
+#include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <string>
 
 // arguments: class_name, parent_class, class namespace
@@ -292,8 +294,14 @@ void Mapper3D::getDiagnostics(std::vector<mola::DiagnosticStatusMsg> & status)
     if (itF == state_.last_estimated_frames.end()) {
       continue;
     }
+    // T_map_to_odom_i as translation + rotation magnitude (LIO drift is mostly
+    // z/tilt, so the rotation term is the informative one; see Mapper3D_GUI).
+    const double cosAngle =
+      std::clamp((itF->second.mean.getRotationMatrix().trace() - 1.0) * 0.5, -1.0, 1.0);
     msg.values.push_back(
-      {"drift_" + name, mrpt::format("%.2fm", itF->second.mean.translation().norm())});
+      {"drift_" + name, mrpt::format(
+                          "%.2fm/%.1fdeg", itF->second.mean.translation().norm(),
+                          mrpt::RAD2DEG(std::acos(cosAngle)))});
   }
 
   status.push_back(std::move(msg));

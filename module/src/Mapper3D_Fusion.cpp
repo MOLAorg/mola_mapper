@@ -32,6 +32,7 @@
 #include <mola_gtsam_factors/MeasuredGravityFactor.h>
 #include <mola_gtsam_factors/Pose3RotationFactor.h>
 #include <mola_mapper_3d/Mapper3D.h>
+#include <mrpt/core/format.h>
 #include <mrpt/core/lock_helper.h>
 #include <mrpt/math/CQuaternion.h>
 #include <mrpt/math/gtsam_wrappers.h>
@@ -908,8 +909,21 @@ void Mapper3D::optimize_and_refresh()
         it->second.twist_cov = latestTwistCov;
       }
     }
+    std::string driftTrace;
+    const auto & idToName = state_.known_odom_frames.getInverseMap();
     for (const auto & [fid, pdf] : tmpFrames) {
       state_.last_estimated_frames[fid] = pdf;
+      const auto itName = idToName.find(fid);
+      const std::string nm = (itName != idToName.end()) ? itName->second : std::to_string(fid);
+      const double cosAngle =
+        std::clamp((pdf.mean.getRotationMatrix().trace() - 1.0) * 0.5, -1.0, 1.0);
+      driftTrace += mrpt::format(
+        " %s=%.2fm/%.1fdeg", nm.c_str(), pdf.mean.translation().norm(),
+        mrpt::RAD2DEG(std::acos(cosAngle)));
+    }
+    if (!driftTrace.empty()) {
+      MRPT_LOG_THROTTLE_DEBUG_FMT(
+        5.0, "[frames] T_map_to_odom_i drift (trans/rot):%s", driftTrace.c_str());
     }
     if (tmpEnu.has_value()) {
       state_.last_estimated_frames[REFERENCE_FRAME_ID] = *tmpEnu;

@@ -37,7 +37,7 @@ module/src/
   Mapper3D.cpp                   Lifecycle: initialize/spinOnce/reset/diagnostics + IMPLEMENTS_MRPT_OBJECT
   Mapper3D_Fusion.cpp            Keyframe management + factor-graph fusion + estimated_navstate
   Mapper3D_KeyframeIngestion.cpp SharedKeyframeMap sink: requestInsertKeyframe() (anchor-once + consecutive chain)
-  Mapper3D_GUI.cpp               Optional MolaViz/MolaVizImGui viz: KF tree + graph edges + per-source movable {odom_i} frames + GuiWidgetDescription panel (Status / Geo-ref / View tabs: KF/edge/IMU-factor counts, geo-ref T_enu_to_map + GNSS factors + per-source odom drift vs ENU)
+  Mapper3D_GUI.cpp               Optional MolaViz/MolaVizImGui viz: KF tree + graph edges + per-source movable {odom_i} frames + the {enu} geo-ref frame marker (drawn at inverse(T_enu_to_map) while geo-referencing) + GuiWidgetDescription panel (Status / Geo-ref / View tabs: KF/edge/IMU-factor counts, geo-ref T_enu_to_map + GNSS factors + per-source T_map_to_odom drift as trans/rot). NOTE: odom drift is ~0 on pure-odometry runs (no GNSS => {map} == LIO's {odom}); it grows (e.g. ~19 m / ~5 deg on DCC01) only once GNSS/IMU geo-referencing pulls the map.
   Mapper3D_SensorCallbacks.cpp   onNewObservation dispatch -> fuse_*()
   WorldModelState.cpp            GtsamData pimpl (ISAM2/Values/NonlinearFactorGraph) + map helpers
   Parameters.cpp                 loadFrom(yaml)

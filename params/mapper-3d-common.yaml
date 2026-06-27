@@ -47,6 +47,13 @@ odometry_max_insert_rate_hz: ${MOLA_MAPPER3D_ODOM_MAX_RATE_HZ|5.0}
 aggregate_high_rate_into_edges: ${MOLA_MAPPER3D_AGGREGATE|false}
 sensor_keyframe_min_period: ${MOLA_MAPPER3D_SENSOR_KF_PERIOD|0.5}
 
+# Keyframe-variable creation gating (plan 4.13 Phase A).
+#   auto:           legacy until first requestInsertKeyframe(); then shared_map_only.
+#   shared_map_only: only requestInsertKeyframe() creates KF graph variables.
+#   sensor_clock:   sensor paths create KFs at sensor_clock_min_period_s rate.
+keyframe_creation_source: "${MOLA_MAPPER3D_KF_CREATION|KeyframeCreationSource::Auto}"
+sensor_clock_min_period_s: ${MOLA_MAPPER3D_SENSOR_KF_CLOCK_S|0.5}
+
 sigma_random_walk_acceleration_linear: ${MOLA_SIGMA_RW_LINACC|1.0}
 sigma_random_walk_acceleration_angular: ${MOLA_SIGMA_RW_ANGACC|10.0}
 sigma_integrator_position: 0.10

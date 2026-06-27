@@ -51,6 +51,10 @@ void Parameters::loadFrom(const mrpt::containers::yaml & cfg)
   MCP_LOAD_OPT(cfg, sensor_keyframe_min_period);
   ASSERT_GT_(sensor_keyframe_min_period, .0);
 
+  MCP_LOAD_OPT(cfg, keyframe_creation_source);
+  MCP_LOAD_OPT(cfg, sensor_clock_min_period_s);
+  ASSERT_GT_(sensor_clock_min_period_s, .0);
+
   MCP_LOAD_OPT(cfg, sigma_random_walk_acceleration_linear);
   MCP_LOAD_OPT(cfg, sigma_random_walk_acceleration_angular);
   MCP_LOAD_OPT(cfg, sigma_integrator_position);

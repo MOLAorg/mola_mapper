@@ -38,6 +38,28 @@ enum class KinematicModel : uint8_t
   Tricycle,          //!< Ground vehicle: Ackermann / tricycle constraints.
 };
 
+/** Controls which code paths are allowed to create new keyframe variables in
+ *  the GTSAM graph (plan 4.13 Phase A).
+ *
+ *  - Auto: acts like SharedMapOnly once any requestInsertKeyframe() call is
+ *    received; before that, falls back to legacy creation (all paths create KFs
+ *    at min_time_difference_to_create_new_frame). Suitable for typical
+ *    LIO+mapper3d deployments: the first sparse KF from LIO flips the mode.
+ *  - SharedMapOnly: ONLY requestInsertKeyframe() creates keyframe GTSAM
+ *    variables. Dense fuse_pose(), fuse_imu(), fuse_odometry(), fuse_gnss()
+ *    only record the predictor anchor and snap to the nearest EXISTING keyframe
+ *    for sensor factors. Requires a SharedKeyframeMap producer (LIO/VIO).
+ *  - SensorClock: sensor paths create KFs at a bounded rate governed by
+ *    sensor_clock_min_period_s. For sensor-only runs (wheels + IMU + GNSS
+ *    with NO LIO/VIO front end).
+ */
+enum class KeyframeCreationSource : uint8_t
+{
+  Auto,           //!< Legacy until first requestInsertKeyframe(); then SharedMapOnly.
+  SharedMapOnly,  //!< Only requestInsertKeyframe() creates KF graph variables.
+  SensorClock,    //!< Sensor paths create KFs at sensor_clock_min_period_s rate.
+};
+
 /** All configuration parameters of Mapper3D, loaded from a YAML map node.
  *
  * The navigation-state fusion group mirrors
@@ -122,6 +144,17 @@ public:
   /// existing keyframe reuses it (a common coarse keyframe clock shared by IMU
   /// and wheels), so direct-sensor keyframes are created at most ~1/this rate.
   double sensor_keyframe_min_period = 0.5;  // [s]
+
+  /// How keyframe-variable creation is gated (plan 4.13 Phase A). Default
+  /// 'auto' keeps existing tests passing while automatically switching to
+  /// SharedMapOnly behavior once an LIO/VIO SharedKeyframeMap producer is
+  /// detected (i.e. after the first requestInsertKeyframe() call).
+  KeyframeCreationSource keyframe_creation_source = KeyframeCreationSource::Auto;
+
+  /// Minimum time [s] between keyframes created by the SENSOR CLOCK path
+  /// (SensorClock mode). Governs the coarse KF clock for sensor-only runs
+  /// (wheels + IMU + GNSS without LIO/VIO).
+  double sensor_clock_min_period_s = 0.5;  // [s]
 
   double sigma_random_walk_acceleration_linear = 1.0;   // [m/s^2]
   double sigma_random_walk_acceleration_angular = 1.0;  // [rad/s^2]
@@ -251,4 +284,10 @@ public:
 MRPT_ENUM_TYPE_BEGIN_NAMESPACE(mola::mapper_3d, mola::mapper_3d::KinematicModel)
 MRPT_FILL_ENUM(KinematicModel::ConstantVelocity);
 MRPT_FILL_ENUM(KinematicModel::Tricycle);
+MRPT_ENUM_TYPE_END()
+
+MRPT_ENUM_TYPE_BEGIN_NAMESPACE(mola::mapper_3d, mola::mapper_3d::KeyframeCreationSource)
+MRPT_FILL_ENUM(KeyframeCreationSource::Auto);
+MRPT_FILL_ENUM(KeyframeCreationSource::SharedMapOnly);
+MRPT_FILL_ENUM(KeyframeCreationSource::SensorClock);
 MRPT_ENUM_TYPE_END()

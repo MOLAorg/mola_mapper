@@ -372,7 +372,6 @@ void Mapper3D::fuse_pose_locked(
   const std::string & frame_id)
 {
   const auto frame_id_idx = add_or_get_odom_frame_id_locked(frame_id);
-  const auto this_kf_id = create_or_get_keyframe_by_timestamp_locked(timestamp);
 
   // Numerical sanity: replace zero-variance diagonal entries (common in
   // nav_msgs/Odometry with unfilled covariance) with reasonable defaults, and
@@ -393,25 +392,42 @@ void Mapper3D::fuse_pose_locked(
   mrpt::gtsam_wrappers::to_gtsam_se3_cov6(poseSanitized, pose_out, cov_out);
 
   if (frame_id_idx == REFERENCE_FRAME_ID) {
-    // Reference frame is "map": a direct pose prior on the keyframe.
+    // Reference frame ({map}): a direct prior on the keyframe. Always allowed
+    // even in SharedMapOnly mode (this is a relocalization seed, not a dense
+    // scan; it must land somewhere in the graph to serve as an anchor).
+    const auto this_kf_id = create_or_get_keyframe_by_timestamp_locked(timestamp);
     state_.gtsam->newFactors.emplace_shared<gtsam::PriorFactor<gtsam::Pose3>>(
       T(this_kf_id), pose_out, gtsam::noiseModel::Gaussian::Covariance(cov_out));
     return;
   }
 
-  // Odometry frame: feed into the single consecutive relative-pose-edge chain
-  // (plan 2.8, mirrors mola_sm_loop_closure::add_odometry_edges). Do NOT add an
-  // absolute Between(F(odom_i), T(kf)) tie per pose: a single rigid
+  // Odometry frame: ALWAYS record the predictor anchor so estimated_navstate()
+  // in {odom_i} remains fresh regardless of whether we create a KF.
+  state_.last_raw_pose_by_source[frame_id_idx] =
+    WorldModelState::RawSourcePose{timestamp, poseSanitized};
+
+  if (!sensor_kf_creation_allowed()) {
+    // SharedMapOnly (or Auto after first requestInsertKeyframe()): dense
+    // fuse_pose() only serves the predictor. Keyframe GTSAM variables are
+    // created exclusively by requestInsertKeyframe(). Returning here avoids
+    // spawning a graph variable for every dense LIO scan (~10 Hz), which was
+    // the dominant source of unbounded graph growth on DCC01 (~5400 KFs).
+    return;
+  }
+
+  // Sensor KF creation allowed (Auto before any SharedKeyframeMap producer, or
+  // SensorClock mode). Feed into the single consecutive relative-pose-edge
+  // chain (plan 2.8, mirrors mola_sm_loop_closure::add_odometry_edges). Do
+  // NOT add an absolute Between(F(odom_i), T(kf)) tie per pose: a single rigid
   // T_map_to_odom_i cannot fit the whole central map once odometry drifts, so
   // such ties become globally inconsistent over all keyframes and deform {map}
   // (catastrophic z/tilt). See link_into_odometry_chain_locked().
+  const std::optional<double> kfOverride =
+    (params_.keyframe_creation_source == KeyframeCreationSource::SensorClock)
+      ? std::optional<double>(params_.sensor_clock_min_period_s)
+      : std::nullopt;
+  const auto this_kf_id = create_or_get_keyframe_by_timestamp_locked(timestamp, kfOverride);
   link_into_odometry_chain_locked(this_kf_id, poseSanitized.mean, frame_id_idx);
-
-  // Remember this source's own last raw pose (in {odom_i}), the anchor that
-  // estimated_navstate() extrapolates from to keep the short-term prediction
-  // continuous in the front end's own frame (immune to {map} corrections).
-  state_.last_raw_pose_by_source[frame_id_idx] =
-    WorldModelState::RawSourcePose{timestamp, poseSanitized};
 }
 
 void Mapper3D::link_into_odometry_chain_locked(
@@ -573,6 +589,15 @@ void Mapper3D::fuse_odometry(
   // model, like the SharedKeyframeMap chaining). Frame-invariant, so no
   // {odom_wheels} frame variable is needed at all.
   if (params_.aggregate_high_rate_into_edges) {
+    if (!sensor_kf_creation_allowed()) {
+      // SharedMapOnly mode: do not create sensor KFs; wheel preintegration into
+      // existing KFs belongs to Phase B. Just update the integration anchors so
+      // the odometry increment accumulates correctly for the next transition.
+      last_wheels_odometry_name_ = odomName;
+      last_wheels_odometry_ = odom.odometry;
+      last_wheels_odometry_stamp_ = odom.timestamp;
+      return;
+    }
     const auto kfId = create_or_get_keyframe_by_timestamp_locked(
       odom.timestamp, params_.sensor_keyframe_min_period);
 
@@ -757,8 +782,19 @@ bool Mapper3D::build_summarized_imu_locked(mrpt::obs::CObservationIMU & out)
 void Mapper3D::apply_imu_observation_locked(
   const mrpt::obs::CObservationIMU & imu, double keyframe_reuse_tolerance)
 {
-  const auto this_kf_id =
-    create_or_get_keyframe_by_timestamp_locked(imu.timestamp, keyframe_reuse_tolerance);
+  KeyFrameID this_kf_id = 0;
+  if (sensor_kf_creation_allowed()) {
+    this_kf_id =
+      create_or_get_keyframe_by_timestamp_locked(imu.timestamp, keyframe_reuse_tolerance);
+  } else {
+    // SharedMapOnly mode: snap IMU factors to the nearest existing KF (created
+    // by requestInsertKeyframe()). If no KF exists yet, skip this reading.
+    const auto nearestOpt = find_nearest_kf_locked(imu.timestamp);
+    if (!nearestOpt.has_value()) {
+      return;
+    }
+    this_kf_id = *nearestOpt;
+  }
 
   const auto sensorOnVehicle = mrpt::gtsam_wrappers::toPose3(imu.sensorPose);
 
@@ -870,8 +906,21 @@ void Mapper3D::fuse_gnss(const mrpt::obs::CObservationGPS & gps)
   mrpt::math::TPoint3D ENU_point;
   mrpt::topography::geodeticToENU_WGS84(geoCoords, ENU_point, *refGeoCoords);
 
-  const auto this_kf_id = create_or_get_keyframe_by_timestamp_locked(
-    gps.timestamp, params_.gnss_nearby_keyframe_stamp_tolerance);
+  KeyFrameID this_kf_id = 0;
+  if (sensor_kf_creation_allowed()) {
+    this_kf_id = create_or_get_keyframe_by_timestamp_locked(
+      gps.timestamp, params_.gnss_nearby_keyframe_stamp_tolerance);
+  } else {
+    // SharedMapOnly mode: snap GNSS factor to nearest existing KF. If none
+    // exists yet, skip (no point attaching a GNSS factor to thin air).
+    const auto nearestOpt = find_nearest_kf_locked(gps.timestamp);
+    if (!nearestOpt.has_value()) {
+      MRPT_LOG_THROTTLE_DEBUG(
+        2.0, "[fuse_gnss] No existing keyframe to attach GNSS factor to; skipping.");
+      return;
+    }
+    this_kf_id = *nearestOpt;
+  }
 
   const auto sensorOnVehicle = mrpt::gtsam_wrappers::toPoint3(gps.sensorPose.translation());
   const auto observedEnu = mrpt::gtsam_wrappers::toPoint3(ENU_point);
@@ -1409,6 +1458,28 @@ std::optional<KeyFrameID> Mapper3D::pick_closest(
   const double dtBefore = std::abs(mrpt::system::timeDifference(stamp, before->first));
   const double dtAfter = std::abs(mrpt::system::timeDifference(stamp, after->first));
   return (dtBefore < dtAfter) ? before->second : after->second;
+}
+
+std::optional<KeyFrameID> Mapper3D::find_nearest_kf_locked(
+  const mrpt::Clock::time_point & t) const
+{
+  return pick_closest(find_before_after(t, true), t);
+}
+
+bool Mapper3D::sensor_kf_creation_allowed() const
+{
+  switch (params_.keyframe_creation_source) {
+    case KeyframeCreationSource::SharedMapOnly:
+      return false;
+    case KeyframeCreationSource::SensorClock:
+      return true;
+    case KeyframeCreationSource::Auto:
+    default:
+      // Before any requestInsertKeyframe() arrives: legacy creation behavior.
+      // After: behave like SharedMapOnly so the sparse LIO/VIO backbone governs
+      // graph growth instead of every dense scan spawning a variable.
+      return !shared_kf_producer_active_;
+  }
 }
 
 }  // namespace mola::mapper_3d

@@ -65,6 +65,13 @@ KeyFrameID Mapper3D::request_insert_keyframe_locked(
 {
   ASSERTMSG_(!req.source_frame_id.empty(), "KeyframeInsertRequest::source_frame_id is empty.");
 
+  // Signal that a SharedKeyframeMap producer is active. In Auto mode this
+  // flips the behavior of sensor paths (fuse_pose/fuse_imu/fuse_odometry/
+  // fuse_gnss) from legacy creation to SharedMapOnly: the sparse KF backbone
+  // produced here becomes the sole creator of GTSAM keyframe variables, while
+  // dense sensor data (e.g. LIO fuse_pose at ~10 Hz) only updates predictors.
+  shared_kf_producer_active_ = true;
+
   const auto frameIdx = add_or_get_odom_frame_id_locked(req.source_frame_id);
   const auto kfId = create_or_get_keyframe_by_timestamp_locked(req.timestamp);
 

@@ -177,6 +177,12 @@ private:
   // Throttle anchor for the high-rate publisher (wall-clock).
   std::optional<mrpt::Clock::time_point> last_publish_wallclock_;
 
+  // --- Keyframe-creation gating (plan 4.13 Phase A) ---
+  // Set to true the first time requestInsertKeyframe() is called. In Auto mode
+  // this flips the behavior from legacy (create from all sensor paths) to
+  // SharedMapOnly (only requestInsertKeyframe() creates KF variables).
+  bool shared_kf_producer_active_ = false;
+
   // Wheel-odometry integration anchor (last absolute reading per single source).
   std::optional<mrpt::poses::CPose2D> last_wheels_odometry_;
   std::optional<std::string> last_wheels_odometry_name_;
@@ -407,6 +413,16 @@ private:
   [[nodiscard]] std::optional<KeyFrameID> pick_closest(
     const pair_nearby_frame_iterators_t & closestFrames,
     const mrpt::Clock::time_point & stamp) const;
+
+  /// Returns the nearest existing keyframe to `t` (no tolerance check).
+  /// Returns nullopt when no keyframes exist yet.
+  [[nodiscard]] std::optional<KeyFrameID> find_nearest_kf_locked(
+    const mrpt::Clock::time_point & t) const;
+
+  /// True when sensor paths (fuse_pose, fuse_imu, fuse_odometry, fuse_gnss)
+  /// are allowed to create new keyframe GTSAM variables. Controlled by
+  /// keyframe_creation_source and, in Auto mode, by shared_kf_producer_active_.
+  [[nodiscard]] bool sensor_kf_creation_allowed() const;
 };
 
 }  // namespace mola::mapper_3d

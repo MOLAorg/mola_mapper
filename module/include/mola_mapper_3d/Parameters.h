@@ -187,6 +187,20 @@ public:
   double keyframe_ingestion_sigma_lin = 0.02;     // [m]
   double keyframe_ingestion_sigma_ang_deg = 0.5;  // [deg]
 
+  /// Consecutive-keyframe odometry-edge noise is derived from the PROPAGATED
+  /// relative-pose covariance of the two source pose PDFs (cov_to (-) cov_from),
+  /// mirroring mola_sm_loop_closure::add_odometry_edges. The per-DOF sigma is
+  /// sqrt(diag) * odometry_edge_uncertainty_multiplier, with a small additive
+  /// floor below. This makes the edge anisotropic: tight in the well-observed
+  /// DOFs (x/y/yaw) and soft in the drift-prone ones (z/roll/pitch) so IMU
+  /// gravity / GNSS can level the map. Falls back to the floor alone when the
+  /// source provides no (or zero) covariance. Defaults match
+  /// mola_sm_loop_closure::OdometryEdgeParams (multiplier 1.0, additive floor
+  /// 1e-3 m / 1e-3 deg).
+  double odometry_edge_uncertainty_multiplier = 1.0;
+  double odometry_edge_min_sigma_xyz = 1e-3;      // [m]   additive floor
+  double odometry_edge_min_sigma_ang_deg = 1e-3;  // [deg] additive floor
+
   /** @} */
 
   /** @name IMU related

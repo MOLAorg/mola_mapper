@@ -427,17 +427,21 @@ void Mapper3D::fuse_pose_locked(
       ? std::optional<double>(params_.sensor_clock_min_period_s)
       : std::nullopt;
   const auto this_kf_id = create_or_get_keyframe_by_timestamp_locked(timestamp, kfOverride);
-  link_into_odometry_chain_locked(this_kf_id, poseSanitized.mean, frame_id_idx);
+  link_into_odometry_chain_locked(this_kf_id, poseSanitized, frame_id_idx);
 }
 
 void Mapper3D::link_into_odometry_chain_locked(
-  KeyFrameID kf, const mrpt::poses::CPose3D & absOdomPose, OdometryFrameID frameIdx)
+  KeyFrameID kf, const mrpt::poses::CPose3DPDFGaussian & absOdomPosePdf, OdometryFrameID frameIdx)
 {
-  // Store the absolute odometry pose that defines this keyframe (first writer
-  // wins, so edge endpoints stay stable once an edge using them is built).
+  const mrpt::poses::CPose3D & absOdomPose = absOdomPosePdf.mean;
+
+  // Store the absolute odometry pose PDF (mean + covariance) that defines this
+  // keyframe (first writer wins, so edge endpoints stay stable once an edge
+  // using them is built). The covariance feeds the anisotropic edge noise in
+  // add_odom_chain_edge_locked().
   const bool firstForThisKf = kf_odom_abs_pose_.find(kf) == kf_odom_abs_pose_.end();
   if (firstForThisKf) {
-    kf_odom_abs_pose_.emplace(kf, absOdomPose);
+    kf_odom_abs_pose_.emplace(kf, absOdomPosePdf);
   }
 
   // Track the latest (newest in time) keyframe this source contributed to, for
@@ -495,7 +499,7 @@ void Mapper3D::link_into_odometry_chain_locked(
     const KeyFrameID prev = neighbors.first->second;
     const auto itPrevOdom = kf_odom_abs_pose_.find(prev);
     if (itPrevOdom != kf_odom_abs_pose_.end()) {
-      const mrpt::poses::CPose3D rel = absOdomPose - itPrevOdom->second;
+      const mrpt::poses::CPose3D rel = absOdomPose - itPrevOdom->second.mean;
       std::optional<gtsam::Pose3> prevMapPose;
       if (state_.gtsam->newValues.exists(T(prev))) {
         prevMapPose = state_.gtsam->newValues.at<gtsam::Pose3>(T(prev));
@@ -542,16 +546,33 @@ void Mapper3D::add_odom_chain_edge_locked(KeyFrameID a, KeyFrameID b)
     return;  // already linked
   }
 
-  const mrpt::poses::CPose3D relativeMotion =
+  // Relative-pose PDF between the two keyframes: this propagates the source
+  // covariances (cov_to (-) cov_from), giving an ANISOTROPIC relative-motion
+  // uncertainty. Faithful port of mola_sm_loop_closure::add_odometry_edges:
+  // per-DOF sigma = sqrt(diag) * uncertainty_multiplier + additive floor, with
+  // NO per-DOF assumptions. Leaving the drift-prone DOFs (z, roll, pitch) as
+  // soft as the data says lets the absolute IMU-gravity / GNSS factors level the
+  // map, instead of a hardcoded isotropic sigma pinning them.
+  const mrpt::poses::CPose3DPDFGaussian relPdf =
     kf_odom_abs_pose_.at(to) - kf_odom_abs_pose_.at(from);
 
-  const double linSigma = params_.keyframe_ingestion_sigma_lin;
-  const double angSigma = mrpt::DEG2RAD(params_.keyframe_ingestion_sigma_ang_deg);
-  const auto noise = gtsam::noiseModel::Diagonal::Sigmas(
-    gtsam::Vector6{angSigma, angSigma, angSigma, linSigma, linSigma, linSigma});
+  // MRPT covariance order: [x, y, z, yaw, pitch, roll].
+  gtsam::Vector6 sigmasXYZYPR =
+    relPdf.cov.asEigen().diagonal().cwiseMax(0.0).array().sqrt().eval();
+  sigmasXYZYPR *= params_.odometry_edge_uncertainty_multiplier;
+  for (int k = 0; k < 3; k++) {
+    sigmasXYZYPR[k] += params_.odometry_edge_min_sigma_xyz;
+    sigmasXYZYPR[3 + k] += mrpt::DEG2RAD(params_.odometry_edge_min_sigma_ang_deg);
+  }
+
+  // GTSAM Pose3 tangent-space order: (Rx=roll, Ry=pitch, Rz=yaw, tx, ty, tz).
+  gtsam::Vector6 sigmas;
+  sigmas << sigmasXYZYPR[5], sigmasXYZYPR[4], sigmasXYZYPR[3], sigmasXYZYPR[0], sigmasXYZYPR[1],
+    sigmasXYZYPR[2];
+  const auto noise = gtsam::noiseModel::Diagonal::Sigmas(sigmas);
 
   state_.gtsam->newFactors.emplace_shared<gtsam::BetweenFactor<gtsam::Pose3>>(
-    T(from), T(to), mrpt::gtsam_wrappers::toPose3(relativeMotion), noise);
+    T(from), T(to), mrpt::gtsam_wrappers::toPose3(relPdf.mean), noise);
   state_.add_kf_connectivity(from, to);
 }
 
@@ -867,6 +888,34 @@ void Mapper3D::fuse_gnss(const mrpt::obs::CObservationGPS & gps)
 {
   auto lck = mrpt::lockHelper(stateMutex_);
 
+  // Diagnostic: dump EVERY raw GNSS reading (and why it is accepted/rejected),
+  // un-throttled, when MOLA_MAPPER3D_TRACE_GPS is set. Lets us inspect the data
+  // quality (height constancy + per-fix ENU covariance) end to end.
+  static const bool traceGps = (::getenv("MOLA_MAPPER3D_TRACE_GPS") != nullptr);
+  gnss_readings_seen_++;
+  if (traceGps) {
+    std::string lla = "(no GGA)";
+    int fixq = -1;
+    if (gps.has_GGA_datum()) {
+      const auto & g = gps.getMsgByClass<mrpt::obs::gnss::Message_NMEA_GGA>();
+      const auto c = g.getAsStruct<mrpt::topography::TGeodeticCoords>();
+      fixq = static_cast<int>(g.fields.fix_quality);
+      lla = mrpt::format(
+        "lat=%.8f lon=%.8f h=%.3f fix=%d", c.lat.decimal_value, c.lon.decimal_value, c.height,
+        fixq);
+    }
+    std::string cov = "(no ENU cov)";
+    if (gps.covariance_enu.has_value()) {
+      const auto & C = *gps.covariance_enu;
+      cov = mrpt::format(
+        "sigma_enu=(%.2f, %.2f, %.2f) m", std::sqrt(C(0, 0)), std::sqrt(C(1, 1)),
+        std::sqrt(C(2, 2)));
+    }
+    MRPT_LOG_INFO_FMT(
+      "[GPS-TRACE] #%zu t=%.3f %s %s", static_cast<size_t>(gnss_readings_seen_),
+      mrpt::Clock::toDouble(gps.timestamp), lla.c_str(), cov.c_str());
+  }
+
   if (!gps.has_GGA_datum()) {
     MRPT_LOG_DEBUG("[fuse_gnss]: Ignoring reading without GGA data.");
     return;
@@ -938,6 +987,15 @@ void Mapper3D::fuse_gnss(const mrpt::obs::CObservationGPS & gps)
     symbol_T_enu_to_map, T(this_kf_id), sensorOnVehicle, observedEnu, enuNoiseModel);
   gnss_factors_inserted_++;
 
+  if (traceGps) {
+    MRPT_LOG_INFO_FMT(
+      "[GPS-TRACE] #%zu ACCEPTED -> kf=%zu ENU=(%.2f, %.2f, %.2f) sigma_enu=(%.2f, %.2f, %.2f) "
+      "factors=%zu",
+      static_cast<size_t>(gnss_readings_seen_), static_cast<size_t>(this_kf_id), ENU_point.x,
+      ENU_point.y, ENU_point.z, std::sqrt((*gps.covariance_enu)(0, 0)),
+      std::sqrt((*gps.covariance_enu)(1, 1)), std::sqrt((*gps.covariance_enu)(2, 2)),
+      gnss_factors_inserted_);
+  }
   MRPT_LOG_THROTTLE_DEBUG_FMT(
     2.0, "[fuse_gnss] kf=%zu ENU=(%.2f, %.2f, %.2f) fix_quality=%d factors=%zu",
     static_cast<size_t>(this_kf_id), ENU_point.x, ENU_point.y, ENU_point.z,
@@ -1000,7 +1058,7 @@ void Mapper3D::optimize_and_refresh()
       if (itLatest != latest_kf_by_odom_frame_.end()) {
         const auto itOdom = kf_odom_abs_pose_.find(itLatest->second);
         if (itOdom != kf_odom_abs_pose_.end()) {
-          frameLatestOdom.emplace(fid, std::make_pair(itLatest->second, itOdom->second));
+          frameLatestOdom.emplace(fid, std::make_pair(itLatest->second, itOdom->second.mean));
         }
       }
     }
@@ -1287,9 +1345,22 @@ std::optional<NavState> Mapper3D::estimated_navstate(
     }
   }
 
-  if (!closestFrameIdx.has_value() || *closestFrameDt > params_.max_time_to_use_velocity_model) {
+  if (!closestFrameIdx.has_value()) {
     return {};
   }
+  // NOTE: the "closest keyframe too far in time" check is NOT applied globally
+  // here. The frame-local odometry path (below) anchors on the requested
+  // source's OWN fresh raw pose (last_raw_pose_by_source), not on this
+  // keyframe, so it can still serve a valid short-term prediction when the
+  // sparse central-map keyframes leave a gap > max_time_to_use_velocity_model
+  // (common in SharedMapOnly mode after Phase-A keyframe-creation gating).
+  // Gating the WHOLE function on keyframe proximity returned nullopt on those
+  // gaps, which starved LidarOdometry's motion model ("Not able to use velocity
+  // motion model") and eventually froze it on MulRan. The reference-frame path
+  // and the no-raw-anchor fallback re-apply the proximity check themselves so
+  // their behavior is unchanged.
+  const bool closestWithinVelWindow =
+    (*closestFrameDt <= params_.max_time_to_use_velocity_model);
 
   // 3) Recover the closest state (in the reference/map frame).
   NavState ret = get_latest_state_and_covariance(*closestFrameIdx);
@@ -1308,6 +1379,11 @@ std::optional<NavState> Mapper3D::estimated_navstate(
 
   // 4) Produce the pose in the requested frame.
   if (frame_id == params_.reference_frame_name) {
+    // The reference-frame path extrapolates the closest keyframe's {map} pose,
+    // so it genuinely needs a keyframe within the velocity-model time window.
+    if (!closestWithinVelWindow) {
+      return {};
+    }
     // Reference ({map}) frame.
     //
     // Phase C (high_rate_use_latest_sensors): scan last_raw_pose_by_source for
@@ -1394,6 +1470,11 @@ std::optional<NavState> Mapper3D::estimated_navstate(
     // map (the regime before the first fuse_pose() for this source lands).
     const auto itFrame = state_.last_estimated_frames.find(requestedFrameIdx);
     if (itFrame == state_.last_estimated_frames.end()) {
+      return {};
+    }
+    // This fallback extrapolates the closest keyframe pose, so (as before the
+    // gate relaxation) it requires that keyframe to be within the time window.
+    if (!closestWithinVelWindow) {
       return {};
     }
     ret.pose.mean = ret.pose.mean + body_twist_delta(params_, ret.twist, closestFrameDtSigned);

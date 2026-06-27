@@ -91,6 +91,13 @@ void Parameters::loadFrom(const mrpt::containers::yaml & cfg)
   ASSERT_GT_(keyframe_ingestion_sigma_lin, .0);
   ASSERT_GT_(keyframe_ingestion_sigma_ang_deg, .0);
 
+  MCP_LOAD_OPT(cfg, odometry_edge_uncertainty_multiplier);
+  MCP_LOAD_OPT(cfg, odometry_edge_min_sigma_xyz);
+  MCP_LOAD_OPT(cfg, odometry_edge_min_sigma_ang_deg);
+  ASSERT_GT_(odometry_edge_uncertainty_multiplier, .0);
+  ASSERT_GE_(odometry_edge_min_sigma_xyz, .0);
+  ASSERT_GE_(odometry_edge_min_sigma_ang_deg, .0);
+
   // IMU related
   // -----------------------------------------------------
   MCP_LOAD_OPT(cfg, imu_attitude_sigma_deg);

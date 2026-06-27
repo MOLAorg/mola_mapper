@@ -83,15 +83,16 @@ KeyFrameID Mapper3D::request_insert_keyframe_locked(
     kfObs.insert(obs);
   }
 
-  // Feed this keyframe's absolute odometry pose into the SAME single
-  // consecutive relative-pose-edge chain the dense fuse_pose() path uses, so
-  // both sources contribute to ONE consistent backbone (no per-source chains
-  // that skip each other's keyframes and create conflicting loop edges). See
-  // Mapper3D::link_into_odometry_chain_locked(). The request's own covariance
-  // is deliberately NOT used (front ends can report pathological values, e.g. a
-  // relocalization seed pinned at ~1e-12 m); the chain uses our configured
-  // keyframe_ingestion_sigma_* noise.
-  link_into_odometry_chain_locked(kfId, req.pose_in_source.mean, frameIdx);
+  // Feed this keyframe's absolute odometry pose (mean + covariance) into the
+  // SAME single consecutive relative-pose-edge chain the dense fuse_pose() path
+  // uses, so both sources contribute to ONE consistent backbone (no per-source
+  // chains that skip each other's keyframes and create conflicting loop edges).
+  // See Mapper3D::link_into_odometry_chain_locked(). The request covariance now
+  // shapes the edge noise (anisotropic, per mola_sm_loop_closure), so z/tilt
+  // stay soft for IMU-gravity / GNSS leveling. Pathological front-end values
+  // (e.g. a near-zero relocalization-seed covariance) are bounded by the
+  // odometry_edge_min_sigma_* floor in add_odom_chain_edge_locked().
+  link_into_odometry_chain_locked(kfId, req.pose_in_source, frameIdx);
 
   // Phase B.1: wheel relative-pose edge between the previous sparse KF and
   // this one. Emits Between(T(prev_shared_kf), T(kfId)) from the net wheel

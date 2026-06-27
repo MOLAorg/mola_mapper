@@ -68,8 +68,11 @@ modules:
       time_warp_scale: ${MOLA_TIME_WARP|1.0}
       start_paused: ${MOLA_DATASET_START_PAUSED|false}
       publish_lidar: true
-      publish_gps: true
-      publish_imu: true
+      # Toggle the auxiliary sensors to run ablations (e.g. LIO-only, LIO+IMU,
+      # LIO+GNSS). For a "just IMU" run set MOLA_PUBLISH_GPS=false (and, since
+      # geo-referencing needs GNSS, MOLA_ESTIMATE_GEO_REF=false).
+      publish_gps: ${MOLA_PUBLISH_GPS|true}
+      publish_imu: ${MOLA_PUBLISH_IMU|true}
       publish_ground_truth: true
 
   # =====================

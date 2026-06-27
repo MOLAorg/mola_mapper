@@ -37,7 +37,7 @@ module/src/
   Mapper3D.cpp                   Lifecycle: initialize/spinOnce/reset/diagnostics + IMPLEMENTS_MRPT_OBJECT
   Mapper3D_Fusion.cpp            Keyframe management + factor-graph fusion + estimated_navstate
   Mapper3D_KeyframeIngestion.cpp SharedKeyframeMap sink: requestInsertKeyframe() (anchor-once + consecutive chain)
-  Mapper3D_GUI.cpp               Optional MolaViz/MolaVizImGui viz: KF tree + graph edges + per-source movable {odom_i} frames + the {enu} geo-ref frame marker (drawn at inverse(T_enu_to_map) while geo-referencing) + GuiWidgetDescription panel (Status / Geo-ref / View tabs: KF/edge/IMU-factor counts, geo-ref T_enu_to_map + GNSS factors + per-source T_map_to_odom drift as trans/rot, now the INSTANTANEOUS derived transform -- see the T_map_to_odom_i design note). NOTE: odom drift is ~0 on pure-odometry runs (no GNSS => {map} == LIO's {odom}); once GNSS/IMU geo-referencing pulls/levels the map the ROTATION grows to the real map-vs-odom angle (e.g. ~11 deg on DCC01) and the TRANSLATION is its lever-arm consequence over the trajectory (100s of m), NOT a sign the map is wrong (DCC01 map is ~6.7 m RMSE to GT).
+  Mapper3D_GUI.cpp               Optional MolaViz/MolaVizImGui viz: KF tree + graph edges + per-source movable {odom_i} frames + the {enu} geo-ref frame marker (drawn at inverse(T_enu_to_map) while geo-referencing) + GuiWidgetDescription panel (Status / Geo-ref / View tabs: KF/edge/IMU-factor counts, geo-ref T_enu_to_map + GNSS factors + per-source T_map_to_odom drift as trans/rot, now the INSTANTANEOUS derived transform -- see the T_map_to_odom_i design note). The View tab has a "Viz reference frame" combo (map / enu) selecting the scene origin: it applies a `vizXform` (identity for map, `T_enu_to_map` for enu) to all scene containers + movable odom frames, so "enu" renders the map North-oriented (default; {enu} always exists as the identity weak-prior until geo-ref converges). An XYZ "enu" corner is drawn at the scene origin only while the enu frame is selected. NOTE: odom drift is ~0 on pure-odometry runs (no GNSS => {map} == LIO's {odom}); once GNSS/IMU geo-referencing pulls/levels the map the ROTATION grows to the real map-vs-odom angle (e.g. ~11 deg on DCC01) and the TRANSLATION is its lever-arm consequence over the trajectory (100s of m), NOT a sign the map is wrong (DCC01 map is ~6.7 m RMSE to GT).
   Mapper3D_SensorCallbacks.cpp   onNewObservation dispatch -> fuse_*()
   WorldModelState.cpp            GtsamData pimpl (ISAM2/Values/NonlinearFactorGraph) + map helpers
   Parameters.cpp                 loadFrom(yaml)
@@ -170,6 +170,13 @@ test/                            Unit tests (plain main() + MRPT ASSERT_ macros,
   keyframe covariance, which grows unboundedly with gauge distance and would
   make front ends reject the motion model. Falls back to the global conversion
   only before this source's first `fuse_pose()` lands (when `{map}=={odom_i}`).
+  The frame-local path is NOT gated on keyframe proximity: it only needs the
+  source's own fresh raw anchor + a twist, so it still serves a prediction when
+  the sparse central-map keyframes leave a gap > `max_time_to_use_velocity_model`
+  (only the reference-`{map}` path and the no-raw-anchor fallback re-apply that
+  proximity check). Gating the whole query on KF proximity previously returned
+  `nullopt` on those gaps, starved LIO's motion model ("Not able to use velocity
+  motion model"), and eventually froze it on MulRan DCC01 with sparse KFs.
 - Closest existing templates to study: `mola_mapper_2d` (structure + 2D
   pose-graph SLAM) and `mola_state_estimation_smoother` (multi-frame fusion,
   factor builders, FastPredictor).
@@ -192,9 +199,24 @@ test/                            Unit tests (plain main() + MRPT ASSERT_ macros,
   per-source chain (the previous per-source chaining let the dense and sparse
   paths skip each other's keyframes and emit CONFLICTING relative edges between
   shared keyframe variables -- e.g. `T675->T677 = 5.30 m` vs
-  `T675->T676->T677 = 2.12 m` -- which deformed `{map}`). All chain edges ALWAYS
-  use Mapper3D's own configured `keyframe_ingestion_sigma_lin/ang_deg` noise,
-  never the request's own `pose_in_source` covariance (see lessons below).
+  `T675->T676->T677 = 2.12 m` -- which deformed `{map}`).
+- **Chain edge noise is DATA-DRIVEN from the propagated relative covariance**
+  (`add_odom_chain_edge_locked`, faithful port of
+  `mola_sm_loop_closure::add_odometry_edges`). The per-DOF sigma is
+  `sqrt(diag(cov_to (-) cov_from)) * odometry_edge_uncertainty_multiplier`, plus
+  an additive floor `odometry_edge_min_sigma_xyz/ang_deg` (defaults match
+  sm_loop_closure: mult 1.0, floor 1e-3 m / 1e-3 deg). Each keyframe therefore
+  stores the FULL source pose PDF (`kf_odom_abs_pose_` is now a
+  `CPose3DPDFGaussian`, fed from `pose_in_source` / the sanitized `fuse_pose`
+  PDF), not just the mean. This leaves the drift-prone DOFs (z, roll, pitch) as
+  soft as the source's own covariance says, so the absolute IMU-gravity / GNSS
+  factors can level the map -- the hardcoded isotropic
+  `keyframe_ingestion_sigma_lin/ang_deg` (used before, and still used for the
+  one-time first-keyframe `F(i)` gauge tie) pinned them rigidly and blocked
+  leveling. The additive floor bounds pathological near-zero input covariances
+  (e.g. a relocalization seed). On DCC01 LIO+IMU this took map z-drift from
+  ~37.6 m to ~3.6 m (GT z-span ~2 m). The factor MEAN still uses the exact
+  relative pose; only the noise is data-driven.
 
 ## Real end-to-end validation lessons (KITTI, via real `mola-cli`, not unit tests)
 
@@ -210,12 +232,16 @@ path) surfaced bugs the synthetic unit tests never hit. If you touch
    anchor-once tie collide with the dense path's tie on the same
    (relocalization-seeded) keyframe -> `gtsam::IndeterminantLinearSystemException`
    at startup. Use a distinct name (LIO uses `publish_reference_frame + "_kf"`).
-2. **Never trust a `pose_in_source`/`fuse_pose()` input covariance directly**
-   for the noise model. Real front ends report pathological values (LIO's
-   `FixedPose` relocalization seed pins `cov` at `1e-12`); mixed with weak
-   priors elsewhere in the graph, that ill-conditions iSAM2's Cholesky. Use
-   your own configured sigma, and/or floor the input (see
-   `MIN_POSE_SIGMA_LIN/ANG` in `Mapper3D_Fusion.cpp`).
+2. **Floor any `pose_in_source`/`fuse_pose()` input covariance; never use it
+   raw.** Real front ends report pathological values (LIO's `FixedPose`
+   relocalization seed pins `cov` at `1e-12`); mixed with weak priors elsewhere
+   in the graph, that ill-conditions iSAM2's Cholesky. The consecutive-edge
+   chain now DERIVES its per-DOF noise from the propagated input covariance (so
+   z/tilt can be soft for leveling -- see the odometry-fusion note), but always
+   adds the `odometry_edge_min_sigma_*` floor on top, which bounds those
+   pathological near-zero inputs. Other direct priors (e.g. the `{map}`-frame
+   relocalization seed, absolute pose priors) still use configured/floored sigma
+   (`MIN_POSE_SIGMA_LIN/ANG` in `Mapper3D_Fusion.cpp`).
 3. **Always difference `mrpt::Clock::time_point`s with
    `mrpt::system::timeDifference()`, never `toDouble(a) - toDouble(b)`.** The
    naive subtraction silently underflows (wraps to ~+1.8e12) for timestamps

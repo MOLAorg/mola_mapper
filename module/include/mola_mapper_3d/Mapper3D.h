@@ -211,6 +211,7 @@ private:
 
   // --- Geo-referencing diagnostics counters (guarded by stateMutex_) ---
   std::size_t gnss_factors_inserted_ = 0;
+  std::size_t gnss_readings_seen_ = 0;
   std::size_t imu_factors_inserted_ = 0;
   bool georef_converged_announced_ = false;
 
@@ -254,7 +255,13 @@ private:
   // deformed {map} (catastrophic z/tilt). Consecutive-only edges keep the
   // backbone a consistent tree, leaving global z/tilt soft so IMU-gravity /
   // GNSS / loop-closure factors can override it (plan 2.8).
-  std::map<KeyFrameID, mrpt::poses::CPose3D> kf_odom_abs_pose_;
+  // Stores the full pose PDF (mean + covariance) so the consecutive-keyframe
+  // relative-pose edges can derive their per-DOF, anisotropic noise from the
+  // propagated relative covariance (cov_to (-) cov_from), as
+  // mola_sm_loop_closure::add_odometry_edges does. This leaves the drift-prone
+  // DOFs (z, roll, pitch) appropriately soft so IMU-gravity / GNSS can level
+  // the map, instead of pinning every edge to a hardcoded isotropic sigma.
+  std::map<KeyFrameID, mrpt::poses::CPose3DPDFGaussian> kf_odom_abs_pose_;
   std::set<std::pair<KeyFrameID, KeyFrameID>> odom_chain_edges_;  // (from<to by time)
   std::set<OdometryFrameID> odom_frame_anchored_;
 
@@ -291,6 +298,11 @@ private:
   std::atomic_bool viz_show_edges_{true};
   std::atomic_bool viz_show_odom_frames_{true};
   std::atomic_bool viz_camera_follows_vehicle_{false};
+
+  /// Which frame is the origin (0,0,0) of the 3D viz scene: 0 = {map},
+  /// 1 = {enu}. Default {enu} so the map is rendered North-oriented via the
+  /// (estimated or identity) T_enu_to_map. Selected via the GUI "View" tab.
+  std::atomic_int viz_reference_frame_{1};
 
   // LiveStrings shared between the module (writer) and the GUI (reader).
   struct GuiData
@@ -337,7 +349,8 @@ private:
   /// F(frameIdx) once, and adds a relative BetweenFactor to each time-adjacent
   /// keyframe that also has a stored odometry pose. See kf_odom_abs_pose_.
   void link_into_odometry_chain_locked(
-    KeyFrameID kf, const mrpt::poses::CPose3D & absOdomPose, OdometryFrameID frameIdx);
+    KeyFrameID kf, const mrpt::poses::CPose3DPDFGaussian & absOdomPosePdf,
+    OdometryFrameID frameIdx);
 
   /// Adds (once) the consecutive relative-pose edge between two time-adjacent
   /// keyframes from their stored absolute odometry poses.

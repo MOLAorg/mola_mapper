@@ -234,6 +234,16 @@ public:
   std::string do_process_gnss_labels_re = ".*";
 
   /** @} */
+
+  /** @name Output trajectory
+   * @{ */
+
+  /// If non-empty, save the estimated robot trajectory (in {reference_frame})
+  /// as a TUM-format file at shutdown, and on demand via the GUI.
+  /// Set via env var MOLA_MAPPER3D_TUM_TRAJECTORY_OUTPUT (empty = don't save).
+  std::string save_trajectory_to_file;
+
+  /** @} */
 };
 
 }  // namespace mola::mapper_3d

@@ -355,6 +355,11 @@ private:
   /// lock held (it joins a thread that itself takes stateMutex_).
   void stop_optimizer_thread();
 
+  /// Writes the current estimated trajectory (all keyframe poses in
+  /// {reference_frame}) to params_.save_trajectory_to_file in TUM format.
+  /// No-op when that string is empty.
+  void saveEstimatedTrajectoryToFile();
+
   /// Publishes the latest extrapolated reference-frame pose via
   /// advertiseUpdatedLocalization, throttled to high_rate_pose_publish_rate_hz.
   void publish_high_rate_pose();

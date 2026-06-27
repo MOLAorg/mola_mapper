@@ -352,6 +352,24 @@ void Mapper3D::internalBuildGUI()
     desc.tabs.emplace_back(std::move(tab));
   }
 
+  // Output tab:
+  {
+    Tab tab;
+    tab.title = "Output";
+    auto lbOutputHint =
+      std::make_shared<LiveString>("Trajectory saved at exit or when button clicked");
+    tab.widgets.emplace_back(Label{lbOutputHint});
+    tab.widgets.emplace_back(
+      TextBox{"TUM file:", params_.save_trajectory_to_file, 13, [this](std::string f) -> bool {
+                auto lck = mrpt::lockHelper(stateMutex_);
+                params_.save_trajectory_to_file = std::move(f);
+                return true;
+              }});
+    tab.widgets.emplace_back(
+      Button{"Save trajectory now", 0, "", 0, [this]() { this->saveEstimatedTrajectoryToFile(); }});
+    desc.tabs.emplace_back(std::move(tab));
+  }
+
   visualizer_->create_subwindow_from_description(desc).get();
 }
 

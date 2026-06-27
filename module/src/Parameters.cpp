@@ -140,6 +140,10 @@ void Parameters::loadFrom(const mrpt::containers::yaml & cfg)
   MCP_LOAD_OPT(cfg, do_process_imu_labels_re);
   MCP_LOAD_OPT(cfg, do_process_odometry_labels_re);
   MCP_LOAD_OPT(cfg, do_process_gnss_labels_re);
+
+  // Output trajectory
+  // -----------------------------------------------------
+  MCP_LOAD_OPT(cfg, save_trajectory_to_file);
 }
 
 }  // namespace mola::mapper_3d

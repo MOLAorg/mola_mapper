@@ -28,6 +28,8 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <fstream>
+#include <iomanip>
 #include <string>
 
 // arguments: class_name, parent_class, class namespace
@@ -43,7 +45,11 @@ Mapper3D::Mapper3D()
   ExecutableBase::setModuleInstanceName("Mapper3D");
 }
 
-Mapper3D::~Mapper3D() { stop_optimizer_thread(); }
+Mapper3D::~Mapper3D()
+{
+  stop_optimizer_thread();
+  saveEstimatedTrajectoryToFile();
+}
 
 void Mapper3D::initialize(const mrpt::containers::yaml & cfg)
 {
@@ -152,6 +158,48 @@ void Mapper3D::stop_optimizer_thread()
     optimizer_thread_.join();
   }
   optimizer_should_exit_.store(false);
+}
+
+void Mapper3D::saveEstimatedTrajectoryToFile()
+{
+  if (!params_loaded_ || params_.save_trajectory_to_file.empty()) {
+    return;
+  }
+
+  // Snapshot the trajectory under the state lock.
+  std::vector<std::pair<double, mrpt::poses::CPose3D>> traj;
+  {
+    auto lck = mrpt::lockHelper(stateMutex_);
+    for (const auto & [t, kfId] : state_.time_to_kf_id.getDirectMap()) {
+      const auto it = state_.last_estimated_states.find(kfId);
+      if (it == state_.last_estimated_states.end()) {
+        continue;
+      }
+      traj.emplace_back(mrpt::Clock::toDouble(t), it->second.pose);
+    }
+  }
+
+  const auto & fil = params_.save_trajectory_to_file;
+  MRPT_LOG_INFO_STREAM(
+    "Saving estimated trajectory with " << traj.size() << " keyframes to '" << fil
+                                        << "' in TUM format (frame: '"
+                                        << params_.reference_frame_name << "')...");
+
+  std::ofstream f(fil);
+  if (!f.is_open()) {
+    MRPT_LOG_ERROR_STREAM("Cannot open file for writing: " << fil);
+    return;
+  }
+
+  f << std::fixed << std::setprecision(6);
+  for (const auto & [t, pose] : traj) {
+    mrpt::math::CQuaternionDouble q;
+    pose.getAsQuaternion(q);
+    // TUM format: timestamp tx ty tz qx qy qz qw
+    f << t << " " << pose.x() << " " << pose.y() << " " << pose.z() << " " << q.x() << " " << q.y()
+      << " " << q.z() << " " << q.r() << "\n";
+  }
+  MRPT_LOG_INFO("Estimated trajectory saved.");
 }
 
 void Mapper3D::reset()

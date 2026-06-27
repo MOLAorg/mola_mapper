@@ -106,3 +106,12 @@ externalize_after_seconds: 30.0
 do_process_imu_labels_re: "${MOLA_MAPPER3D_IMU_LABELS_RE|.*}"
 do_process_odometry_labels_re: "${MOLA_MAPPER3D_ODOMETRY_LABELS_RE|.*}"
 do_process_gnss_labels_re: "${MOLA_MAPPER3D_GNSS_LABELS_RE|.*}"
+
+# --------------------------------------------------------------------------
+# Output trajectory
+# --------------------------------------------------------------------------
+# If non-empty, save the estimated robot trajectory (in {reference_frame_name})
+# as a TUM file at shutdown (and on demand via the GUI "Output" tab).
+# Set MOLA_MAPPER3D_TUM_TRAJECTORY_OUTPUT to the desired path, or leave empty
+# to skip (default).
+save_trajectory_to_file: "${MOLA_MAPPER3D_TUM_TRAJECTORY_OUTPUT|}"

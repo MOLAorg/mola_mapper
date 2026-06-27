@@ -32,6 +32,7 @@
 #include <mola_kernel/interfaces/SharedKeyframeMap.h>
 #include <mola_mapper_3d/Mapper3D.h>
 #include <mrpt/core/exceptions.h>
+#include <mrpt/obs/CObservationOdometry.h>
 #include <mrpt/poses/CPose3D.h>
 
 #include <iostream>
@@ -224,6 +225,58 @@ bool test_navstate_after_kf_gating()
   return true;
 }
 
+// (E) Phase B.1: wheel relative-pose edge emitted between consecutive sparse KFs
+bool test_wheel_edge_between_sparse_kfs()
+{
+  Mapper3D nav;
+  nav.initialize(mrpt::containers::yaml::FromText(kParamsSharedMapOnly));
+
+  // Helper: build a 2D odometry observation at absolute position x.
+  auto make_odom = [](double x, double t) {
+    mrpt::obs::CObservationOdometry obs;
+    obs.timestamp = mrpt::Clock::fromDouble(t);
+    obs.odometry = mrpt::poses::CPose2D(x, 0.0, 0.0);
+    return obs;
+  };
+
+  // Feed an initial wheel reading so the anchor is set.
+  nav.fuse_odometry(make_odom(0.0, -0.01), "odom_wheels");
+
+  // Insert the first sparse KF at t=0.0 (sets prev_shared_kf_id_ and wheel anchor).
+  {
+    mola::SharedKeyframeMap::KeyframeInsertRequest req;
+    req.timestamp = mrpt::Clock::fromDouble(0.0);
+    req.source_frame_id = "odom_lidar_kf";
+    req.pose_in_source = pose_at(0.0, 1e-3);
+    nav.requestInsertKeyframe(req);
+  }
+  const size_t kfAfterFirst = nav.keyframe_count();
+
+  // Accumulate wheel motion: 5 steps of 0.2 m forward.
+  for (int i = 1; i <= 5; i++) {
+    nav.fuse_odometry(make_odom(i * 0.2, i * 0.05), "odom_wheels");
+  }
+
+  // Insert a second sparse KF at t=0.5 -- should emit a wheel BetweenFactor.
+  {
+    mola::SharedKeyframeMap::KeyframeInsertRequest req;
+    req.timestamp = mrpt::Clock::fromDouble(0.5);
+    req.source_frame_id = "odom_lidar_kf";
+    req.pose_in_source = pose_at(1.0, 1e-3);
+    nav.requestInsertKeyframe(req);
+  }
+  const size_t kfFinal = nav.keyframe_count();
+
+  if (kfFinal != kfAfterFirst + 1) {
+    std::cerr << "[E] FAIL: expected kfAfterFirst+1 = " << kfAfterFirst + 1
+              << " KFs after second requestInsertKeyframe(), got " << kfFinal << "\n";
+    return false;
+  }
+
+  std::cout << "[E] PASS: wheel edge emitted between sparse KFs; total KFs = " << kfFinal << "\n";
+  return true;
+}
+
 }  // namespace
 
 int main()
@@ -233,6 +286,7 @@ int main()
   ok = test_auto_mode_switches_on_shared_kf() && ok;
   ok = test_shared_map_only_no_creation() && ok;
   ok = test_navstate_after_kf_gating() && ok;
+  ok = test_wheel_edge_between_sparse_kfs() && ok;
 
   if (ok) {
     std::cout << "ALL PASS\n";

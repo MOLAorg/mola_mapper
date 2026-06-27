@@ -227,6 +227,8 @@ void Mapper3D::reset_sensor_anchors_locked()
   last_imu_summary_stamp_.reset();
   wheel_chain_last_kf_.reset();
   wheel_chain_anchor_odom_.reset();
+  prev_shared_kf_id_.reset();
+  wheel_odom_at_prev_shared_kf_.reset();
   kf_odom_abs_pose_.clear();
   odom_chain_edges_.clear();
   odom_frame_anchored_.clear();

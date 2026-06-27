@@ -222,6 +222,16 @@ private:
   std::optional<KeyFrameID> wheel_chain_last_kf_;
   std::optional<mrpt::poses::CPose2D> wheel_chain_anchor_odom_;
 
+  // Phase B.1: wheel relative-pose edges between consecutive SPARSE keyframes
+  // (created via requestInsertKeyframe()). When a new sparse KF is closed, the
+  // net wheel motion since the previous sparse KF is emitted as a
+  // BetweenFactor(T(prev_shared_kf), T(new_kf)) using the motion-model
+  // covariance. Fires in any keyframe_creation_source mode whenever wheel data
+  // has been accumulated between consecutive requestInsertKeyframe() calls.
+  // Cleared in reset_sensor_anchors_locked().
+  std::optional<KeyFrameID> prev_shared_kf_id_;
+  std::optional<mrpt::poses::CPose2D> wheel_odom_at_prev_shared_kf_;
+
   // Per-source bookkeeping for keyframe-insertion requests (SharedKeyframeMap
   // sink): the last keyframe id and the front end's own pose_in_source mean it
   // was inserted with, used to chain consecutive requests via their

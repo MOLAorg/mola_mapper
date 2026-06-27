@@ -40,6 +40,8 @@
 #include <gtsam/slam/BetweenFactor.h>
 #include <mola_mapper_3d/Mapper3D.h>
 #include <mrpt/core/lock_helper.h>
+#include <mrpt/math/gtsam_wrappers.h>
+#include <mrpt/obs/CActionRobotMovement2D.h>
 #include <mrpt/poses/gtsam_wrappers.h>
 
 #include "GtsamData.h"
@@ -90,6 +92,47 @@ KeyFrameID Mapper3D::request_insert_keyframe_locked(
   // relocalization seed pinned at ~1e-12 m); the chain uses our configured
   // keyframe_ingestion_sigma_* noise.
   link_into_odometry_chain_locked(kfId, req.pose_in_source.mean, frameIdx);
+
+  // Phase B.1: wheel relative-pose edge between the previous sparse KF and
+  // this one. Emits Between(T(prev_shared_kf), T(kfId)) from the net wheel
+  // motion accumulated in last_wheels_odometry_ since the previous
+  // requestInsertKeyframe() call. Fires whenever wheel data has been received;
+  // the odom-chain edge from link_into_odometry_chain_locked already links
+  // these KFs via LIO relative motion -- this adds a complementary wheel
+  // constraint (planar motion model, looser sigma) at no extra variable cost.
+  if (
+    prev_shared_kf_id_.has_value() && prev_shared_kf_id_ != kfId &&
+    last_wheels_odometry_.has_value() && wheel_odom_at_prev_shared_kf_.has_value()) {
+    const auto increment = *last_wheels_odometry_ - *wheel_odom_at_prev_shared_kf_;
+
+    mrpt::obs::CActionRobotMovement2D odoAct;
+    odoAct.motionModelConfiguration.modelSelection =
+      mrpt::obs::CActionRobotMovement2D::mmGaussian;
+    odoAct.motionModelConfiguration.gaussianModel.minStdXY = 1e-3;
+    odoAct.motionModelConfiguration.gaussianModel.minStdPHI = mrpt::DEG2RAD(0.1);
+    odoAct.computeFromOdometry(increment, odoAct.motionModelConfiguration);
+
+    mrpt::poses::CPose3DPDFGaussian relPdf;
+    relPdf.copyFrom(*odoAct.poseChange);
+    relPdf.cov.asEigen().diagonal().array() += 1e-4;
+
+    gtsam::Pose3 rel;
+    gtsam::Matrix6 relCov;
+    mrpt::gtsam_wrappers::to_gtsam_se3_cov6(relPdf, rel, relCov);
+    state_.gtsam->newFactors.emplace_shared<gtsam::BetweenFactor<gtsam::Pose3>>(
+      T(*prev_shared_kf_id_), T(kfId), rel, gtsam::noiseModel::Gaussian::Covariance(relCov));
+    state_.add_kf_connectivity(*prev_shared_kf_id_, kfId);
+
+    MRPT_LOG_THROTTLE_DEBUG_FMT(
+      5.0,
+      "[SharedKeyframeMap] Added wheel edge KF#%llu→#%llu (Δx=%.3f m, Δy=%.3f m, Δφ=%.2f°)",
+      static_cast<unsigned long long>(*prev_shared_kf_id_),
+      static_cast<unsigned long long>(kfId), increment.x(), increment.y(),
+      mrpt::RAD2DEG(increment.phi()));
+  }
+  // Update sparse-KF wheel anchor for the next interval.
+  prev_shared_kf_id_ = kfId;
+  wheel_odom_at_prev_shared_kf_ = last_wheels_odometry_;  // nullopt if no wheel sensor
 
   MRPT_LOG_THROTTLE_INFO_FMT(
     2.0, "[SharedKeyframeMap] Inserted keyframe #%llu from source '%s' (central map keyframes=%zu)",

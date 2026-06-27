@@ -1308,8 +1308,64 @@ std::optional<NavState> Mapper3D::estimated_navstate(
 
   // 4) Produce the pose in the requested frame.
   if (frame_id == params_.reference_frame_name) {
-    // Reference ({map}) frame: extrapolate the closest keyframe pose forward
-    // with the configured kinematic model.
+    // Reference ({map}) frame.
+    //
+    // Phase C (high_rate_use_latest_sensors): scan last_raw_pose_by_source for
+    // the freshest raw anchor, link it to the GTSAM-estimated T_map_to_odom for
+    // that source (direct match OR the "_kf" counterpart by naming convention),
+    // and compose to get a high-rate {map} estimate that tracks the source's
+    // own odometry freshness rather than the sparse KF cadence (~1 Hz).
+    // Falls back to the kinematic extrapolation if no suitable source found.
+    if (params_.high_rate_use_latest_sensors && !state_.last_raw_pose_by_source.empty()) {
+      const auto & idToName = state_.known_odom_frames.getInverseMap();
+      const auto & nameToId = state_.known_odom_frames.getDirectMap();
+
+      std::optional<mrpt::Clock::time_point> freshestStamp;
+      std::optional<mrpt::poses::CPose3D> freshestPoseInMap;
+
+      for (const auto & [rawFrameIdx, rawAnchor] : state_.last_raw_pose_by_source) {
+        const double dtFromRaw = mrpt::system::timeDifference(rawAnchor.stamp, timestamp);
+        if (std::abs(dtFromRaw) > params_.max_time_to_use_velocity_model) {
+          continue;
+        }
+        if (freshestStamp.has_value() && rawAnchor.stamp <= *freshestStamp) {
+          continue;  // not fresher than our current best
+        }
+
+        // Resolve T_map_to_odom: try direct match first, then "foo"→"foo_kf".
+        const mrpt::poses::CPose3DPDFGaussian * pFrame = nullptr;
+        auto itEst = state_.last_estimated_frames.find(rawFrameIdx);
+        if (itEst != state_.last_estimated_frames.end()) {
+          pFrame = &itEst->second;
+        } else {
+          const auto itName = idToName.find(rawFrameIdx);
+          if (itName != idToName.end()) {
+            const auto itKf = nameToId.find(itName->second + "_kf");
+            if (itKf != nameToId.end()) {
+              const auto itKfEst = state_.last_estimated_frames.find(itKf->second);
+              if (itKfEst != state_.last_estimated_frames.end()) {
+                pFrame = &itKfEst->second;
+              }
+            }
+          }
+        }
+        if (pFrame == nullptr) {
+          continue;
+        }
+
+        freshestStamp = rawAnchor.stamp;
+        const auto poseInOdom =
+          rawAnchor.pose.mean + body_twist_delta(params_, ret.twist, dtFromRaw);
+        freshestPoseInMap = pFrame->mean + poseInOdom;
+      }
+
+      if (freshestPoseInMap.has_value()) {
+        ret.pose.mean = *freshestPoseInMap;
+        return ret;
+      }
+    }
+
+    // Fallback: kinematic extrapolation from the closest sparse KF.
     ret.pose.mean = ret.pose.mean + body_twist_delta(params_, ret.twist, closestFrameDtSigned);
     return ret;
   }
@@ -1416,18 +1472,17 @@ Mapper3D::pair_nearby_frame_iterators_t Mapper3D::find_before_after(
   const mrpt::Clock::time_point & t, bool allow_exact_match) const
 {
   const auto & m = state_.time_to_kf_id.getDirectMap();
-  using Iterator = stamp_map_t::const_iterator;
 
   if (m.empty()) {
     return {m.end(), m.end()};
   }
 
-  Iterator after = m.upper_bound(t);
+  auto after = m.upper_bound(t);
 
   if (!allow_exact_match) {
-    Iterator before = (after == m.begin()) ? m.end() : std::prev(after);
+    auto before = (after == m.begin()) ? m.end() : std::prev(after);
     if (before != m.end() && before->first == t) {
-      Iterator element_before_match = (before == m.begin()) ? m.end() : std::prev(before);
+      auto element_before_match = (before == m.begin()) ? m.end() : std::prev(before);
       return {element_before_match, after};
     }
     return {before, after};
@@ -1436,7 +1491,7 @@ Mapper3D::pair_nearby_frame_iterators_t Mapper3D::find_before_after(
   if (after == m.begin()) {
     return {m.end(), after};
   }
-  Iterator before = std::prev(after);
+  auto before = std::prev(after);
   return {before, after};
 }
 

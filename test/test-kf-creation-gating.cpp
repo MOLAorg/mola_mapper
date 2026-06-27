@@ -277,6 +277,80 @@ bool test_wheel_edge_between_sparse_kfs()
   return true;
 }
 
+// (F) Phase C: estimated_navstate("map") uses the dense fuse_pose() anchor via
+//     the "foo"→"foo_kf" naming convention when high_rate_use_latest_sensors=true.
+bool test_phase_c_high_rate_map_prediction()
+{
+  // Use shared_map_only with high_rate_use_latest_sensors enabled (default).
+  const char * kParams =
+    R"###(
+params:
+  vehicle_frame_name: "base_link"
+  reference_frame_name: "map"
+  link_first_pose_to_reference_origin_sigma: 1e-6
+  kinematic_model: KinematicModel::ConstantVelocity
+  max_time_to_use_velocity_model: 10.0
+  min_time_difference_to_create_new_frame: 0.01
+  sigma_random_walk_acceleration_linear: 1.0
+  sigma_random_walk_acceleration_angular: 1.0
+  keyframe_creation_source: "KeyframeCreationSource::SharedMapOnly"
+  high_rate_use_latest_sensors: true
+)###";
+
+  Mapper3D nav;
+  nav.initialize(mrpt::containers::yaml::FromText(kParams));
+
+  // First, insert a sparse KF at t=0.0 via requestInsertKeyframe("odom_lidar_kf").
+  // After the GTSAM solve, last_estimated_frames["odom_lidar_kf"] will be populated.
+  {
+    mola::SharedKeyframeMap::KeyframeInsertRequest req;
+    req.timestamp = mrpt::Clock::fromDouble(0.0);
+    req.source_frame_id = "odom_lidar_kf";
+    req.pose_in_source = pose_at(0.0, 1e-3);
+    nav.requestInsertKeyframe(req);
+  }
+
+  // Feed dense fuse_pose() calls from "odom_lidar" (the raw counterpart to
+  // "odom_lidar_kf"). These update last_raw_pose_by_source["odom_lidar_idx"]
+  // but do NOT create KFs (shared_map_only mode).
+  for (int i = 1; i <= 10; i++) {
+    nav.fuse_pose(mrpt::Clock::fromDouble(i * 0.05), pose_at(i * 0.1), "odom_lidar");
+  }
+
+  // Insert a second sparse KF at t=0.55 (between the dense poses). After the
+  // GTSAM solve this anchors "odom_lidar_kf" at x≈0.55 m.
+  {
+    mola::SharedKeyframeMap::KeyframeInsertRequest req;
+    req.timestamp = mrpt::Clock::fromDouble(0.55);
+    req.source_frame_id = "odom_lidar_kf";
+    req.pose_in_source = pose_at(0.55, 1e-3);
+    nav.requestInsertKeyframe(req);
+  }
+
+  // Query estimated_navstate("map") at t=0.50 (matches the last raw fuse_pose()
+  // at t=0.50 with x=1.0 m). Phase C should pick up the dense anchor and
+  // combine it with T_map_to_odom_lidar_kf ≈ identity (origin anchored), giving
+  // a map-frame x close to 1.0 m rather than just the sparse KF at x=0.
+  const auto ns = nav.estimated_navstate(mrpt::Clock::fromDouble(0.50), "map");
+  if (!ns.has_value()) {
+    std::cerr << "[F] FAIL: estimated_navstate('map') returned nullopt\n";
+    return false;
+  }
+
+  const double x = ns->pose.mean.x();
+  // The dense anchor at t=0.50 has x=1.0 m. Even if Phase C doesn't fire
+  // (no GTSAM estimate for "odom_lidar_kf" yet when optimizer thread is off and
+  // GTSAM hasn't been solved — single-threaded test calls optimize_and_refresh()),
+  // the result should be > 0.5 m (not the sparse KF at x=0 or x=0.55).
+  if (x < 0.5) {
+    std::cerr << "[F] FAIL: estimated_navstate('map') x=" << x
+              << " is too small; expected >= 0.5 m (Phase C should use dense anchor)\n";
+    return false;
+  }
+  std::cout << "[F] PASS: Phase C high-rate {map} prediction x=" << x << " m (expected ≈1.0 m)\n";
+  return true;
+}
+
 }  // namespace
 
 int main()
@@ -287,6 +361,7 @@ int main()
   ok = test_shared_map_only_no_creation() && ok;
   ok = test_navstate_after_kf_gating() && ok;
   ok = test_wheel_edge_between_sparse_kfs() && ok;
+  ok = test_phase_c_high_rate_map_prediction() && ok;
 
   if (ok) {
     std::cout << "ALL PASS\n";

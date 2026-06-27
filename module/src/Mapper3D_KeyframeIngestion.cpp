@@ -74,39 +74,15 @@ KeyFrameID Mapper3D::request_insert_keyframe_locked(
     kfObs.insert(obs);
   }
 
-  const double linSigma = params_.keyframe_ingestion_sigma_lin / std::max(req.quality, 1e-3);
-  const double angSigma =
-    mrpt::DEG2RAD(params_.keyframe_ingestion_sigma_ang_deg) / std::max(req.quality, 1e-3);
-  const auto noise = gtsam::noiseModel::Diagonal::Sigmas(
-    gtsam::Vector6{angSigma, angSigma, angSigma, linSigma, linSigma, linSigma});
-
-  const auto sourceState = keyframe_ingestion_state_by_source_.find(req.source_frame_id);
-
-  if (sourceState == keyframe_ingestion_state_by_source_.end()) {
-    // First request from this source: anchor F(source) to this keyframe with
-    // a tight Between() factor (does NOT repeat for later requests, so the
-    // source's own accumulated absolute drift never re-enters the graph).
-    state_.gtsam->newFactors.emplace_shared<gtsam::BetweenFactor<gtsam::Pose3>>(
-      symbol_T_map_to_odom_i_base + frameIdx, T(kfId),
-      mrpt::gtsam_wrappers::toPose3(req.pose_in_source.mean), noise);
-  } else if (sourceState->second.last_kf_id != kfId) {
-    // Later request, and it landed on a different keyframe than the previous
-    // one from this source (it may coincide with the previous keyframe when
-    // the out-of-order guard snapped it): tight consecutive relative-pose
-    // factor directly between keyframe poses, using the front end's own
-    // relative motion (frame-invariant, so the source-frame composition
-    // cancels out).
-    const mrpt::poses::CPose3D relativeMotion =
-      req.pose_in_source.mean - sourceState->second.last_pose_in_source;
-
-    state_.gtsam->newFactors.emplace_shared<gtsam::BetweenFactor<gtsam::Pose3>>(
-      T(sourceState->second.last_kf_id), T(kfId), mrpt::gtsam_wrappers::toPose3(relativeMotion),
-      noise);
-
-    state_.add_kf_connectivity(sourceState->second.last_kf_id, kfId);
-  }
-
-  keyframe_ingestion_state_by_source_[req.source_frame_id] = {kfId, req.pose_in_source.mean};
+  // Feed this keyframe's absolute odometry pose into the SAME single
+  // consecutive relative-pose-edge chain the dense fuse_pose() path uses, so
+  // both sources contribute to ONE consistent backbone (no per-source chains
+  // that skip each other's keyframes and create conflicting loop edges). See
+  // Mapper3D::link_into_odometry_chain_locked(). The request's own covariance
+  // is deliberately NOT used (front ends can report pathological values, e.g. a
+  // relocalization seed pinned at ~1e-12 m); the chain uses our configured
+  // keyframe_ingestion_sigma_* noise.
+  link_into_odometry_chain_locked(kfId, req.pose_in_source.mean, frameIdx);
 
   MRPT_LOG_THROTTLE_INFO_FMT(
     2.0, "[SharedKeyframeMap] Inserted keyframe #%llu from source '%s' (central map keyframes=%zu)",

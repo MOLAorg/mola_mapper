@@ -224,12 +224,33 @@ private:
   // the chain/anchor factors always use our own configured
   // keyframe_ingestion_sigma_* noise, not the front end's self-reported
   // uncertainty (which can be pathologically tiny, e.g. a relocalization seed).
-  struct KeyframeIngestionSourceState
-  {
-    KeyFrameID last_kf_id = 0;
-    mrpt::poses::CPose3D last_pose_in_source;
-  };
-  std::map<std::string, KeyframeIngestionSourceState> keyframe_ingestion_state_by_source_;
+  // --- Odometry backbone: a single CONSECUTIVE relative-pose-edge chain ---
+  // Both the dense fuse_pose() path and the sparse SharedKeyframeMap sink feed
+  // odometry into ONE shared chain built exactly like
+  // mola_sm_loop_closure::add_odometry_edges: each keyframe stores the absolute
+  // odometry pose that defined it, and every pair of TIME-ADJACENT keyframes
+  // (regardless of which source created them) is linked by exactly ONE relative
+  // BetweenFactor(T(prev), T(next)) = pose_next (-) pose_prev. This replaces the
+  // previous design (absolute Between(F(odom_i), T(kf)) ties AND per-source
+  // independent chains): a single rigid T_map_to_odom_i cannot fit the whole
+  // central map once odometry drifts, and per-source chains skip each other's
+  // keyframes, both producing globally inconsistent / conflicting edges that
+  // deformed {map} (catastrophic z/tilt). Consecutive-only edges keep the
+  // backbone a consistent tree, leaving global z/tilt soft so IMU-gravity /
+  // GNSS / loop-closure factors can override it (plan 2.8).
+  std::map<KeyFrameID, mrpt::poses::CPose3D> kf_odom_abs_pose_;
+  std::set<std::pair<KeyFrameID, KeyFrameID>> odom_chain_edges_;  // (from<to by time)
+  std::set<OdometryFrameID> odom_frame_anchored_;
+
+  // Latest keyframe each odometry source contributed an absolute pose to. Used
+  // to report T_map_to_odom_i as the INSTANTANEOUS transform aligning the
+  // source's latest odom pose with its keyframe's optimized {map} pose
+  // (map_pose(kf) (+) inverse(odom_abs(kf))), rather than the persistent
+  // F(odom_i) graph variable. F(odom_i) is now only a one-time gauge anchor (the
+  // odometry backbone is a relative-pose chain, not per-keyframe absolute ties),
+  // so it no longer tracks the live map<-odom drift; this does. Consumed by the
+  // GUI drift readout and the per-source movable viz frame placement.
+  std::map<OdometryFrameID, KeyFrameID> latest_kf_by_odom_frame_;
 
   // Compiled sensor-label filters (built in initialize() from the params regex).
   std::regex imu_labels_re_;
@@ -294,6 +315,17 @@ private:
   using stamp_map_t = std::map<mrpt::Clock::time_point, KeyFrameID>;
   using pair_nearby_frame_iterators_t =
     std::pair<stamp_map_t::const_iterator, stamp_map_t::const_iterator>;
+
+  /// Links a keyframe into the single consecutive odometry-edge chain: stores
+  /// its absolute odometry pose (first writer wins), anchors the source frame
+  /// F(frameIdx) once, and adds a relative BetweenFactor to each time-adjacent
+  /// keyframe that also has a stored odometry pose. See kf_odom_abs_pose_.
+  void link_into_odometry_chain_locked(
+    KeyFrameID kf, const mrpt::poses::CPose3D & absOdomPose, OdometryFrameID frameIdx);
+
+  /// Adds (once) the consecutive relative-pose edge between two time-adjacent
+  /// keyframes from their stored absolute odometry poses.
+  void add_odom_chain_edge_locked(KeyFrameID a, KeyFrameID b);
 
   /// (Re)builds the GTSAM/iSAM2 state and the persistent T_enu_to_map variable.
   void reinitialize_gtsam_locked();

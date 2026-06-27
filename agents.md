@@ -37,7 +37,7 @@ module/src/
   Mapper3D.cpp                   Lifecycle: initialize/spinOnce/reset/diagnostics + IMPLEMENTS_MRPT_OBJECT
   Mapper3D_Fusion.cpp            Keyframe management + factor-graph fusion + estimated_navstate
   Mapper3D_KeyframeIngestion.cpp SharedKeyframeMap sink: requestInsertKeyframe() (anchor-once + consecutive chain)
-  Mapper3D_GUI.cpp               Optional MolaViz/MolaVizImGui viz: KF tree + graph edges + per-source movable {odom_i} frames + the {enu} geo-ref frame marker (drawn at inverse(T_enu_to_map) while geo-referencing) + GuiWidgetDescription panel (Status / Geo-ref / View tabs: KF/edge/IMU-factor counts, geo-ref T_enu_to_map + GNSS factors + per-source T_map_to_odom drift as trans/rot). NOTE: odom drift is ~0 on pure-odometry runs (no GNSS => {map} == LIO's {odom}); it grows (e.g. ~19 m / ~5 deg on DCC01) only once GNSS/IMU geo-referencing pulls the map.
+  Mapper3D_GUI.cpp               Optional MolaViz/MolaVizImGui viz: KF tree + graph edges + per-source movable {odom_i} frames + the {enu} geo-ref frame marker (drawn at inverse(T_enu_to_map) while geo-referencing) + GuiWidgetDescription panel (Status / Geo-ref / View tabs: KF/edge/IMU-factor counts, geo-ref T_enu_to_map + GNSS factors + per-source T_map_to_odom drift as trans/rot, now the INSTANTANEOUS derived transform -- see the T_map_to_odom_i design note). NOTE: odom drift is ~0 on pure-odometry runs (no GNSS => {map} == LIO's {odom}); once GNSS/IMU geo-referencing pulls/levels the map the ROTATION grows to the real map-vs-odom angle (e.g. ~11 deg on DCC01) and the TRANSLATION is its lever-arm consequence over the trajectory (100s of m), NOT a sign the map is wrong (DCC01 map is ~6.7 m RMSE to GT).
   Mapper3D_SensorCallbacks.cpp   onNewObservation dispatch -> fuse_*()
   WorldModelState.cpp            GtsamData pimpl (ISAM2/Values/NonlinearFactorGraph) + map helpers
   Parameters.cpp                 loadFrom(yaml)
@@ -113,8 +113,40 @@ test/                            Unit tests (plain main() + MRPT ASSERT_ macros,
   newest keyframe snaps to the nearest existing keyframe instead of inserting a
   past variable (iSAM2 marginalization needs non-decreasing keyframe stamps).
 - Frame model mirrors `mola_state_estimation_smoother`: one `{odom_i}` per
-  source, plus `{map}` and `{enu}`; the graph estimates `T_map_to_odom_i` and
-  `T_enu_to_map`. Reuse `mola_gtsam_factors` for kinematic/IMU/GNSS factors.
+  source, plus `{map}` and `{enu}`; the graph estimates `T_enu_to_map` (a real
+  GNSS/IMU-estimated unknown). Reuse `mola_gtsam_factors` for kinematic/IMU/GNSS
+  factors.
+- **Odometry is fused as a SINGLE chain of CONSECUTIVE relative-pose edges, NOT
+  as absolute `Between(F(i), T(kf))` ties** (`Mapper3D::link_into_odometry_chain_locked`,
+  shared by the dense `fuse_pose()` path AND the `SharedKeyframeMap` sink). This
+  is the crux fix for catastrophic `{map}` tilt/z deformation (see below). Each
+  keyframe stores the absolute odometry pose that defined it (`kf_odom_abs_pose_`,
+  first-writer-wins); every TIME-ADJACENT keyframe pair (regardless of source) is
+  linked by exactly ONE `BetweenFactor(T(prev), T(next)) = odom(next) (-) odom(prev)`
+  -- the `mola_sm_loop_closure::add_odometry_edges` pattern, never skipping a
+  keyframe so no conflicting loop edges form. New keyframes are dead-reckon
+  initialized (`T(prev_estimate) (+) relative_odom`) so the long relative chain,
+  pinned only at a far gauge anchor, stays in the correct (un-twisted) iSAM2
+  basin. **Why not absolute ties:** the smoother ties every reading to one rigid
+  `F(i)=T_map_to_odom_i` in a SHORT fixed-lag window where that is valid; over
+  the WHOLE central map a single rigid `F(i)` cannot fit a drifting source's
+  trajectory, so hundreds of absolute ties become mutually inconsistent and the
+  optimizer mangles `{map}` (observed on MulRan DCC01: ~80 deg tilt, +-300 m z,
+  vs ~6.7 m-RMSE-to-GT / <=12 deg after the fix; `evo_ape -a` vs `global_pose.csv`).
+  Relative edges are also frame-invariant, so multiple odometry sources fuse by
+  consensus on the shared keyframe chain without needing `F(i)` to absorb a rigid
+  inter-frame offset.
+- **`T_map_to_odom_i` is a DERIVED, INSTANTANEOUS readout, not a fusion unknown.**
+  It is recomputed each solve as `T(latest_kf_i) (+) inverse(odom_pose_i(latest_kf_i))`
+  (`optimize_and_refresh()`, using `latest_kf_by_odom_frame_`), so it correctly
+  drifts over time for a drifting source. The graph variable `F(i)` (i>=1) is now
+  only a determinate, weak-prior'd placeholder pinned by a SINGLE one-time
+  first-keyframe gauge anchor (needed so the first keyframe is determinate when no
+  `link_first_pose_to_reference_origin` is set); it is never read. Consumed by the
+  GUI drift readout and the per-source movable viz frame. NOTE: the readout's
+  TRANSLATION is lever-arm-dominated (an N-degree map-vs-odom rotation over a
+  multi-km trajectory shows as 100s of m of transform translation even though the
+  map matches GT to a few m); the ROTATION component is the meaningful indicator.
 - **`estimated_navstate(t, {odom_i})` is frame-local, NOT reconstructed through
   `{map}`** (`Mapper3D_Fusion.cpp`). A non-reference-frame prediction anchors on
   the source's OWN last raw pose in `{odom_i}` (stored per source in
@@ -153,13 +185,16 @@ test/                            Unit tests (plain main() + MRPT ASSERT_ macros,
   `convergence_max_orientation_sigma_deg` needs to be looser than position's
   threshold suggests for a given motion profile (see
   `test-georef-convergence.cpp`'s tuning note).
-- `SharedKeyframeMap::requestInsertKeyframe()` (the "consecutive-frame edge"
-  drift-fix, plan section 2.8): the first request from a given
-  `source_frame_id` anchors `F(source)` with a tight `Between()`; every later
-  request instead adds a tight `Between(T(prev_kf), T(kf))` using the front
-  end's own relative motion. Both ALWAYS use Mapper3D's own configured
-  `keyframe_ingestion_sigma_lin/ang_deg` noise, never the request's own
-  `pose_in_source` covariance (see lessons below for why).
+- `SharedKeyframeMap::requestInsertKeyframe()` feeds the SAME unified odometry
+  chain as the dense `fuse_pose()` path: it forwards the request's keyframe +
+  `pose_in_source.mean` into `link_into_odometry_chain_locked()` (consecutive
+  relative edges, see the odometry-fusion note above). It does NOT keep its own
+  per-source chain (the previous per-source chaining let the dense and sparse
+  paths skip each other's keyframes and emit CONFLICTING relative edges between
+  shared keyframe variables -- e.g. `T675->T677 = 5.30 m` vs
+  `T675->T676->T677 = 2.12 m` -- which deformed `{map}`). All chain edges ALWAYS
+  use Mapper3D's own configured `keyframe_ingestion_sigma_lin/ang_deg` noise,
+  never the request's own `pose_in_source` covariance (see lessons below).
 
 ## Real end-to-end validation lessons (KITTI, via real `mola-cli`, not unit tests)
 

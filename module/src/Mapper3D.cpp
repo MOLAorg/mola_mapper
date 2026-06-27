@@ -227,7 +227,10 @@ void Mapper3D::reset_sensor_anchors_locked()
   last_imu_summary_stamp_.reset();
   wheel_chain_last_kf_.reset();
   wheel_chain_anchor_odom_.reset();
-  keyframe_ingestion_state_by_source_.clear();
+  kf_odom_abs_pose_.clear();
+  odom_chain_edges_.clear();
+  odom_frame_anchored_.clear();
+  latest_kf_by_odom_frame_.clear();
   last_publish_wallclock_.reset();
 }
 

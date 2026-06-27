@@ -396,18 +396,147 @@ void Mapper3D::fuse_pose_locked(
     // Reference frame is "map": a direct pose prior on the keyframe.
     state_.gtsam->newFactors.emplace_shared<gtsam::PriorFactor<gtsam::Pose3>>(
       T(this_kf_id), pose_out, gtsam::noiseModel::Gaussian::Covariance(cov_out));
-  } else {
-    // Odometry frame: BetweenFactor(F(k), T(kf)) measures T_odom_k_to_base.
-    state_.gtsam->newFactors.emplace_shared<gtsam::BetweenFactor<gtsam::Pose3>>(
-      symbol_T_map_to_odom_i_base + frame_id_idx, T(this_kf_id), pose_out,
-      gtsam::noiseModel::Gaussian::Covariance(cov_out));
-
-    // Remember this source's own last raw pose (in {odom_i}), the anchor that
-    // estimated_navstate() extrapolates from to keep the short-term prediction
-    // continuous in the front end's own frame (immune to {map} corrections).
-    state_.last_raw_pose_by_source[frame_id_idx] =
-      WorldModelState::RawSourcePose{timestamp, poseSanitized};
+    return;
   }
+
+  // Odometry frame: feed into the single consecutive relative-pose-edge chain
+  // (plan 2.8, mirrors mola_sm_loop_closure::add_odometry_edges). Do NOT add an
+  // absolute Between(F(odom_i), T(kf)) tie per pose: a single rigid
+  // T_map_to_odom_i cannot fit the whole central map once odometry drifts, so
+  // such ties become globally inconsistent over all keyframes and deform {map}
+  // (catastrophic z/tilt). See link_into_odometry_chain_locked().
+  link_into_odometry_chain_locked(this_kf_id, poseSanitized.mean, frame_id_idx);
+
+  // Remember this source's own last raw pose (in {odom_i}), the anchor that
+  // estimated_navstate() extrapolates from to keep the short-term prediction
+  // continuous in the front end's own frame (immune to {map} corrections).
+  state_.last_raw_pose_by_source[frame_id_idx] =
+    WorldModelState::RawSourcePose{timestamp, poseSanitized};
+}
+
+void Mapper3D::link_into_odometry_chain_locked(
+  KeyFrameID kf, const mrpt::poses::CPose3D & absOdomPose, OdometryFrameID frameIdx)
+{
+  // Store the absolute odometry pose that defines this keyframe (first writer
+  // wins, so edge endpoints stay stable once an edge using them is built).
+  const bool firstForThisKf = kf_odom_abs_pose_.find(kf) == kf_odom_abs_pose_.end();
+  if (firstForThisKf) {
+    kf_odom_abs_pose_.emplace(kf, absOdomPose);
+  }
+
+  // Track the latest (newest in time) keyframe this source contributed to, for
+  // the instantaneous T_map_to_odom_i report (see latest_kf_by_odom_frame_).
+  if (frameIdx != REFERENCE_FRAME_ID) {
+    const auto itLatest = latest_kf_by_odom_frame_.find(frameIdx);
+    if (
+      itLatest == latest_kf_by_odom_frame_.end() ||
+      state_.time_to_kf_id.inverse(kf) >= state_.time_to_kf_id.inverse(itLatest->second)) {
+      latest_kf_by_odom_frame_[frameIdx] = kf;
+    }
+  }
+
+  // F(frameIdx) = T_map_to_odom_i is NOT a fusion unknown anymore: odometry is
+  // fused as frame-invariant relative-pose edges (below), and T_map_to_odom_i is
+  // REPORTED as the instantaneous transform T(latest_kf) (+) inv(odom_pose) in
+  // optimize_and_refresh() (see the F(i) design note in agents.md). The ONE
+  // exception is this single first-keyframe tie: it is not per-reading fusion
+  // but a one-time, weak frame-placement / gauge anchor (via F(i)'s weak prior)
+  // that keeps the first keyframe determinate when no
+  // link_first_pose_to_reference_origin is configured. It is never used to
+  // re-assert the source's accumulated drift (it fires once).
+  if (frameIdx != REFERENCE_FRAME_ID && odom_frame_anchored_.count(frameIdx) == 0) {
+    odom_frame_anchored_.insert(frameIdx);
+    const double linSigma = params_.keyframe_ingestion_sigma_lin;
+    const double angSigma = mrpt::DEG2RAD(params_.keyframe_ingestion_sigma_ang_deg);
+    const auto noise = gtsam::noiseModel::Diagonal::Sigmas(
+      gtsam::Vector6{angSigma, angSigma, angSigma, linSigma, linSigma, linSigma});
+    state_.gtsam->newFactors.emplace_shared<gtsam::BetweenFactor<gtsam::Pose3>>(
+      symbol_T_map_to_odom_i_base + frameIdx, T(kf), mrpt::gtsam_wrappers::toPose3(absOdomPose),
+      noise);
+  }
+
+  // Link to each immediate TIME-adjacent keyframe that also has a stored
+  // odometry pose (one relative edge per adjacent pair, never skipping).
+  const auto t = state_.time_to_kf_id.inverse(kf);
+  const auto neighbors = find_before_after(t, false);
+  for (const auto & it : {neighbors.first, neighbors.second}) {
+    if (it == state_.time_to_kf_id.getDirectMap().end()) {
+      continue;
+    }
+    add_odom_chain_edge_locked(kf, it->second);
+  }
+
+  // Dead-reckon the INITIAL {map} pose of a brand-new keyframe by composing the
+  // previous keyframe's current estimate with the relative odometry motion,
+  // instead of the stale copy-from-neighbor done by initialize_new_frame. The
+  // odometry backbone is a long relative-pose chain pinned only at a far gauge
+  // anchor; if each new keyframe is seeded a full motion step behind its true
+  // pose, the incremental solver has to drag it forward every step and can lag
+  // or wind up in a globally-twisted configuration that still satisfies all the
+  // relative edges. Seeding near the dead-reckoned pose keeps both the iSAM2
+  // solve and the live cached estimate in the correct basin from the start.
+  if (firstForThisKf && neighbors.first != state_.time_to_kf_id.getDirectMap().end()) {
+    const KeyFrameID prev = neighbors.first->second;
+    const auto itPrevOdom = kf_odom_abs_pose_.find(prev);
+    if (itPrevOdom != kf_odom_abs_pose_.end()) {
+      const mrpt::poses::CPose3D rel = absOdomPose - itPrevOdom->second;
+      std::optional<gtsam::Pose3> prevMapPose;
+      if (state_.gtsam->newValues.exists(T(prev))) {
+        prevMapPose = state_.gtsam->newValues.at<gtsam::Pose3>(T(prev));
+      } else if (state_.gtsam->estimate.exists(T(prev))) {
+        prevMapPose = state_.gtsam->estimate.at<gtsam::Pose3>(T(prev));
+      } else if (const auto itSt = state_.last_estimated_states.find(prev);
+                 itSt != state_.last_estimated_states.end()) {
+        prevMapPose = mrpt::gtsam_wrappers::toPose3(itSt->second.pose);
+      }
+      if (prevMapPose.has_value()) {
+        const gtsam::Pose3 init = (*prevMapPose) * mrpt::gtsam_wrappers::toPose3(rel);
+        if (state_.gtsam->newValues.exists(T(kf))) {
+          state_.gtsam->newValues.update(T(kf), init);
+        }
+        // Seed the live cached estimate too, so queries / the publisher use the
+        // dead-reckoned pose for keyframes the optimizer has not solved yet.
+        const auto itSt = state_.last_estimated_states.find(kf);
+        if (itSt != state_.last_estimated_states.end()) {
+          itSt->second.pose =
+            mrpt::poses::CPose3D(mrpt::gtsam_wrappers::toTPose3D(init));
+        }
+      }
+    }
+  }
+}
+
+void Mapper3D::add_odom_chain_edge_locked(KeyFrameID a, KeyFrameID b)
+{
+  if (a == b) {
+    return;
+  }
+  const auto ia = kf_odom_abs_pose_.find(a);
+  const auto ib = kf_odom_abs_pose_.find(b);
+  if (ia == kf_odom_abs_pose_.end() || ib == kf_odom_abs_pose_.end()) {
+    return;
+  }
+  // Order endpoints by time (earlier -> later) for a canonical edge key.
+  KeyFrameID from = a;
+  KeyFrameID to = b;
+  if (state_.time_to_kf_id.inverse(a) > state_.time_to_kf_id.inverse(b)) {
+    std::swap(from, to);
+  }
+  if (!odom_chain_edges_.emplace(from, to).second) {
+    return;  // already linked
+  }
+
+  const mrpt::poses::CPose3D relativeMotion =
+    kf_odom_abs_pose_.at(to) - kf_odom_abs_pose_.at(from);
+
+  const double linSigma = params_.keyframe_ingestion_sigma_lin;
+  const double angSigma = mrpt::DEG2RAD(params_.keyframe_ingestion_sigma_ang_deg);
+  const auto noise = gtsam::noiseModel::Diagonal::Sigmas(
+    gtsam::Vector6{angSigma, angSigma, angSigma, linSigma, linSigma, linSigma});
+
+  state_.gtsam->newFactors.emplace_shared<gtsam::BetweenFactor<gtsam::Pose3>>(
+    T(from), T(to), mrpt::gtsam_wrappers::toPose3(relativeMotion), noise);
+  state_.add_kf_connectivity(from, to);
 }
 
 void Mapper3D::fuse_odometry(
@@ -792,6 +921,9 @@ void Mapper3D::optimize_and_refresh()
   gtsam::Values localValues;
   std::vector<KeyFrameID> snapshotKfIds;
   std::vector<OdometryFrameID> snapshotFrameIds;
+  // Per odom source: its latest keyframe + that keyframe's reported odom pose,
+  // for the INSTANTANEOUS T_map_to_odom_i = T(latest_kf) (+) inv(odom_pose).
+  std::map<OdometryFrameID, std::pair<KeyFrameID, mrpt::poses::CPose3D>> frameLatestOdom;
   KeyFrameID latestKfId = 0;
   bool haveKfs = false;
   bool estimateGeoref = false;
@@ -815,6 +947,13 @@ void Mapper3D::optimize_and_refresh()
     for (const auto & [name, fid] : state_.known_odom_frames.getDirectMap()) {
       (void)name;
       snapshotFrameIds.push_back(fid);
+      const auto itLatest = latest_kf_by_odom_frame_.find(fid);
+      if (itLatest != latest_kf_by_odom_frame_.end()) {
+        const auto itOdom = kf_odom_abs_pose_.find(itLatest->second);
+        if (itOdom != kf_odom_abs_pose_.end()) {
+          frameLatestOdom.emplace(fid, std::make_pair(itLatest->second, itOdom->second));
+        }
+      }
     }
     haveKfs = !state_.time_to_kf_id.empty();
     if (haveKfs) {
@@ -839,6 +978,7 @@ void Mapper3D::optimize_and_refresh()
       << e.what());
     return;
   }
+
 
   struct TmpKf
   {
@@ -882,12 +1022,35 @@ void Mapper3D::optimize_and_refresh()
       latestTwistCov = twCov;
     }
 
+    // T_map_to_odom_i is the INSTANTANEOUS transform that places source i's odom
+    // frame into {map}, recovered from its latest keyframe:
+    //   T_map_to_odom_i = T(latest_kf) (+) inverse(odom_pose_i(latest_kf)).
+    // The graph variable F(i) is no longer the fusion mechanism (odometry is
+    // fused as frame-invariant relative edges, see link_into_odometry_chain),
+    // so it is not read here; this live value correctly drifts over time for a
+    // drifting source instead of being forced to a single rigid transform.
     for (const OdometryFrameID fid : snapshotFrameIds) {
-      const auto Fpose = gd.estimate.at<gtsam::Pose3>(symbol_T_map_to_odom_i_base + fid);
-      const auto Fcov = gd.isam2->marginalCovariance(symbol_T_map_to_odom_i_base + fid);
+      const auto itLatest = frameLatestOdom.find(fid);
+      if (itLatest == frameLatestOdom.end()) {
+        continue;
+      }
+      const KeyFrameID kf = itLatest->second.first;
+      if (!gd.estimate.exists(T(kf))) {
+        continue;
+      }
+      const mrpt::poses::CPose3D mapPose(
+        mrpt::gtsam_wrappers::toTPose3D(gd.estimate.at<gtsam::Pose3>(T(kf))));
+      const mrpt::poses::CPose3D & odomPose = itLatest->second.second;
       mrpt::poses::CPose3DPDFGaussian pdf;
-      pdf.mean = mrpt::poses::CPose3D(mrpt::gtsam_wrappers::toTPose3D(Fpose));
-      pdf.cov = mrpt::gtsam_wrappers::to_mrpt_se3_cov6(Fcov);
+      pdf.mean = mapPose + (mrpt::poses::CPose3D() - odomPose);  // mapPose (+) inv(odomPose)
+      // Use the keyframe's marginal as a representative uncertainty (the frame
+      // transform is as well-known as the keyframe it is anchored on).
+      if (kf == latestKfId && latestPoseCov.has_value()) {
+        pdf.cov = *latestPoseCov;
+      } else {
+        pdf.cov.setIdentity();
+        pdf.cov *= mrpt::square(0.1);
+      }
       tmpFrames.emplace(fid, pdf);
     }
 

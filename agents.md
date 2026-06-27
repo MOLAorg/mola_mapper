@@ -177,6 +177,15 @@ test/                            Unit tests (plain main() + MRPT ASSERT_ macros,
   proximity check). Gating the whole query on KF proximity previously returned
   `nullopt` on those gaps, starved LIO's motion model ("Not able to use velocity
   motion model"), and eventually froze it on MulRan DCC01 with sparse KFs.
+- **TEMPORARY WORKAROUND (plan 4.7 investigation): the predictor extrapolates
+  with a FINITE-DIFFERENCE twist from each source's consecutive raw poses
+  (`RawSourcePose::local_twist`), not the graph `V(kf)`/`W(kf)`.** With IMU on,
+  the graph body-twist variables came out wrong on MulRan (V ~0.2 m/s vs ~10
+  true, W ~42 rad/s), so the prediction was near-static and LIO appeared frozen.
+  Architecturally V/W are body-local + chain-tied and SHOULD be correct/IMU-
+  immune; the corruption is unexplained -- see the plan 4.7 note. Trace with
+  `MOLA_MAPPER3D_TRACE_PREDICT=1`. Remove the `has_local_twist` branches once the
+  graph V/W is fixed.
 - Closest existing templates to study: `mola_mapper_2d` (structure + 2D
   pose-graph SLAM) and `mola_state_estimation_smoother` (multi-frame fusion,
   factor builders, FastPredictor).

@@ -128,6 +128,18 @@ public:
   {
     mrpt::Clock::time_point stamp;
     mrpt::poses::CPose3DPDFGaussian pose;  //!< in {odom_i}
+
+    /// TEMPORARY WORKAROUND (remove once the root cause is fixed -- see plan 4.7
+    /// "graph V/W corrupted by IMU" investigation). Body-frame twist
+    /// (vx,vy,vz,wx,wy,wz) computed from this source's OWN consecutive raw poses
+    /// in {odom_i} (finite difference), used by the short-term predictor instead
+    /// of the per-keyframe V(kf)/W(kf) GTSAM variables. Those graph variables are
+    /// body-local and tied to the pose chain, so they SHOULD already be the
+    /// correct, IMU-immune velocity -- but on MulRan with IMU on they came out
+    /// wrong (V ~0.2 m/s, W ~42 rad/s), making the prediction near-static and
+    /// freezing LIO. This stopgap should be deleted once that is understood.
+    mrpt::math::TTwist3D local_twist;
+    bool has_local_twist = false;
   };
   std::map<OdometryFrameID, RawSourcePose> last_raw_pose_by_source;
 

@@ -68,7 +68,6 @@ void Mapper3D::updateVisualization()
   std::vector<std::pair<std::string, mrpt::poses::CPose3D>> odomFrames;
   std::optional<mrpt::poses::CPose3D> latestVehiclePose;
   bool hasGeoref = false;
-  bool estimatingGeoref = false;
   std::size_t gnssFactors = 0;
   std::size_t imuFactors = 0;
   std::optional<mrpt::topography::TGeodeticCoords> tentativeGeo;
@@ -121,7 +120,6 @@ void Mapper3D::updateVisualization()
     }
 
     hasGeoref = state_.geo_reference.has_value();
-    estimatingGeoref = params_.estimate_geo_reference || params_.fixed_geo_reference.has_value();
     gnssFactors = gnss_factors_inserted_;
     imuFactors = imu_factors_inserted_;
     tentativeGeo = state_.tentative_geo_coord_reference;
@@ -129,6 +127,17 @@ void Mapper3D::updateVisualization()
         itEnu != state_.last_estimated_frames.end()) {
       enuToMap = itEnu->second;
     }
+  }
+
+  // Viz reference frame: the transform that maps {map}-frame coordinates into
+  // the scene origin selected by the user (View tab). For {map} it is identity;
+  // for {enu} it is T_enu_to_map (so a map pose p renders at T_enu_to_map (+) p,
+  // i.e. in {enu}, North-oriented). {enu} always exists: if no geo-ref has been
+  // estimated, T_enu_to_map is the identity weak-prior, so the scene is
+  // unchanged. All top-level scene objects are placed under this transform.
+  mrpt::poses::CPose3D vizXform;  // identity by default ({map})
+  if (viz_reference_frame_.load() == 1 && enuToMap.has_value()) {
+    vizXform = enuToMap->mean;
   }
 
   // --- Keyframe tree (corners + trajectory polyline) ---
@@ -156,6 +165,7 @@ void Mapper3D::updateVisualization()
       }
       glKfs->insert(glPath);
     }
+    glKfs->setPose(vizXform);
     visualizer_->update_3d_object("mapper3d/keyframes", glKfs);
   }
 
@@ -170,6 +180,7 @@ void Mapper3D::updateVisualization()
       }
       glEdges->insert(glLines);
     }
+    glEdges->setPose(vizXform);
     visualizer_->update_3d_object("mapper3d/edges", glEdges);
   }
 
@@ -180,8 +191,9 @@ void Mapper3D::updateVisualization()
       // Functional part: reposition the movable frame node front ends draw
       // their dense clouds / local map under (see VizInterface::update_3d_object
       // parentFrame). Even with markers hidden, keep moving the frame so the
-      // attached geometry stays correctly placed in {map}.
-      visualizer_->update_3d_object_frame(name, pose.asTPose());
+      // attached geometry stays correctly placed in the selected viz frame
+      // (compose the per-source T_map_to_odom_i with the scene viz transform).
+      visualizer_->update_3d_object_frame(name, (vizXform + pose).asTPose());
 
       if (!viz_show_odom_frames_.load()) {
         continue;
@@ -196,14 +208,16 @@ void Mapper3D::updateVisualization()
       glMarkers->insert(glText);
     }
 
-    // The {enu} geo-reference frame (id 0 = T_enu_to_map). It is skipped in the
-    // odomFrames loop above (it is not an odometry source), but the user still
-    // wants to SEE where ENU sits relative to {map}. last_estimated_frames[0]
-    // stores T_enu_to_map (pose of {map} in {enu}), so the ENU origin in {map}
-    // is its inverse. Drawn only while geo-referencing (otherwise it is just the
-    // weak-prior identity). A larger, distinct-color corner + "enu" label.
-    if (estimatingGeoref && enuToMap.has_value() && viz_show_odom_frames_.load()) {
-      const mrpt::poses::CPose3D enuInMap = mrpt::poses::CPose3D() - enuToMap->mean;
+    // The {enu} XYZ corner (id 0 = T_enu_to_map). Shown only when {enu} is the
+    // selected viz reference frame (the user's "optionally visible" = only in
+    // ENU view). The corner is placed at the ENU origin: in the glMarkers local
+    // ({map}) coordinates that is inv(T_enu_to_map), which the container's
+    // vizXform (= T_enu_to_map) then maps back to the scene origin. {enu} always
+    // exists (identity until geo-ref converges), so this works with or without
+    // GNSS. A larger, distinct-color corner + "enu" label.
+    if (viz_reference_frame_.load() == 1) {
+      const mrpt::poses::CPose3D enuInMap =
+        enuToMap.has_value() ? (mrpt::poses::CPose3D() - enuToMap->mean) : mrpt::poses::CPose3D();
       auto glEnu = mrpt::opengl::stock_objects::CornerXYZ(2.0f);
       glEnu->setPose(enuInMap);
       glMarkers->insert(glEnu);
@@ -213,6 +227,7 @@ void Mapper3D::updateVisualization()
       glEnuText->setPose(enuInMap);
       glMarkers->insert(glEnuText);
     }
+    glMarkers->setPose(vizXform);
     visualizer_->update_3d_object("mapper3d/odom_frames", glMarkers);
   }
 
@@ -337,6 +352,12 @@ void Mapper3D::internalBuildGUI()
   {
     Tab tab;
     tab.title = "View";
+    // Viz reference frame: which frame is the scene origin (0,0,0). "enu" (the
+    // default) renders the map North-oriented via T_enu_to_map (identity, hence
+    // == map, until a geo-reference is estimated).
+    tab.widgets.emplace_back(ComboBox{
+      "Viz reference frame", {"map", "enu"}, viz_reference_frame_.load(),
+      [this](int index) { viz_reference_frame_.store(index); }});
     tab.widgets.emplace_back(CheckBox{
       "Show keyframes", viz_show_keyframes_.load(),
       [this](bool checked) { viz_show_keyframes_.store(checked); }});

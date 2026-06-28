@@ -1136,6 +1136,19 @@ void Mapper3D::optimize_and_refresh()
         enforce_planar_pose(t.pose);
         enforce_planar_twist(t.twist);
       }
+      static const bool traceVW = (::getenv("MOLA_MAPPER3D_TRACE_VW") != nullptr);
+      if (traceVW && (angV.norm() > 5.0 || linV.norm() < 0.5)) {
+        // dt to the time-adjacent previous keyframe (the kinematic-factor dt):
+        double dtPrev = -1.0;
+        const auto & m = state_.time_to_kf_id.getDirectMap();
+        if (auto itT = m.find(state_.time_to_kf_id.inverse(id)); itT != m.end() && itT != m.begin()) {
+          dtPrev = mrpt::system::timeDifference(std::prev(itT)->first, itT->first);
+        }
+        MRPT_LOG_WARN_FMT(
+          "[VW-TRACE] kf=%zu V=(%.2f,%.2f,%.2f) |V|=%.2f W=(%.3f,%.3f,%.3f) |W|=%.2f dt_prev=%.4f",
+          static_cast<size_t>(id), linV.x(), linV.y(), linV.z(), linV.norm(), angV.x(), angV.y(),
+          angV.z(), angV.norm(), dtPrev);
+      }
       tmpStates.emplace(id, t);
     }
 

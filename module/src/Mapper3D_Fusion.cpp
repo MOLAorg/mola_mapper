@@ -998,6 +998,114 @@ void Mapper3D::trace_imu_factors_locked(const gtsam::Values & estimate)
   }
 }
 
+void Mapper3D::trace_keyframe_geometry_locked(const gtsam::Values & estimate)
+{
+  static const bool traceGeom = (::getenv("MOLA_MAPPER3D_TRACE_GEOM") != nullptr);
+  if (!traceGeom) {
+    return;
+  }
+  try {
+    // Walk the keyframes in TIME order and collect their {map}-frame positions
+    // + body up-axis (3rd column of the rotation = vehicle "up" expressed in
+    // {map}). The gravity factor levels ORIENTATION; this measures whether the
+    // resulting POSITION path is actually level too.
+    std::vector<mrpt::math::TPoint3D> pos;
+    double upDotZsum = 0.0;  // average alignment of body up-axis with map +Z
+    double pitchSum = 0.0;   // SIGNED mean keyframe pitch (deg): systematic nose-up?
+    double rollSum = 0.0;    // SIGNED mean keyframe roll (deg)
+    size_t nUp = 0;
+    // RAW LIO odom z range (the un-leveled input chain), to tell apart a biased
+    // gravity reference (graph z-drift << raw LIO z-drift => factor IS helping)
+    // from the factor being outvoted (graph z-drift ~ raw LIO z-drift).
+    double rawZmin = std::numeric_limits<double>::infinity();
+    double rawZmax = -std::numeric_limits<double>::infinity();
+    double rawPitchSum = 0.0;
+    size_t nRaw = 0;
+    for (const auto & [t, id] : state_.time_to_kf_id.getDirectMap()) {
+      if (!estimate.exists(T(id))) {
+        continue;
+      }
+      const mrpt::poses::CPose3D p(
+        mrpt::gtsam_wrappers::toTPose3D(estimate.at<gtsam::Pose3>(T(id))));
+      pos.emplace_back(p.x(), p.y(), p.z());
+      // Body up-axis = R * (0,0,1) = third column of the rotation matrix:
+      const auto & R = p.getRotationMatrix();
+      const double upz = R(2, 2);  // z-component of the body up-axis in {map}
+      upDotZsum += upz;
+      pitchSum += mrpt::RAD2DEG(p.pitch());
+      rollSum += mrpt::RAD2DEG(p.roll());
+      nUp++;
+      if (const auto itRaw = kf_odom_abs_pose_.find(id); itRaw != kf_odom_abs_pose_.end()) {
+        const double rz = itRaw->second.mean.z();
+        rawZmin = std::min(rawZmin, rz);
+        rawZmax = std::max(rawZmax, rz);
+        rawPitchSum += mrpt::RAD2DEG(itRaw->second.mean.pitch());
+        nRaw++;
+      }
+    }
+    if (pos.size() < 2) {
+      return;
+    }
+
+    // z-span of the keyframe POSITIONS:
+    double zmin = pos.front().z;
+    double zmax = pos.front().z;
+    for (const auto & q : pos) {
+      zmin = std::min(zmin, q.z);
+      zmax = std::max(zmax, q.z);
+    }
+
+    // Best-fit slope of z vs cumulative HORIZONTAL arc length: the average tilt
+    // the path "climbs" as it moves. atan(slope) is the apparent path tilt.
+    double arc = 0.0;
+    std::vector<double> s;
+    s.reserve(pos.size());
+    s.push_back(0.0);
+    for (size_t i = 1; i < pos.size(); ++i) {
+      const double dx = pos[i].x - pos[i - 1].x;
+      const double dy = pos[i].y - pos[i - 1].y;
+      arc += std::hypot(dx, dy);
+      s.push_back(arc);
+    }
+    // Least-squares slope of z = a*s + b:
+    const double n = static_cast<double>(pos.size());
+    double sumS = 0;
+    double sumZ = 0;
+    double sumSS = 0;
+    double sumSZ = 0;
+    for (size_t i = 0; i < pos.size(); ++i) {
+      sumS += s[i];
+      sumZ += pos[i].z;
+      sumSS += s[i] * s[i];
+      sumSZ += s[i] * pos[i].z;
+    }
+    const double denom = (n * sumSS - sumS * sumS);
+    double slope = 0.0;
+    if (std::abs(denom) > 1e-9) {
+      slope = (n * sumSZ - sumS * sumZ) / denom;
+    }
+    const double tiltDeg = mrpt::RAD2DEG(std::atan(slope));
+    const double upTiltDeg =
+      (nUp > 0)
+        ? mrpt::RAD2DEG(std::acos(std::clamp(upDotZsum / static_cast<double>(nUp), -1.0, 1.0)))
+        : 0.0;
+
+    const double meanPitch = (nUp > 0) ? pitchSum / static_cast<double>(nUp) : 0.0;
+    const double meanRoll = (nUp > 0) ? rollSum / static_cast<double>(nUp) : 0.0;
+    const double rawZspan = (nRaw > 0) ? (rawZmax - rawZmin) : 0.0;
+    const double rawMeanPitch = (nRaw > 0) ? rawPitchSum / static_cast<double>(nRaw) : 0.0;
+
+    MRPT_LOG_WARN_FMT(
+      "[GEOM-TRACE] kfs=%zu arc=%.0f m | path-z: min=%.2f max=%.2f span=%.2f m | "
+      "z-vs-arc slope=%.4f (path-tilt=%.2f deg) | mean body-up vs map+Z=%.2f deg | "
+      "mean SIGNED kf pitch=%.2f roll=%.2f deg | RAW-LIO z-span=%.2f m mean-pitch=%.2f deg",
+      pos.size(), arc, zmin, zmax, zmax - zmin, slope, tiltDeg, upTiltDeg, meanPitch, meanRoll,
+      rawZspan, rawMeanPitch);
+  } catch (const std::exception & e) {
+    MRPT_LOG_ERROR_STREAM("[GEOM-TRACE] failed:\n" << e.what());
+  }
+}
+
 void Mapper3D::emit_filtered_gravity_factor_locked(const ImuGravityFilter::Estimate & est)
 {
   // Pick the keyframe nearest the window's representative time.
@@ -1024,6 +1132,35 @@ void Mapper3D::emit_filtered_gravity_factor_locked(const ImuGravityFilter::Estim
   MRPT_LOG_THROTTLE_DEBUG_FMT(
     2.0, "[fuse_imu] filtered-gravity factor kf=%zu sigma=%.2f deg from %zu/%zu accepted samples",
     static_cast<size_t>(kfId), est.sigma_deg, est.n_accepted, est.n_total);
+
+  // Diagnostic (MOLA_MAPPER3D_TRACE_GEOM): running mean of the filtered gravity
+  // direction in the IMU/body frame. For a level vehicle on flat ground this
+  // should be ~(0,0,+-1); a SYSTEMATIC tilt of its mean (forward/right lean)
+  // is an accelerometer-bias / unmodeled-IMU-mount tilt that the gravity factor
+  // faithfully levels TO, biasing every keyframe's orientation by that angle.
+  static const bool traceGeom = (::getenv("MOLA_MAPPER3D_TRACE_GEOM") != nullptr);
+  if (traceGeom) {
+    static mrpt::math::TVector3D gAccum{0, 0, 0};
+    static size_t gN = 0;
+    // Express the measured up in the VEHICLE frame (apply sensorPose rotation):
+    const auto up_vehicle = last_imu_sensor_pose_.rotateVector(est.gravity_body_normalized);
+    gAccum = gAccum + up_vehicle;
+    gN++;
+    auto m = gAccum * (1.0 / static_cast<double>(gN));
+    const double mn = m.norm();
+    if (mn > 1e-9) {
+      m = m * (1.0 / mn);
+    }
+    // Tilt of the mean up-direction from the vehicle +Z axis, split into the
+    // pitch (about -y, from the x component) and roll (about x, from y) leans:
+    const double pitchLeanDeg = mrpt::RAD2DEG(std::atan2(m.x, m.z));
+    const double rollLeanDeg = mrpt::RAD2DEG(std::atan2(m.y, m.z));
+    MRPT_LOG_THROTTLE_WARN_FMT(
+      1.0,
+      "[GRAV-BODY-TRACE] n=%zu mean up_vehicle=(%.4f,%.4f,%.4f) -> systematic "
+      "pitch-lean=%.2f deg roll-lean=%.2f deg",
+      gN, m.x, m.y, m.z, pitchLeanDeg, rollLeanDeg);
+  }
 }
 
 void Mapper3D::fuse_gnss(const mrpt::obs::CObservationGPS & gps)
@@ -1235,6 +1372,7 @@ void Mapper3D::optimize_and_refresh()
   }
 
   trace_imu_factors_locked(localEstimate);
+  trace_keyframe_geometry_locked(localEstimate);
 
   struct TmpKf
   {

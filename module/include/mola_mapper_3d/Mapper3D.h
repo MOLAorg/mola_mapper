@@ -416,6 +416,14 @@ private:
   /// random motion-acceleration noise). No-op unless the env var is set.
   void trace_imu_factors_locked(const gtsam::Values & estimate);
 
+  /// Env-gated (MOLA_MAPPER3D_TRACE_GEOM) diagnostic: measures the ACTUAL
+  /// keyframe trajectory geometry in {map} (not the gravity-factor residual):
+  /// the keyframe-position z-span and the best-fit slope of z vs horizontal
+  /// arc length (the apparent path tilt), plus the average keyframe body up
+  /// axis vs map +Z (orientation leveling). This separates a real {map}-frame
+  /// path tilt from an uncorrected {odom} LIO-local-map tilt. No-op unless set.
+  void trace_keyframe_geometry_locked(const gtsam::Values & estimate);
+
   /// Accumulates one raw IMU sample into imu_accum_ (max-rate summarization).
   void accumulate_imu_sample_locked(const mrpt::obs::CObservationIMU & imu);
 

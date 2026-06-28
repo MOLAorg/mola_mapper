@@ -235,6 +235,32 @@ test/                            Unit tests (plain main() + MRPT ASSERT_ macros,
   gravity-residual distribution (mean/median/p90/max + the mean residual VECTOR
   norm: ~mean => systematic tilt, <<mean => random motion noise) each solve
   (`Mapper3D::trace_imu_factors_locked`).
+- **The gravity-factor RESIDUAL is NOT a "the map is level" metric (measured).**
+  A low residual only proves the keyframes align to the MEASURED gravity, not to
+  true vertical. Measured on DCC01 IMU-only (GPS off, geo-ref off,
+  `MOLA_MAPPER3D_TRACE_GEOM=1`, `Mapper3D::trace_keyframe_geometry_locked`): the
+  gravity residual sits at ~0.5 deg (factor satisfied) while the {map} keyframe
+  PATH still climbs ~29 m in z over ~1.7 km (GT z-span ~2 m), a persistent
+  ~+1.1 deg SYSTEMATIC keyframe pitch / ~1 deg path tilt. Decomposition from the
+  trace: (1) the factor IS working -- it roughly HALVES the raw LIO z-drift
+  (RAW-LIO odom z-span ~58 m -> graph ~29 m); (2) but it cannot flatten the rest,
+  because orientation-only leveling fights the stiff translation chain AND the
+  FILTERED GRAVITY REFERENCE itself carries a ~0.6-0.7 deg systematic lean in the
+  VEHICLE frame (`[GRAV-BODY-TRACE]` mean up_vehicle ~ (-0.012, 0.011, 1.0)) --
+  an accelerometer-bias / unmodeled-IMU-mount tilt (MulRan's `imuPoseOnVehicle_`
+  is translation-only, NO rotation) that the factor faithfully levels TO. So a
+  sub-degree gravity-reference bias integrates into tens of meters of z-drift,
+  and without an absolute z reference (GNSS off) it cannot be removed by leveling
+  alone. This is the real reason the visualizer still shows a tilted path; the
+  separate, LARGER tilt of the LIO LOCAL MAP is LIO's own {odom} z-drift (~58 m),
+  which mapper3d deliberately does NOT correct (frame-local prediction design).
+  The principled fix is plan 4.12 (IMU preintegration WITH accel-bias
+  estimation), which would estimate+subtract the bias instead of baking it into
+  "gravity." **Diagnostic:** `MOLA_MAPPER3D_TRACE_GEOM=1` logs, each solve, the
+  keyframe-path z-span + z-vs-arc slope (apparent path tilt), the mean SIGNED
+  keyframe pitch/roll, the raw-LIO odom z-span (to tell "factor helping" from
+  "factor outvoted"), and the running-mean filtered gravity direction in the
+  vehicle frame (`[GRAV-BODY-TRACE]`, the systematic reference lean).
 - Closest existing templates to study: `mola_mapper_2d` (structure + 2D
   pose-graph SLAM) and `mola_state_estimation_smoother` (multi-frame fusion,
   factor builders, FastPredictor).

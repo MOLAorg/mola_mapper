@@ -38,6 +38,7 @@ find_package(mola_imu_preintegration REQUIRED)
 set(LIB_SOURCES
   module/src/Mapper3D.cpp
   module/src/Mapper3D_Fusion.cpp
+  module/src/ImuGravityFilter.cpp
   module/src/Mapper3D_GUI.cpp
   module/src/Mapper3D_KeyframeIngestion.cpp
   module/src/Mapper3D_SensorCallbacks.cpp
@@ -49,6 +50,7 @@ set(LIB_PUBLIC_HEADERS
   module/include/mola_mapper_3d/Mapper3D.h
   module/include/mola_mapper_3d/Parameters.h
   module/include/mola_mapper_3d/WorldModelState.h
+  module/include/mola_mapper_3d/ImuGravityFilter.h
 )
 
 mola_add_library(

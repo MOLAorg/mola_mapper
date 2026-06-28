@@ -54,3 +54,10 @@ mola_add_test(
   LINK_LIBRARIES
     mola::mola_mapper_3d
 )
+
+mola_add_test(
+  TARGET  test-imu-gravity-filter
+  SOURCES test-imu-gravity-filter.cpp
+  LINK_LIBRARIES
+    mola::mola_mapper_3d
+)

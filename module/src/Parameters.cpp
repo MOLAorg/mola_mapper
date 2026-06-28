@@ -94,6 +94,7 @@ void Parameters::loadFrom(const mrpt::containers::yaml & cfg)
   MCP_LOAD_OPT(cfg, odometry_edge_uncertainty_multiplier);
   MCP_LOAD_OPT(cfg, odometry_edge_min_sigma_xyz);
   MCP_LOAD_OPT(cfg, odometry_edge_min_sigma_ang_deg);
+  MCP_LOAD_OPT(cfg, odometry_edge_min_sigma_rollpitch_deg);
   ASSERT_GT_(odometry_edge_uncertainty_multiplier, .0);
   ASSERT_GE_(odometry_edge_min_sigma_xyz, .0);
   ASSERT_GE_(odometry_edge_min_sigma_ang_deg, .0);
@@ -105,9 +106,18 @@ void Parameters::loadFrom(const mrpt::containers::yaml & cfg)
   MCP_LOAD_OPT(cfg, imu_normalized_gravity_alignment_sigma);
   MCP_LOAD_OPT(cfg, imu_angular_velocity_sigma_deg);
 
+  MCP_LOAD_OPT(cfg, imu_use_filtered_gravity);
+  MCP_LOAD_OPT(cfg, imu_gravity_window_sec);
+  MCP_LOAD_OPT(cfg, imu_gravity_accel_tol_frac);
+  MCP_LOAD_OPT(cfg, imu_gravity_gyro_tol_deg);
+  MCP_LOAD_OPT(cfg, imu_gravity_min_samples);
+  MCP_LOAD_OPT(cfg, imu_gravity_sigma_floor_deg);
+  MCP_LOAD_OPT(cfg, imu_gravity_sigma_ceil_deg);
+
   // Geo-referencing
   // -----------------------------------------------------
   MCP_LOAD_OPT(cfg, estimate_geo_reference);
+  MCP_LOAD_OPT(cfg, enu_to_map_prior_sigma_no_georef);
   MCP_LOAD_OPT(cfg, gnss_huber_threshold);
   MCP_LOAD_OPT(cfg, convergence_max_position_sigma);
   MCP_LOAD_OPT(cfg, convergence_max_orientation_sigma_deg);

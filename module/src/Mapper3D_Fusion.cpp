@@ -45,6 +45,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <numeric>
 
 #include "GtsamData.h"
 #include "factor_builders.h"
@@ -148,6 +149,18 @@ void Mapper3D::reinitialize_gtsam_locked()
   // gravity-alignment via IMU accelerometer even without GNSS.
   auto enu2map = gtsam::Pose3::Identity();
   gtsam::Matrix6 enu2map_cov = gtsam::Matrix6::Identity() * mrpt::square(ENU2MAP_WEAK_SIGMA);
+
+  // When NOT estimating (and not fixing) the geo-reference, T_enu_to_map is not
+  // an unknown: pin it tight to identity so {map}=={enu}. Otherwise it stays a
+  // FREE weakly-prior'd variable that silently ABSORBS the IMU gravity/attitude
+  // correction (it can take ~all of a uniform tilt + the whole azimuth), so the
+  // leveling never reaches the {map} keyframes the map is rendered in. With it
+  // pinned, "gravity up in ENU" == "gravity up in map" and the gravity factors
+  // level the keyframe poses directly (see agents.md "IMU gravity leveling").
+  if (!params_.estimate_geo_reference && !params_.fixed_geo_reference.has_value()) {
+    enu2map_cov =
+      gtsam::Matrix6::Identity() * mrpt::square(params_.enu_to_map_prior_sigma_no_georef);
+  }
 
   if (params_.fixed_geo_reference.has_value()) {
     state_.geo_reference = *params_.fixed_geo_reference;
@@ -564,6 +577,18 @@ void Mapper3D::add_odom_chain_edge_locked(KeyFrameID a, KeyFrameID b)
     sigmasXYZYPR[k] += params_.odometry_edge_min_sigma_xyz;
     sigmasXYZYPR[3 + k] += mrpt::DEG2RAD(params_.odometry_edge_min_sigma_ang_deg);
   }
+  // Anisotropic roll/pitch compliance: a positive value RAISES the roll/pitch
+  // floor (indices 5=roll, 4=pitch) while leaving yaw (index 3) at the tight
+  // floor above. This lets the absolute IMU gravity factor bend the otherwise
+  // near-rigid LIO orientation chain back to level WITHOUT freeing the yaw gauge
+  // (which has no absolute reference when there is no GNSS, and whose loss makes
+  // the trajectory wander). Only meaningful with a trustworthy gravity factor,
+  // i.e. imu_use_filtered_gravity (see agents.md "IMU gravity leveling").
+  if (params_.odometry_edge_min_sigma_rollpitch_deg > 0) {
+    const double rp = mrpt::DEG2RAD(params_.odometry_edge_min_sigma_rollpitch_deg);
+    sigmasXYZYPR[4] = std::max(sigmasXYZYPR[4], rp);  // pitch
+    sigmasXYZYPR[5] = std::max(sigmasXYZYPR[5], rp);  // roll
+  }
 
   // GTSAM Pose3 tangent-space order: (Rx=roll, Ry=pitch, Rz=yaw, tx, ty, tz).
   gtsam::Vector6 sigmas;
@@ -707,6 +732,28 @@ void Mapper3D::fuse_imu(const mrpt::obs::CObservationIMU & imu)
   const ProfilerEntry tle(profiler_, "fuse_imu");
   auto lck = mrpt::lockHelper(stateMutex_);
 
+  // Filtered low-dynamics gravity leveling: feed the RAW accelerometer/gyro
+  // stream to the gravity filter and, once a window has accumulated, emit ONE
+  // strong gravity factor with a data-earned sigma. This is the leveling path;
+  // the per-sample MeasuredGravityFactor in apply_imu_observation_locked() is
+  // disabled when imu_use_filtered_gravity is set (see agents.md).
+  if (params_.imu_use_filtered_gravity && imu.has(mrpt::obs::IMU_X_ACC)) {
+    last_imu_sensor_pose_ = imu.sensorPose;
+    const mrpt::math::TVector3D acc = {
+      imu.get(mrpt::obs::IMU_X_ACC), imu.get(mrpt::obs::IMU_Y_ACC), imu.get(mrpt::obs::IMU_Z_ACC)};
+    std::optional<mrpt::math::TVector3D> w;
+    if (imu.has(mrpt::obs::IMU_WX)) {
+      w = mrpt::math::TVector3D{
+        imu.get(mrpt::obs::IMU_WX), imu.get(mrpt::obs::IMU_WY), imu.get(mrpt::obs::IMU_WZ)};
+    }
+    imu_gravity_filter_.addSample(imu.timestamp, acc, w);
+    if (imu_gravity_filter_.windowReady(imu.timestamp)) {
+      if (const auto est = imu_gravity_filter_.flush(); est.has_value()) {
+        emit_filtered_gravity_factor_locked(*est);
+      }
+    }
+  }
+
   // Path A: max-rate summarization (preferred for real high-rate IMUs). Buffer
   // every sample and insert at most imu_max_insert_rate_hz SUMMARIZED
   // observations/second: averaged accelerometer (less-noisy gravity/leveling),
@@ -823,8 +870,16 @@ void Mapper3D::apply_imu_observation_locked(
 
   bool addedFactor = false;
 
-  // (1) Absolute attitude / azimuth observation (IMU orientation quaternion):
-  if (imu.has(mrpt::obs::IMU_ORI_QUAT_W)) {
+  // (1) Absolute attitude / azimuth observation (IMU orientation quaternion).
+  // This factor imposes the IMU's ABSOLUTE orientation (including azimuth/yaw)
+  // on the keyframe via T_enu_to_map. Without an external azimuth reference
+  // (GNSS-driven geo-referencing or a fixed geo-reference) the absolute yaw is
+  // meaningless and actively fights LIO's own heading (observed on MulRan: 60-
+  // 180 deg residuals destabilizing T_enu_to_map). Only add it when such a
+  // reference exists; roll/pitch leveling comes from the gravity factor instead.
+  const bool haveAzimuthReference =
+    params_.estimate_geo_reference || params_.fixed_geo_reference.has_value();
+  if (haveAzimuthReference && imu.has(mrpt::obs::IMU_ORI_QUAT_W)) {
     mrpt::math::CQuaternionDouble q;
     q.w(imu.get(mrpt::obs::IMU_ORI_QUAT_W));
     q.x(imu.get(mrpt::obs::IMU_ORI_QUAT_X));
@@ -848,8 +903,13 @@ void Mapper3D::apply_imu_observation_locked(
     }
   }
 
-  // (2) Gravity-aligned acceleration observation (accelerometer leveling):
-  if (imu.has(mrpt::obs::IMU_X_ACC) && params_.imu_normalized_gravity_alignment_sigma > 0) {
+  // (2) Gravity-aligned acceleration observation (accelerometer leveling).
+  // LEGACY per-sample path: only used when imu_use_filtered_gravity is OFF. By
+  // default the leveling is produced by ImuGravityFilter (one strong, low-
+  // dynamics, data-earned factor per window) in fuse_imu(); see agents.md.
+  if (
+    !params_.imu_use_filtered_gravity && imu.has(mrpt::obs::IMU_X_ACC) &&
+    params_.imu_normalized_gravity_alignment_sigma > 0) {
     const gtsam::Vector3 measuredGravity = {
       imu.get(mrpt::obs::IMU_X_ACC), imu.get(mrpt::obs::IMU_Y_ACC), imu.get(mrpt::obs::IMU_Z_ACC)};
     // Accept either m/s^2 (~9.8) or normalized (~1.0) accelerometer scales:
@@ -884,6 +944,86 @@ void Mapper3D::apply_imu_observation_locked(
   MRPT_LOG_THROTTLE_DEBUG_FMT(
     5.0, "[fuse_imu] kf=%zu attitude/gravity/gyro factors so far=%zu",
     static_cast<size_t>(this_kf_id), imu_factors_inserted_);
+}
+
+void Mapper3D::trace_imu_factors_locked(const gtsam::Values & estimate)
+{
+  static const bool traceImu = (::getenv("MOLA_MAPPER3D_TRACE_IMU") != nullptr);
+  if (!traceImu || !state_.gtsam->isam2.has_value()) {
+    return;
+  }
+  try {
+    if (estimate.exists(symbol_T_enu_to_map)) {
+      const auto Tem = mrpt::poses::CPose3D(
+        mrpt::gtsam_wrappers::toTPose3D(estimate.at<gtsam::Pose3>(symbol_T_enu_to_map)));
+      MRPT_LOG_WARN_FMT(
+        "[IMU-TRACE] T_enu_to_map(F0): xyz=(%.2f,%.2f,%.2f) roll=%.3f pitch=%.3f yaw=%.3f deg",
+        Tem.x(), Tem.y(), Tem.z(), mrpt::RAD2DEG(Tem.roll()), mrpt::RAD2DEG(Tem.pitch()),
+        mrpt::RAD2DEG(Tem.yaw()));
+    }
+    const auto & fg = state_.gtsam->isam2->getFactorsUnsafe();
+    std::vector<double> gravDeg;
+    double gravChi2 = 0;
+    gtsam::Vector3 residSum = gtsam::Vector3::Zero();
+    for (const auto & f : fg) {
+      if (!f) {
+        continue;
+      }
+      if (dynamic_cast<const mola::factors::MeasuredGravityFactor *>(f.get()) != nullptr) {
+        gravChi2 += f->error(estimate);
+        const auto * nmf = dynamic_cast<const gtsam::NoiseModelFactor *>(f.get());
+        if (nmf != nullptr) {
+          const auto e = nmf->unwhitenedError(estimate);
+          gravDeg.push_back(mrpt::RAD2DEG(e.norm()));
+          residSum += e;
+        }
+      }
+    }
+    if (gravDeg.empty()) {
+      return;
+    }
+    std::sort(gravDeg.begin(), gravDeg.end());
+    const double mean =
+      std::accumulate(gravDeg.begin(), gravDeg.end(), 0.0) / static_cast<double>(gravDeg.size());
+    const double median = gravDeg[gravDeg.size() / 2];
+    const double p90 = gravDeg[(gravDeg.size() * 9) / 10];
+    const double meanVecNorm =
+      mrpt::RAD2DEG((residSum / static_cast<double>(gravDeg.size())).norm());
+    MRPT_LOG_WARN_FMT(
+      "[IMU-TRACE] gravity-resid(deg): n=%zu mean=%.2f median=%.2f p90=%.2f max=%.2f "
+      "sum_chi2=%.0f | mean-VECTOR-norm=%.2f deg (systematic if ~mean; random/motion if <<mean)",
+      gravDeg.size(), mean, median, p90, gravDeg.back(), gravChi2, meanVecNorm);
+  } catch (const std::exception & e) {
+    MRPT_LOG_ERROR_STREAM("[IMU-TRACE] failed:\n" << e.what());
+  }
+}
+
+void Mapper3D::emit_filtered_gravity_factor_locked(const ImuGravityFilter::Estimate & est)
+{
+  // Pick the keyframe nearest the window's representative time.
+  KeyFrameID kfId = 0;
+  if (sensor_kf_creation_allowed()) {
+    kfId = create_or_get_keyframe_by_timestamp_locked(
+      est.stamp, params_.imu_nearby_keyframe_stamp_tolerance);
+  } else {
+    const auto nearestOpt = find_nearest_kf_locked(est.stamp);
+    if (!nearestOpt.has_value()) {
+      return;  // no keyframe yet to attach to
+    }
+    kfId = *nearestOpt;
+  }
+
+  const auto sensorOnVehicle = mrpt::gtsam_wrappers::toPose3(last_imu_sensor_pose_);
+  const gtsam::Vector3 g = {
+    est.gravity_body_normalized.x, est.gravity_body_normalized.y, est.gravity_body_normalized.z};
+  auto accNoise = gtsam::noiseModel::Isotropic::Sigma(3, mrpt::DEG2RAD(est.sigma_deg));
+  state_.gtsam->newFactors.emplace_shared<mola::factors::MeasuredGravityFactor>(
+    symbol_T_enu_to_map, T(kfId), sensorOnVehicle, g, accNoise);
+  imu_factors_inserted_++;
+
+  MRPT_LOG_THROTTLE_DEBUG_FMT(
+    2.0, "[fuse_imu] filtered-gravity factor kf=%zu sigma=%.2f deg from %zu/%zu accepted samples",
+    static_cast<size_t>(kfId), est.sigma_deg, est.n_accepted, est.n_total);
 }
 
 void Mapper3D::fuse_gnss(const mrpt::obs::CObservationGPS & gps)
@@ -1094,6 +1234,7 @@ void Mapper3D::optimize_and_refresh()
     return;
   }
 
+  trace_imu_factors_locked(localEstimate);
 
   struct TmpKf
   {

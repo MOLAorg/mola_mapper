@@ -28,6 +28,7 @@
 #include <mola_kernel/interfaces/NavStateFilter.h>
 #include <mola_kernel/interfaces/SharedKeyframeMap.h>
 #include <mola_kernel/interfaces/VizInterface.h>
+#include <mola_mapper_3d/ImuGravityFilter.h>
 #include <mola_mapper_3d/Parameters.h>
 #include <mola_mapper_3d/WorldModelState.h>
 #include <mrpt/containers/yaml.h>
@@ -49,6 +50,11 @@
 #include <thread>
 #include <utility>
 #include <vector>
+
+namespace gtsam
+{
+class Values;
+}  // namespace gtsam
 
 namespace mola::mapper_3d
 {
@@ -208,6 +214,15 @@ private:
   };
   ImuAccumulator imu_accum_;
   std::optional<mrpt::Clock::time_point> last_imu_summary_stamp_;
+
+  // --- Filtered low-dynamics gravity leveling (imu_use_filtered_gravity) ---
+  // Accumulates the RAW high-rate accelerometer/gyro stream, rejects samples
+  // contaminated by vehicle acceleration/rotation, and emits ONE strong
+  // MeasuredGravityFactor per window with a data-earned sigma. This replaces the
+  // per-sample gravity factor, whose ~2 deg random motion noise could never
+  // level the map (see agents.md "IMU gravity leveling"). Guarded by stateMutex_.
+  ImuGravityFilter imu_gravity_filter_;
+  mrpt::poses::CPose3D last_imu_sensor_pose_;
 
   // --- Geo-referencing diagnostics counters (guarded by stateMutex_) ---
   std::size_t gnss_factors_inserted_ = 0;
@@ -389,6 +404,17 @@ private:
   /// per-sample and the summarized (max-rate) IMU paths.
   void apply_imu_observation_locked(
     const mrpt::obs::CObservationIMU & imu, double keyframe_reuse_tolerance);
+
+  /// Emits ONE MeasuredGravityFactor from a filtered low-dynamics gravity
+  /// estimate (see ImuGravityFilter), attached to the keyframe nearest the
+  /// estimate's stamp, using the data-earned sigma.
+  void emit_filtered_gravity_factor_locked(const ImuGravityFilter::Estimate & est);
+
+  /// Env-gated (MOLA_MAPPER3D_TRACE_IMU) diagnostic: logs T_enu_to_map (F0) and
+  /// the distribution of IMU gravity-factor residuals (mean/median/p90/max +
+  /// the mean residual VECTOR norm, which separates a systematic map tilt from
+  /// random motion-acceleration noise). No-op unless the env var is set.
+  void trace_imu_factors_locked(const gtsam::Values & estimate);
 
   /// Accumulates one raw IMU sample into imu_accum_ (max-rate summarization).
   void accumulate_imu_sample_locked(const mrpt::obs::CObservationIMU & imu);

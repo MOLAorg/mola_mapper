@@ -113,3 +113,11 @@ modules:
       # 1.5 m gives margin. The geo-ref ORIENTATION converges to ~0.2 deg thanks
       # to the Xsens absolute-attitude factor, so the 5 deg gate clears quickly.
       convergence_max_position_sigma: ${MOLA_MAPPER3D_CONV_POS_SIGMA|1.5}
+
+      # IMU gravity LEVELING of the central map (see agents.md "IMU gravity
+      # leveling"). The filtered low-dynamics gravity factor (default on) only
+      # levels the map if the otherwise near-rigid LIO orientation chain is made
+      # compliant in roll/pitch; 3 deg lets gravity bend it back to level while
+      # yaw stays pinned (no absolute yaw reference without GNSS). Validated on
+      # DCC01 (gravity-factor chi2 ~16700 -> ~24, residual 2.2 -> 0.6 deg).
+      odometry_edge_min_sigma_rollpitch_deg: ${MOLA_MAPPER3D_ODOM_RP_SIGMA|3.0}

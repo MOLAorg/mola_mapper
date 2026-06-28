@@ -35,12 +35,17 @@ module/include/mola_mapper_3d/   Public headers
   Mapper3D.h                     Main class
   Parameters.h                   YAML-loaded config (navstate group mirrors the smoother)
   WorldModelState.h              Central map state (keyframes, connectivity, geo-ref, GTSAM pimpl)
+  ImuGravityFilter.h             Filtered low-dynamics gravity extractor (see design note)
 module/src/
   Mapper3D.cpp                   Lifecycle: initialize/spinOnce/reset/diagnostics + IMPLEMENTS_MRPT_OBJECT
   Mapper3D_Fusion.cpp            Keyframe management + factor-graph fusion + estimated_navstate
   Mapper3D_KeyframeIngestion.cpp SharedKeyframeMap sink: requestInsertKeyframe() (anchor-once + consecutive chain)
   Mapper3D_GUI.cpp               Optional MolaViz/MolaVizImGui viz: KF tree + graph edges + per-source movable {odom_i} frames + the {enu} geo-ref frame marker (drawn at inverse(T_enu_to_map) while geo-referencing) + GuiWidgetDescription panel (Status / Geo-ref / View tabs: KF/edge/IMU-factor counts, geo-ref T_enu_to_map + GNSS factors + per-source T_map_to_odom drift as trans/rot, now the INSTANTANEOUS derived transform -- see the T_map_to_odom_i design note). The View tab has a "Viz reference frame" combo (map / enu) selecting the scene origin: it applies a `vizXform` (identity for map, `T_enu_to_map` for enu) to all scene containers + movable odom frames, so "enu" renders the map North-oriented (default; {enu} always exists as the identity weak-prior until geo-ref converges). An XYZ "enu" corner is drawn at the scene origin only while the enu frame is selected. NOTE: odom drift is ~0 on pure-odometry runs (no GNSS => {map} == LIO's {odom}); once GNSS/IMU geo-referencing pulls/levels the map the ROTATION grows to the real map-vs-odom angle (e.g. ~11 deg on DCC01) and the TRANSLATION is its lever-arm consequence over the trajectory (100s of m), NOT a sign the map is wrong (DCC01 map is ~6.7 m RMSE to GT).
   Mapper3D_SensorCallbacks.cpp   onNewObservation dispatch -> fuse_*()
+  ImuGravityFilter.cpp           Filtered low-dynamics gravity-direction extractor
+                                  (pure/testable): pools the raw high-rate accel/
+                                  gyro stream, rejects motion-contaminated samples,
+                                  emits ONE gravity dir + data-earned sigma/window
   WorldModelState.cpp            GtsamData pimpl (ISAM2/Values/NonlinearFactorGraph) + map helpers
   Parameters.cpp                 loadFrom(yaml)
   register.cpp                   MOLA_REGISTER_MODULE(mola::mapper_3d::Mapper3D)
@@ -188,6 +193,48 @@ test/                            Unit tests (plain main() + MRPT ASSERT_ macros,
   immune; the corruption is unexplained -- see the plan 4.7 note. Trace with
   `MOLA_MAPPER3D_TRACE_PREDICT=1`. Remove the `has_local_twist` branches once the
   graph V/W is fixed.
+- **IMU gravity leveling (why a per-sample accelerometer factor does NOT level
+  the map, and the filtered-gravity fix).** A single accelerometer sample
+  measures specific force = gravity + body acceleration, so its "up" is
+  contaminated by vehicle dynamics. Diagnosed on MulRan DCC01 (GPS off, IMU on,
+  geo-ref off) with `MOLA_MAPPER3D_TRACE_IMU=1`: the per-sample
+  `MeasuredGravityFactor` residuals were ~2.2 deg RMS (tail to >12 deg) and
+  RANDOM -- their mean residual VECTOR was ~0.07 deg, i.e. zero-mean motion
+  noise, NOT a systematic map tilt. A zero-mean observation can only pin the
+  map's MEAN tilt to ~noise/sqrt(N) (~0.08 deg here) and never bends the stiff
+  LIO orientation chain, so the slow z-drift (sub-degree pitch integrated over
+  km) survived. Three things were ALSO wrong and each mattered:
+  (1) with `estimate_geo_reference:false` and no `fixed_geo_reference`,
+  `T_enu_to_map` (F0) was left FREE (weak `ENU2MAP_WEAK_SIGMA` prior), so it
+  silently ABSORBED the leveling/azimuth (it took a few deg of roll/pitch + the
+  whole yaw) instead of the {map} keyframes -- now F0 is PINNED tight to identity
+  in that mode (`enu_to_map_prior_sigma_no_georef`, `reinitialize_gtsam_locked`);
+  (2) the absolute-attitude `Pose3RotationFactor` imposes the IMU's absolute
+  azimuth, which is meaningless without a GNSS/geo-ref yaw reference and fought
+  LIO heading (60-180 deg residuals) -- it is now ONLY added when
+  `estimate_geo_reference || fixed_geo_reference` (see `apply_imu_observation_locked`);
+  (3) the LIO odometry between-edge chain is near-rigid in roll/pitch (data-driven
+  sigma + a 1e-3 deg floor), so even a clean gravity factor cannot bend it --
+  `odometry_edge_min_sigma_rollpitch_deg` (>0) RAISES only the roll/pitch floor,
+  leaving yaw stiff (no yaw gauge loss). The leveling itself now comes from
+  `ImuGravityFilter` (`imu_use_filtered_gravity`, default true): it pools the raw
+  ~100 Hz accel/gyro over `imu_gravity_window_sec` (1 s), rejects samples with
+  `||a||` far from g or `||w||` above `imu_gravity_gyro_tol_deg`, robustly
+  averages the survivors, and emits ONE `MeasuredGravityFactor` per window with a
+  DATA-EARNED sigma (angular spread / sqrt(n), clamped). Fed in `fuse_imu`,
+  emitted by `emit_filtered_gravity_factor_locked`; the legacy per-sample block
+  (2) in `apply_imu_observation_locked` runs only when
+  `imu_use_filtered_gravity:false`. Measured stacking on DCC01 (gravity-factor
+  residual mean / sum-chi2): per-sample+free-F0 2.2 deg / 16722 -> filtered+pinned
+  F0 1.9 deg / 278 -> + roll/pitch compliance (3 deg) **0.64 deg / 24** (map
+  leveled, systematic-tilt mean-vector back to 0.09 deg). The MulRan launcher
+  sets `odometry_edge_min_sigma_rollpitch_deg: 3.0` (env `MOLA_MAPPER3D_ODOM_RP_SIGMA`).
+  Real IMU preintegration + accel bias (plan 4.12) remains the principled
+  end-state (it would subtract modeled body accel instead of gating it away).
+  **Diagnostic:** `MOLA_MAPPER3D_TRACE_IMU=1` logs F0's roll/pitch/yaw and the
+  gravity-residual distribution (mean/median/p90/max + the mean residual VECTOR
+  norm: ~mean => systematic tilt, <<mean => random motion noise) each solve
+  (`Mapper3D::trace_imu_factors_locked`).
 - Closest existing templates to study: `mola_mapper_2d` (structure + 2D
   pose-graph SLAM) and `mola_state_estimation_smoother` (multi-frame fusion,
   factor builders, FastPredictor).

@@ -200,6 +200,12 @@ public:
   double odometry_edge_uncertainty_multiplier = 1.0;
   double odometry_edge_min_sigma_xyz = 1e-3;      // [m]   additive floor
   double odometry_edge_min_sigma_ang_deg = 1e-3;  // [deg] additive floor
+  /// If > 0, RAISES the odometry-edge roll/pitch floor to this many degrees
+  /// (yaw stays at odometry_edge_min_sigma_ang_deg), making the orientation
+  /// chain compliant in roll/pitch so an IMU gravity factor can level the map.
+  /// 0 disables it. ONLY enable together with a gravity-leveling source
+  /// (imu_use_filtered_gravity); otherwise roll/pitch would drift unconstrained.
+  double odometry_edge_min_sigma_rollpitch_deg = 0.0;
 
   /** @} */
 
@@ -209,12 +215,32 @@ public:
   double imu_attitude_sigma_deg = 2.0;
   double imu_attitude_azimuth_offset_deg = 0.0;
   /// Sigma to estimate the up-vector from accelerometer (gravity alignment).
-  /// Set to 0 to disable.
+  /// Set to 0 to disable. Only used by the LEGACY per-sample gravity path, i.e.
+  /// when imu_use_filtered_gravity is false.
   double imu_normalized_gravity_alignment_sigma = 0.4;
   /// If > 0 and the IMU provides angular velocity, add a body-frame gyro prior
   /// on the keyframe's W variable with this sigma [deg/s]. 0 disables it (the
   /// inter-keyframe angular-velocity integration factor still runs).
   double imu_angular_velocity_sigma_deg = 0.0;
+
+  /// Filtered low-dynamics gravity leveling (recommended; see agents.md "IMU
+  /// gravity leveling"). When true, the RAW accelerometer/gyro stream is pooled
+  /// over a time window, motion-contaminated samples are rejected, and ONE
+  /// MeasuredGravityFactor with a DATA-EARNED sigma is emitted per window,
+  /// instead of one noisy per-sample factor. Replaces imu_normalized_gravity_
+  /// alignment_sigma when enabled.
+  bool imu_use_filtered_gravity = true;
+  /// Length of the gravity-pooling window [s]. ~1 s @ 100 Hz IMU -> ~100 samples.
+  double imu_gravity_window_sec = 1.0;
+  /// Accept a sample only if | ‖a‖ - g | <= this fraction of g.
+  double imu_gravity_accel_tol_frac = 0.05;
+  /// Accept a sample only if the angular rate magnitude is below this [deg/s].
+  double imu_gravity_gyro_tol_deg = 3.0;
+  /// Minimum accepted samples in a window to emit a gravity factor.
+  std::size_t imu_gravity_min_samples = 10;
+  /// Lower / upper clamp on the earned gravity-factor sigma [deg].
+  double imu_gravity_sigma_floor_deg = 0.5;
+  double imu_gravity_sigma_ceil_deg = 5.0;
 
   /** @} */
 
@@ -223,6 +249,11 @@ public:
 
   bool estimate_geo_reference = false;
   std::optional<mola::Georeferencing> fixed_geo_reference;
+  /// Isotropic prior sigma used to PIN T_enu_to_map to identity when neither
+  /// estimate_geo_reference nor fixed_geo_reference is set (pure IMU/odometry).
+  /// Tight so {map}=={enu} and IMU gravity levels the {map} keyframes directly
+  /// (units: rad for rotation DOFs / m for translation; see agents.md).
+  double enu_to_map_prior_sigma_no_georef = 1e-3;
   double convergence_max_position_sigma = 1.0;         // [m]
   double convergence_max_orientation_sigma_deg = 5.0;  // [deg]
   bool publish_estimated_georef_on_convergence = true;

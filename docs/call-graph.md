@@ -53,6 +53,8 @@ flowchart TD
         ACCUM_IMU["accumulate_imu_sample_locked()"]
         BUILD_IMU["build_summarized_imu_locked()"]
         APPLY_IMU["apply_imu_observation_locked()"]
+        GRAV_FILT["ImuGravityFilter (pool/filter raw IMU)"]
+        EMIT_GRAV["emit_filtered_gravity_factor_locked()"]
     end
 
     %% ----------------------------------------------------------------
@@ -138,9 +140,14 @@ flowchart TD
     %% ----------------------------------------------------------------
     %% fuse_imu  (Path A: rate-cap; Path B: direct)
     %% ----------------------------------------------------------------
+    F_IMU -->|"filtered gravity: feed raw"| GRAV_FILT
+    GRAV_FILT -->|"window ready: 1 earned-sigma factor"| EMIT_GRAV
+    EMIT_GRAV -->|"kf allowed"| CREATE_KF
+    EMIT_GRAV -->|"SharedMapOnly"| FIND_NEAR
+    EMIT_GRAV --> GTSAM_PEND
     F_IMU -->|"Path A: accumulate"| ACCUM_IMU
     F_IMU -->|"Path A: build summary"| BUILD_IMU
-    F_IMU -->|"both paths"| APPLY_IMU
+    F_IMU -->|"both paths (attitude/gyro; legacy gravity)"| APPLY_IMU
     APPLY_IMU --> SENSOR_ALLOWED
     APPLY_IMU -->|"kf allowed"| CREATE_KF
     APPLY_IMU -->|"SharedMapOnly"| FIND_NEAR

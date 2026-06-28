@@ -75,6 +75,16 @@ void Mapper3D::initialize(const mrpt::containers::yaml & cfg)
     odometry_labels_re_ = std::regex(params_.do_process_odometry_labels_re);
     gnss_labels_re_ = std::regex(params_.do_process_gnss_labels_re);
 
+    // Configure the filtered-gravity leveling estimator from params:
+    ImuGravityFilter::Parameters gf;
+    gf.window_sec = params_.imu_gravity_window_sec;
+    gf.accel_tol_frac = params_.imu_gravity_accel_tol_frac;
+    gf.gyro_tol_dps = params_.imu_gravity_gyro_tol_deg;
+    gf.min_accepted = params_.imu_gravity_min_samples;
+    gf.sigma_floor_deg = params_.imu_gravity_sigma_floor_deg;
+    gf.sigma_ceil_deg = params_.imu_gravity_sigma_ceil_deg;
+    imu_gravity_filter_.setParams(gf);
+
     state_.clear();
     reinitialize_gtsam_locked();
     reset_sensor_anchors_locked();
@@ -225,6 +235,7 @@ void Mapper3D::reset_sensor_anchors_locked()
   last_wheels_odometry_stamp_.reset();
   imu_accum_.clear();
   last_imu_summary_stamp_.reset();
+  imu_gravity_filter_.clear();
   wheel_chain_last_kf_.reset();
   wheel_chain_anchor_odom_.reset();
   prev_shared_kf_id_.reset();

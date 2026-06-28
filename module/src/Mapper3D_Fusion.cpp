@@ -360,6 +360,7 @@ void Mapper3D::fuse_pose(
   const mrpt::Clock::time_point & timestamp, const mrpt::poses::CPose3DPDFGaussian & pose,
   const std::string & frame_id)
 {
+  const ProfilerEntry tle(profiler_, "fuse_pose");
   {
     auto lck = mrpt::lockHelper(stateMutex_);
     fuse_pose_locked(timestamp, pose, frame_id);
@@ -403,30 +404,7 @@ void Mapper3D::fuse_pose_locked(
 
   // Odometry frame: ALWAYS record the predictor anchor so estimated_navstate()
   // in {odom_i} remains fresh regardless of whether we create a KF.
-  //
-  // TEMPORARY WORKAROUND (remove once the root cause is fixed -- see plan 4.7
-  // "graph V/W corrupted by IMU" investigation): also derive the body-frame
-  // twist from THIS source's consecutive raw poses (finite difference in
-  // {odom_i}). Architecturally the per-keyframe V(kf)/W(kf) GTSAM variables are
-  // body-local and tied to the pose chain, so they SHOULD already be the correct
-  // velocity and immune to IMU/GNSS leveling -- but on MulRan with IMU on they
-  // came out wrong (V collapsed to ~0.2 m/s, W blew up to ~42 rad/s), making the
-  // prediction near-static and freezing LIO. This finite-difference twist is the
-  // stopgap until that graph-variable corruption is understood and fixed.
-  WorldModelState::RawSourcePose newAnchor{timestamp, poseSanitized, {}, false};
-  if (const auto itPrev = state_.last_raw_pose_by_source.find(frame_id_idx);
-      itPrev != state_.last_raw_pose_by_source.end()) {
-    const double dt = mrpt::system::timeDifference(itPrev->second.stamp, timestamp);
-    if (dt > 1e-4 && dt <= params_.max_time_to_use_velocity_model) {
-      // Relative body motion prev^-1 (+) curr, then log() / dt -> body twist.
-      const mrpt::poses::CPose3D rel = poseSanitized.mean - itPrev->second.pose.mean;
-      const auto logv = mrpt::poses::Lie::SE<3>::log(rel);
-      newAnchor.local_twist = mrpt::math::TTwist3D(
-        logv[0] / dt, logv[1] / dt, logv[2] / dt, logv[3] / dt, logv[4] / dt, logv[5] / dt);
-      newAnchor.has_local_twist = true;
-    }
-  }
-  state_.last_raw_pose_by_source[frame_id_idx] = newAnchor;
+  state_.last_raw_pose_by_source[frame_id_idx] = {timestamp, poseSanitized};
 
   if (!sensor_kf_creation_allowed()) {
     // SharedMapOnly (or Auto after first requestInsertKeyframe()): dense
@@ -601,6 +579,7 @@ void Mapper3D::add_odom_chain_edge_locked(KeyFrameID a, KeyFrameID b)
 void Mapper3D::fuse_odometry(
   const mrpt::obs::CObservationOdometry & odom, const std::string & odomName)
 {
+  const ProfilerEntry tle(profiler_, "fuse_odometry");
   auto lck = mrpt::lockHelper(stateMutex_);
 
   if (!last_wheels_odometry_.has_value()) {
@@ -725,6 +704,7 @@ void Mapper3D::fuse_twist(
 
 void Mapper3D::fuse_imu(const mrpt::obs::CObservationIMU & imu)
 {
+  const ProfilerEntry tle(profiler_, "fuse_imu");
   auto lck = mrpt::lockHelper(stateMutex_);
 
   // Path A: max-rate summarization (preferred for real high-rate IMUs). Buffer
@@ -908,6 +888,7 @@ void Mapper3D::apply_imu_observation_locked(
 
 void Mapper3D::fuse_gnss(const mrpt::obs::CObservationGPS & gps)
 {
+  const ProfilerEntry tle(profiler_, "fuse_gnss");
   auto lck = mrpt::lockHelper(stateMutex_);
 
   // Diagnostic: dump EVERY raw GNSS reading (and why it is accepted/rejected),
@@ -1040,6 +1021,7 @@ void Mapper3D::fuse_gnss(const mrpt::obs::CObservationGPS & gps)
 //       frame transforms and (convergence-gated) geo-reference into the caches.
 void Mapper3D::optimize_and_refresh()
 {
+  const ProfilerEntry tle(profiler_, "optimize_and_refresh");
   std::scoped_lock solveLock(solve_mutex_);
 
   auto & gd = *state_.gtsam;
@@ -1354,6 +1336,7 @@ NavState Mapper3D::get_latest_state_and_covariance(KeyFrameID idx) const
 std::optional<NavState> Mapper3D::estimated_navstate(
   const mrpt::Clock::time_point & timestamp, const std::string & frame_id)
 {
+  const ProfilerEntry tle(profiler_, "estimated_navstate");
   // 1) Ensure cached estimates are up to date. With the background optimizer
   // thread, the caches are refreshed off the query path (so this returns
   // quickly from the last committed solve); otherwise flush synchronously here
@@ -1473,12 +1456,8 @@ std::optional<NavState> Mapper3D::estimated_navstate(
         }
 
         freshestStamp = rawAnchor.stamp;
-        // TEMPORARY WORKAROUND (see plan 4.7): use the source's own frame-local
-        // finite-difference twist instead of the (IMU-corrupted) graph V/W.
-        const mrpt::math::TTwist3D & twistOdom =
-          rawAnchor.has_local_twist ? rawAnchor.local_twist : ret.twist;
         const auto poseInOdom =
-          rawAnchor.pose.mean + body_twist_delta(params_, twistOdom, dtFromRaw);
+          rawAnchor.pose.mean + body_twist_delta(params_, ret.twist, dtFromRaw);
         freshestPoseInMap = pFrame->mean + poseInOdom;
       }
 
@@ -1538,13 +1517,6 @@ std::optional<NavState> Mapper3D::estimated_navstate(
   if (std::abs(dtPred) > params_.max_time_to_use_velocity_model) {
     // This source's last raw pose is too old to extrapolate from.
     return {};
-  }
-
-  // TEMPORARY WORKAROUND (see plan 4.7 investigation; remove when the graph
-  // V/W corruption is fixed): prefer the frame-local finite-difference twist
-  // over the central-graph V/W, which came out wrong with IMU on.
-  if (rawAnchor.has_local_twist) {
-    ret.twist = rawAnchor.local_twist;
   }
 
   mrpt::poses::CPose3DPDFGaussian pred;

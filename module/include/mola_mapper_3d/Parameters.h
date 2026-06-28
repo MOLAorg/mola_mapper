@@ -301,6 +301,11 @@ MRPT_FILL_ENUM(KinematicModel::Tricycle);
 MRPT_ENUM_TYPE_END()
 
 MRPT_ENUM_TYPE_BEGIN_NAMESPACE(mola::mapper_3d, mola::mapper_3d::KeyframeCreationSource)
+// Short lower-case aliases accepted in YAML; canonical C++ name registered last
+// so enum->string (logs/diagnostics) returns the full scoped name.
+MRPT_FILL_ENUM_CUSTOM_NAME(KeyframeCreationSource::Auto, "auto");
+MRPT_FILL_ENUM_CUSTOM_NAME(KeyframeCreationSource::SharedMapOnly, "shared_map_only");
+MRPT_FILL_ENUM_CUSTOM_NAME(KeyframeCreationSource::SensorClock, "sensor_clock");
 MRPT_FILL_ENUM(KeyframeCreationSource::Auto);
 MRPT_FILL_ENUM(KeyframeCreationSource::SharedMapOnly);
 MRPT_FILL_ENUM(KeyframeCreationSource::SensorClock);

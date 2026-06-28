@@ -239,6 +239,7 @@ void Mapper3D::reset_sensor_anchors_locked()
 void Mapper3D::spinOnce()
 {
   MRPT_START
+  const ProfilerEntry tle(profiler_, "spinOnce");
   // High-rate extrapolated pose publication. The heavy iSAM2 solve runs on the
   // optimizer thread (when enabled), so this stays cheap: read the latest
   // committed anchor + extrapolate.

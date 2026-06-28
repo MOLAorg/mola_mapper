@@ -53,6 +53,7 @@ namespace mola::mapper_3d
 std::optional<SharedKeyframeMap::KeyFrameID> Mapper3D::requestInsertKeyframe(
   const SharedKeyframeMap::KeyframeInsertRequest & req)
 {
+  const ProfilerEntry tle(profiler_, "requestInsertKeyframe");
   KeyFrameID kfId = 0;
   {
     auto lck = mrpt::lockHelper(stateMutex_);

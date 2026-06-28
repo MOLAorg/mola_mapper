@@ -30,6 +30,7 @@ namespace mola::mapper_3d
 void Mapper3D::onNewObservation(const CObservation::ConstPtr & o)
 {
   MRPT_START
+  const ProfilerEntry tle(profiler_, "onNewObservation");
   if (!o) {
     return;
   }

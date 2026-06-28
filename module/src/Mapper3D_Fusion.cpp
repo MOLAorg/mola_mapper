@@ -1048,6 +1048,10 @@ void Mapper3D::optimize_and_refresh()
   // ---- Phase A: grab pending work + snapshot (brief lock) ----
   gtsam::NonlinearFactorGraph localFactors;
   gtsam::Values localValues;
+  // Holds the new estimate during Phase B; committed to gd.estimate under
+  // stateMutex_ in Phase C so that concurrent readers of gd.estimate (e.g.
+  // link_into_odometry_chain_locked) never see a partially-replaced Values.
+  gtsam::Values localEstimate;
   std::vector<KeyFrameID> snapshotKfIds;
   std::vector<OdometryFrameID> snapshotFrameIds;
   // Per odom source: its latest keyframe + that keyframe's reported odom pose,
@@ -1099,7 +1103,7 @@ void Mapper3D::optimize_and_refresh()
     for (unsigned int i = 1; i < params_.additional_isam2_update_steps; ++i) {
       gd.isam2->update();
     }
-    gd.estimate = gd.isam2->calculateEstimate();
+    localEstimate = gd.isam2->calculateEstimate();
   } catch (const std::exception & e) {
     MRPT_LOG_ERROR_STREAM(
       "[optimize] iSAM2 update/estimate failed (graph may be underconstrained). "
@@ -1123,14 +1127,14 @@ void Mapper3D::optimize_and_refresh()
 
   try {
     for (const KeyFrameID id : snapshotKfIds) {
-      if (!gd.estimate.exists(T(id))) {
+      if (!localEstimate.exists(T(id))) {
         continue;
       }
       TmpKf t;
       t.pose =
-        mrpt::poses::CPose3D(mrpt::gtsam_wrappers::toTPose3D(gd.estimate.at<gtsam::Pose3>(T(id))));
-      const auto linV = gd.estimate.at<gtsam::Vector3>(V(id));
-      const auto angV = gd.estimate.at<gtsam::Vector3>(W(id));
+        mrpt::poses::CPose3D(mrpt::gtsam_wrappers::toTPose3D(localEstimate.at<gtsam::Pose3>(T(id))));
+      const auto linV = localEstimate.at<gtsam::Vector3>(V(id));
+      const auto angV = localEstimate.at<gtsam::Vector3>(W(id));
       t.twist = {linV.x(), linV.y(), linV.z(), angV.x(), angV.y(), angV.z()};
       if (params_.enforce_planar_motion) {
         enforce_planar_pose(t.pose);
@@ -1154,7 +1158,7 @@ void Mapper3D::optimize_and_refresh()
 
     // Marginal covariance ONLY for the latest keyframe (the predictor's anchor
     // in steady state): cheap, and keeps the query path iSAM2-free.
-    if (haveKfs && gd.estimate.exists(T(latestKfId))) {
+    if (haveKfs && localEstimate.exists(T(latestKfId))) {
       latestPoseCov = mrpt::gtsam_wrappers::to_mrpt_se3_cov6(
         gtsam::Matrix6(gd.isam2->marginalCovariance(T(latestKfId))));
       mrpt::math::CMatrixDouble66 twCov;
@@ -1177,11 +1181,11 @@ void Mapper3D::optimize_and_refresh()
         continue;
       }
       const KeyFrameID kf = itLatest->second.first;
-      if (!gd.estimate.exists(T(kf))) {
+      if (!localEstimate.exists(T(kf))) {
         continue;
       }
       const mrpt::poses::CPose3D mapPose(
-        mrpt::gtsam_wrappers::toTPose3D(gd.estimate.at<gtsam::Pose3>(T(kf))));
+        mrpt::gtsam_wrappers::toTPose3D(localEstimate.at<gtsam::Pose3>(T(kf))));
       const mrpt::poses::CPose3D & odomPose = itLatest->second.second;
       mrpt::poses::CPose3DPDFGaussian pdf;
       pdf.mean = mapPose + (mrpt::poses::CPose3D() - odomPose);  // mapPose (+) inv(odomPose)
@@ -1197,7 +1201,7 @@ void Mapper3D::optimize_and_refresh()
     }
 
     if (estimateGeoref) {
-      const auto Te = gd.estimate.at<gtsam::Pose3>(symbol_T_enu_to_map);
+      const auto Te = localEstimate.at<gtsam::Pose3>(symbol_T_enu_to_map);
       const auto Tecov = gd.isam2->marginalCovariance(symbol_T_enu_to_map);
       mrpt::poses::CPose3DPDFGaussian pdf;
       pdf.mean = mrpt::poses::CPose3D(mrpt::gtsam_wrappers::toTPose3D(Te));
@@ -1246,6 +1250,10 @@ void Mapper3D::optimize_and_refresh()
   // ---- Phase C: commit caches (brief lock) ----
   {
     auto lck = mrpt::lockHelper(stateMutex_);
+    // Commit the new estimate atomically under stateMutex_ so that concurrent
+    // readers of gd.estimate (link_into_odometry_chain_locked, etc.) never
+    // observe a partially-replaced Values object.
+    gd.estimate = localEstimate;
     for (const auto & [id, t] : tmpStates) {
       const auto it = state_.last_estimated_states.find(id);
       if (it == state_.last_estimated_states.end()) {

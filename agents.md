@@ -8,6 +8,8 @@ Full plan + task checklist (keep it in sync as you work):
 `~/plans/900_mola_mapper_3d_plan.md`. Do NOT mention phase numbers in this repo
 docs or code.
 
+Use clang-format-14 on generated code.
+
 ## What it is
 
 `mola::mapper_3d::Mapper3D` implements `mola::NavStateFilter`,

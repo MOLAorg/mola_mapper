@@ -402,9 +402,28 @@ HAS a `/odom` wheel-odometry topic the dataset's own AGENTS.md note didn't
 mention). This dataset has LiDAR + IMU + wheels, NO GNSS. See lesson 6 above
 for the `MOLA_MAPPER3D_IMU_MAX_RATE_HZ`/`MOLA_MAPPER3D_ODOM_MAX_RATE_HZ` caps.
 
+## Call graph
+
+`docs/call-graph.md` contains a Mermaid diagram tracing every major public-API
+method down to its internal helpers, state stores, and the background optimizer.
+**Keep it in sync with the code**: update it whenever you add, rename, or
+significantly rewire any of the following:
+
+- A public method in `Mapper3D.h` (interface implementations or extensions)
+- The call chain inside `fuse_pose_locked()`, `request_insert_keyframe_locked()`,
+  `optimize_and_refresh()`, or `estimated_navstate()`
+- A new helper that sits on the hot path (e.g. a new `*_locked()` function called
+  from multiple fusion paths)
+- A change in the `sensor_kf_creation_allowed()` gate logic
+- A change in the locking model (which mutex covers which call)
+
+The table at the bottom of the diagram ("Key invariants") and the
+"SharedMapOnly vs Auto mode" section must also be updated if the locking model
+or gating logic changes.
+
 ## Code style
 
 clang-format-14; no one-line `if`; one variable per line; no em/en dashes;
 American spelling; anonymous namespaces over `static`. clang-tidy per the repo
-`.clang-tidy`. Don't sign commits as an AI agent. Keep this file and the plan in
-sync with the code.
+`.clang-tidy`. Don't sign commits as an AI agent. Keep this file, the plan, and
+`docs/call-graph.md` in sync with the code.

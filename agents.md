@@ -192,10 +192,20 @@ test/                            Unit tests (plain main() + MRPT ASSERT_ macros,
   only a determinate, weak-prior'd placeholder pinned by a SINGLE one-time
   first-keyframe gauge anchor (needed so the first keyframe is determinate when no
   `link_first_pose_to_reference_origin` is set); it is never read. Consumed by the
-  GUI drift readout and the per-source movable viz frame. NOTE: the readout's
-  TRANSLATION is lever-arm-dominated (an N-degree map-vs-odom rotation over a
-  multi-km trajectory shows as 100s of m of transform translation even though the
-  map matches GT to a few m); the ROTATION component is the meaningful indicator.
+  GUI drift readout and the per-source movable viz frame. **It is computed for the
+  keyframe-CREATING source and republished under the base odometry frame name.**
+  In SharedMapOnly mode only the SharedKeyframeMap source `"<name>_kf"` creates
+  keyframes (the dense `fuse_pose("<name>")` returns early), so `latest_kf_by_odom_frame_`
+  -- hence `T_map_to_odom_i` -- exists only for `"<name>_kf"`. But the front end
+  draws its dense clouds / local map (and queries `estimated_navstate`) under the
+  BASE frame `"<name>"` (= `publish_reference_frame`), so `optimize_and_refresh()`
+  stores the transform under `"<name>"` (stripping `_kf`); otherwise LIO's local
+  map stays pinned at the origin while the {map} keyframe path is geo-referenced.
+  This is also what `estimated_T_map_to_odometry_frame("<name>")` (ROS map->odom
+  /tf) reads. NOTE: the readout's TRANSLATION is lever-arm-dominated (an N-degree
+  map-vs-odom rotation over a multi-km trajectory shows as 100s of m of transform
+  translation even though the map matches GT to a few m); the ROTATION component
+  is the meaningful indicator.
 - **`estimated_navstate(t, {odom_i})` is frame-local, NOT reconstructed through
   `{map}`** (`Mapper3D_Fusion.cpp`). A non-reference-frame prediction anchors on
   the source's OWN last raw pose in `{odom_i}` (stored per source in

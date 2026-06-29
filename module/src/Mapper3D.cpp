@@ -95,9 +95,7 @@ void Mapper3D::initialize(const mrpt::containers::yaml & cfg)
     reset_sensor_anchors_locked();
     // Full (re)initialization wipes the map, so the diagnostic counters and the
     // geo-ref-converged announcement reset too (reset() does NOT, see below).
-    gnss_factors_inserted_ = 0;
-    imu_factors_inserted_ = 0;
-    georef_converged_announced_ = false;
+    geo_ref_counters_ = {};
   }
 
   // Optional visualization config + attach to a visualizer module (MolaViz /
@@ -348,8 +346,11 @@ void Mapper3D::getDiagnostics(std::vector<mola::DiagnosticStatusMsg> & status)
   msg.values.push_back({"keyframes", std::to_string(state_.time_to_kf_id.size())});
   msg.values.push_back({"odometry_frames", std::to_string(state_.known_odom_frames.size())});
   msg.values.push_back({"geo_referenced", state_.geo_reference.has_value() ? "yes" : "no"});
-  msg.values.push_back({"gnss_factors", std::to_string(gnss_factors_inserted_)});
-  msg.values.push_back({"imu_factors", std::to_string(imu_factors_inserted_)});
+  msg.values.push_back({"gnss_factors", std::to_string(geo_ref_counters_.gnss)});
+  msg.values.push_back(
+    {"imu_factors", std::to_string(
+                      geo_ref_counters_.imu_attitude + geo_ref_counters_.imu_gravity +
+                      geo_ref_counters_.imu_omega)});
 
   // Geo-referencing transform + per-source odometry-frame drift vs {map}.
   if (const auto itEnu = state_.last_estimated_frames.find(0);

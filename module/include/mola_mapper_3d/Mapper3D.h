@@ -217,10 +217,15 @@ private:
   ImuGravityFilter imu_gravity_filter_;
 
   // --- Geo-referencing diagnostics counters (guarded by stateMutex_) ---
-  std::size_t gnss_factors_inserted_ = 0;
-  std::size_t gnss_readings_seen_ = 0;
-  std::size_t imu_factors_inserted_ = 0;
-  bool georef_converged_announced_ = false;
+  struct GeoRefCounters
+  {
+    std::size_t gnss = 0;  // factor counts
+    std::size_t gnss_readings_seen = 0;
+    std::size_t imu_attitude = 0;
+    std::size_t imu_gravity = 0;
+    std::size_t imu_omega = 0;
+    bool georef_converged_announced = false;
+  } geo_ref_counters_;
 
   // Wheel-odometry relative-chaining aggregation (aggregate_high_rate_into_edges):
   // the keyframe the wheel chain last attached to, and the absolute wheel

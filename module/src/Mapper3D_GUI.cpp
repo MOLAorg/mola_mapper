@@ -69,7 +69,9 @@ void Mapper3D::updateVisualization()
   std::optional<mrpt::poses::CPose3D> latestVehiclePose;
   bool hasGeoref = false;
   std::size_t gnssFactors = 0;
-  std::size_t imuFactors = 0;
+  std::size_t imuFactorsGravity = 0;
+  std::size_t imuFactorsAttitude = 0;
+  std::size_t imuFactorsOmega = 0;
   std::optional<mrpt::topography::TGeodeticCoords> tentativeGeo;
   std::optional<mrpt::poses::CPose3DPDFGaussian> enuToMap;
 
@@ -120,14 +122,16 @@ void Mapper3D::updateVisualization()
     }
 
     hasGeoref = state_.geo_reference.has_value();
-    gnssFactors = gnss_factors_inserted_;
-    imuFactors = imu_factors_inserted_;
+    gnssFactors = geo_ref_counters_.gnss;
+    imuFactorsGravity = geo_ref_counters_.imu_gravity;
+    imuFactorsAttitude = geo_ref_counters_.imu_attitude;
+    imuFactorsOmega = geo_ref_counters_.imu_omega;
     tentativeGeo = state_.tentative_geo_coord_reference;
     if (const auto itEnu = state_.last_estimated_frames.find(0);
         itEnu != state_.last_estimated_frames.end()) {
       enuToMap = itEnu->second;
     }
-  }
+  }  // end of stateMutex_ lock
 
   // Viz reference frame: the transform that maps {map}-frame coordinates into
   // the scene origin selected by the user (View tab). For {map} it is identity;
@@ -285,9 +289,11 @@ void Mapper3D::updateVisualization()
     // characteristic drift is z/tilt, so the ROTATION term is the informative
     // one (the translation often stays near zero because the tight
     // consecutive-keyframe edges keep {map} and {odom} aligned in position).
-    // Note: a SharedKeyframeMap sink frame (e.g. "odom_kf") is anchored to the
-    // first keyframe only, so it stays ~0 by design; the dense fuse_pose() frame
-    // (e.g. "odom") is the one that tracks ongoing drift.
+    // Note: in SharedMapOnly mode the SharedKeyframeMap source ("<name>_kf") is
+    // the only one that creates keyframes, so it is where T_map_to_odom_i is
+    // computed; optimize_and_refresh() then republishes it under the base frame
+    // ("<name>", the publish_reference_frame the front end draws / queries
+    // under), which is what appears here and what the movable viz frame uses.
     std::string driftStr = "Odom drift:";
     if (odomFrames.empty()) {
       driftStr += " (none)";
@@ -301,7 +307,9 @@ void Mapper3D::updateVisualization()
         mrpt::format(" %s=%.2fm/%.1fdeg", name.c_str(), pose.translation().norm(), angleDeg);
     }
     gui_.lbDrift->set(driftStr);
-    gui_.lbImu->set(mrpt::format("IMU factors: %zu", imuFactors));
+    gui_.lbImu->set(mrpt::format(
+      "IMU factors: grav=%zu att=%zu omega=%zu", imuFactorsGravity, imuFactorsAttitude,
+      imuFactorsOmega));
   }
 }
 

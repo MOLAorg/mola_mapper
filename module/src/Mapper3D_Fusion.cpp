@@ -854,7 +854,6 @@ void Mapper3D::emit_imu_factors_for_keyframe_locked(KeyFrameID newKf)
   }
   const auto window = imu_buffer_.window_since(tFrom, tTo);
 
-  bool addedFactor = false;
   const auto identitySensor = gtsam::Pose3::Identity();
 
   // (1) Robust gravity-leveling factor: pool the interval's proper-acceleration
@@ -880,7 +879,7 @@ void Mapper3D::emit_imu_factors_for_keyframe_locked(KeyFrameID newKf)
       auto accNoise = gtsam::noiseModel::Isotropic::Sigma(3, mrpt::DEG2RAD(est->sigma_deg));
       state_.gtsam->newFactors.emplace_shared<mola::factors::MeasuredGravityFactor>(
         symbol_T_enu_to_map, T(newKf), identitySensor, g, accNoise);
-      addedFactor = true;
+      geo_ref_counters_.imu_gravity++;
 
       thread_local const bool traceGeom = mrpt::get_env<bool>("MOLA_MAPPER3D_TRACE_GEOM", false);
       if (traceGeom) {
@@ -921,7 +920,7 @@ void Mapper3D::emit_imu_factors_for_keyframe_locked(KeyFrameID newKf)
       gtsam::noiseModel::Isotropic::Sigma(3, mrpt::DEG2RAD(params_.imu_attitude_sigma_deg));
     state_.gtsam->newFactors.emplace_shared<mola::factors::Pose3RotationFactor>(
       symbol_T_enu_to_map, T(newKf), identitySensor, measuredRotation, rotationNoise);
-    addedFactor = true;
+    geo_ref_counters_.imu_attitude++;
   }
 
   // (3) Optional gyroscope angular-velocity prior (averaged over the interval,
@@ -935,15 +934,15 @@ void Mapper3D::emit_imu_factors_for_keyframe_locked(KeyFrameID newKf)
     auto wNoise =
       gtsam::noiseModel::Isotropic::Sigma(3, mrpt::DEG2RAD(params_.imu_angular_velocity_sigma_deg));
     state_.gtsam->newFactors.addPrior(W(newKf), wBody, wNoise);
-    addedFactor = true;
+    geo_ref_counters_.imu_omega++;
   }
 
-  if (addedFactor) {
-    imu_factors_inserted_++;
-  }
   MRPT_LOG_THROTTLE_DEBUG_FMT(
-    5.0, "[fuse_imu] kf=%zu (interval %zu accel / %zu ori samples) factors so far=%zu",
-    static_cast<size_t>(newKf), window.a_b.size(), window.q.size(), imu_factors_inserted_);
+    5.0,
+    "[fuse_imu] kf=%zu (interval %zu accel / %zu ori samples) factors so far: grav=%zu att=%zu "
+    "omega=%zu",
+    static_cast<size_t>(newKf), window.a_b.size(), window.q.size(), geo_ref_counters_.imu_gravity,
+    geo_ref_counters_.imu_attitude, geo_ref_counters_.imu_omega);
 }
 
 void Mapper3D::trace_imu_factors_locked(const gtsam::Values & estimate)
@@ -1115,7 +1114,7 @@ void Mapper3D::fuse_gnss(const mrpt::obs::CObservationGPS & gps)
   // un-throttled, when MOLA_MAPPER3D_TRACE_GPS is set. Lets us inspect the data
   // quality (height constancy + per-fix ENU covariance) end to end.
   thread_local const bool traceGps = mrpt::get_env<bool>("MOLA_MAPPER3D_TRACE_GPS", false);
-  gnss_readings_seen_++;
+  geo_ref_counters_.gnss_readings_seen++;
   if (traceGps) {
     std::string lla = "(no GGA)";
     int fixq = -1;
@@ -1135,7 +1134,7 @@ void Mapper3D::fuse_gnss(const mrpt::obs::CObservationGPS & gps)
         std::sqrt(C(2, 2)));
     }
     MRPT_LOG_INFO_FMT(
-      "[GPS-TRACE] #%zu t=%.3f %s %s", static_cast<size_t>(gnss_readings_seen_),
+      "[GPS-TRACE] #%zu t=%.3f %s %s", static_cast<size_t>(geo_ref_counters_.gnss_readings_seen),
       mrpt::Clock::toDouble(gps.timestamp), lla.c_str(), cov.c_str());
   }
 
@@ -1208,21 +1207,21 @@ void Mapper3D::fuse_gnss(const mrpt::obs::CObservationGPS & gps)
 
   state_.gtsam->newFactors.emplace_shared<mola::factors::FactorGnssMapEnu>(
     symbol_T_enu_to_map, T(this_kf_id), sensorOnVehicle, observedEnu, enuNoiseModel);
-  gnss_factors_inserted_++;
+  geo_ref_counters_.gnss++;
 
   if (traceGps) {
     MRPT_LOG_INFO_FMT(
       "[GPS-TRACE] #%zu ACCEPTED -> kf=%zu ENU=(%.2f, %.2f, %.2f) sigma_enu=(%.2f, %.2f, %.2f) "
       "factors=%zu",
-      static_cast<size_t>(gnss_readings_seen_), static_cast<size_t>(this_kf_id), ENU_point.x,
-      ENU_point.y, ENU_point.z, std::sqrt((*gps.covariance_enu)(0, 0)),
+      static_cast<size_t>(geo_ref_counters_.gnss_readings_seen), static_cast<size_t>(this_kf_id),
+      ENU_point.x, ENU_point.y, ENU_point.z, std::sqrt((*gps.covariance_enu)(0, 0)),
       std::sqrt((*gps.covariance_enu)(1, 1)), std::sqrt((*gps.covariance_enu)(2, 2)),
-      gnss_factors_inserted_);
+      geo_ref_counters_.gnss);
   }
   MRPT_LOG_THROTTLE_DEBUG_FMT(
     2.0, "[fuse_gnss] kf=%zu ENU=(%.2f, %.2f, %.2f) fix_quality=%d factors=%zu",
     static_cast<size_t>(this_kf_id), ENU_point.x, ENU_point.y, ENU_point.z,
-    static_cast<int>(gga.fields.fix_quality), gnss_factors_inserted_);
+    static_cast<int>(gga.fields.fix_quality), geo_ref_counters_.gnss);
 
   notify_optimizer();
 }
@@ -1479,9 +1478,36 @@ void Mapper3D::optimize_and_refresh()
     std::string driftTrace;
     const auto & idToName = state_.known_odom_frames.getInverseMap();
     for (const auto & [fid, pdf] : tmpFrames) {
-      state_.last_estimated_frames[fid] = pdf;
+      // Publish the transform under the REAL odometry frame the front end uses
+      // to BOTH query estimated_navstate() and draw its dense clouds / local map
+      // (its publish_reference_frame, e.g. "odom"). The keyframes that DEFINE
+      // this transform are registered under a dedicated "<name>_kf"
+      // SharedKeyframeMap source (so the dense fuse_pose() anchor tie and the
+      // keyframe ties never collide on one graph variable), and in SharedMapOnly
+      // mode ONLY that "_kf" source creates keyframes -- so the transform is
+      // computed there. But "<name>_kf" is an internal alias with no
+      // visualization geometry of its own. Remap it to the base "<name>" so the
+      // movable viz frame node LIO draws its local map under (and the ROS
+      // map->odom /tf for "<name>", via estimated_T_map_to_odometry_frame) is
+      // actually repositioned; otherwise that frame stays at identity and LIO's
+      // local map sits at the origin while the {map} keyframe path is correctly
+      // geo-referenced. The two names denote the SAME physical odometry frame, so
+      // the transform is identical.
+      auto targetFid = fid;
       const auto itName = idToName.find(fid);
-      const std::string nm = (itName != idToName.end()) ? itName->second : std::to_string(fid);
+      std::string nm = (itName != idToName.end()) ? itName->second : std::to_string(fid);
+      static const std::string kKfSuffix = "_kf";
+      if (
+        nm.size() > kKfSuffix.size() &&
+        nm.compare(nm.size() - kKfSuffix.size(), kKfSuffix.size(), kKfSuffix) == 0) {
+        const std::string baseName = nm.substr(0, nm.size() - kKfSuffix.size());
+        const auto itBase = state_.known_odom_frames.find_key(baseName);
+        if (itBase != state_.known_odom_frames.getDirectMap().end()) {
+          targetFid = itBase->second;
+          nm = baseName;
+        }
+      }
+      state_.last_estimated_frames[targetFid] = pdf;
       const double cosAngle =
         std::clamp((pdf.mean.getRotationMatrix().trace() - 1.0) * 0.5, -1.0, 1.0);
       driftTrace += mrpt::format(
@@ -1496,8 +1522,8 @@ void Mapper3D::optimize_and_refresh()
       state_.last_estimated_frames[REFERENCE_FRAME_ID] = *tmpEnu;
     }
     if (tmpGeoRef.has_value()) {
-      if (!georef_converged_announced_) {
-        georef_converged_announced_ = true;
+      if (!geo_ref_counters_.georef_converged_announced) {
+        geo_ref_counters_.georef_converged_announced = true;
         const auto [posSigma, oriSigmaDeg] =
           max_pos_and_orientation_sigma(tmpGeoRef->T_enu_to_map.cov);
         const auto & m = tmpGeoRef->T_enu_to_map.mean;
@@ -1505,7 +1531,7 @@ void Mapper3D::optimize_and_refresh()
           "[geo-ref] CONVERGED: T_enu_to_map=(%.2f, %.2f, %.2f, yaw=%.2f deg) "
           "sigma_pos=%.3f m sigma_ori=%.3f deg after %zu GNSS factors.",
           m.x(), m.y(), m.z(), mrpt::RAD2DEG(m.yaw()), posSigma, oriSigmaDeg,
-          gnss_factors_inserted_);
+          geo_ref_counters_.gnss);
       }
       state_.geo_reference = tmpGeoRef;
     }

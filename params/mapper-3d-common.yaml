@@ -33,13 +33,13 @@ max_time_to_use_velocity_model: ${MOLA_MAX_TIME_TO_USE_VELOCITY_MODEL|0.75}
 min_time_difference_to_create_new_frame: 0.05
 time_between_frames_to_warning: 3.0
 gnss_nearby_keyframe_stamp_tolerance: 1.0
-imu_nearby_keyframe_stamp_tolerance: 0.10
 
-# Max rate [Hz] of summarized high-rate sensor data inserted into the graph
-# (0 = disabled = insert every reading). IMU samples are buffered and fused as
-# at most this many SUMMARIZED observations/second (averaged accel+gyro, latest
-# orientation); wheel-odom increments are merged (anchor held) up to this rate.
-imu_max_insert_rate_hz: ${MOLA_MAPPER3D_IMU_MAX_RATE_HZ|5.0}
+# Max rate [Hz] of summarized wheel-odometry increments inserted into the graph
+# (0 = disabled = insert every reading); increments are merged (anchor held) up
+# to this rate. NOTE: the IMU is NOT rate-capped here anymore: it never creates
+# keyframes nor inserts per-sample factors. Every reading is accumulated in a
+# LocalVelocityBuffer (lever-arm corrected) and the backend factors are built
+# once per real keyframe, so the IMU factor rate equals the keyframe rate.
 odometry_max_insert_rate_hz: ${MOLA_MAPPER3D_ODOM_MAX_RATE_HZ|5.0}
 
 # High-rate IMU/wheels aggregation: do NOT spawn a keyframe per sample. Share a
@@ -71,10 +71,24 @@ link_first_pose_to_reference_origin_sigma: ${MOLA_LINK_FIRST_POSE_SIGMA|}
 # --------------------------------------------------------------------------
 # IMU Related
 # --------------------------------------------------------------------------
+# Absolute-attitude factor sigma [deg] (0 disables). Added at every keyframe
+# whenever the IMU reports an orientation quaternion, REGARDLESS of geo-ref: the
+# absolute attitude is an azimuth reference, so it lets iSAM2 auto-estimate the
+# geo-reference (T_enu_to_map yaw) even with GNSS off (the no-geo-ref F0 prior is
+# yaw-free). Gravity leveling comes from the buffered-gravity factor below.
 imu_attitude_sigma_deg: "${MOLA_IMU_ATTITUDE_SIGMA|2.0}"
 imu_attitude_azimuth_offset_deg: "${MOLA_IMU_ATTITUDE_AZIMUTH_OFFSET|0.0}"
-imu_normalized_gravity_alignment_sigma: "${MOLA_IMU_GRAVITY_ALIGNMENT_SIGMA|0.4}"
 imu_angular_velocity_sigma_deg: ${MOLA_IMU_ANGVEL_SIGMA|0.0}
+
+# IMU gravity-leveling reducer: the proper-acceleration samples accumulated
+# between two keyframes are pooled, motion-contaminated ones rejected, and ONE
+# MeasuredGravityFactor with a data-earned sigma is emitted on the keyframe.
+imu_gravity_window_sec: ${MOLA_IMU_GRAVITY_WINDOW_SEC|1.0}
+imu_gravity_accel_tol_frac: ${MOLA_IMU_GRAVITY_ACCEL_TOL|0.05}
+imu_gravity_gyro_tol_deg: ${MOLA_IMU_GRAVITY_GYRO_TOL|3.0}
+imu_gravity_min_samples: ${MOLA_IMU_GRAVITY_MIN_SAMPLES|10}
+imu_gravity_sigma_floor_deg: ${MOLA_IMU_GRAVITY_SIGMA_FLOOR|0.5}
+imu_gravity_sigma_ceil_deg: ${MOLA_IMU_GRAVITY_SIGMA_CEIL|5.0}
 
 # --------------------------------------------------------------------------
 # Geo-referencing

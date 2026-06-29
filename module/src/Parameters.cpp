@@ -40,11 +40,8 @@ void Parameters::loadFrom(const mrpt::containers::yaml & cfg)
   MCP_LOAD_OPT(cfg, min_time_difference_to_create_new_frame);
   MCP_LOAD_OPT(cfg, time_between_frames_to_warning);
   MCP_LOAD_OPT(cfg, gnss_nearby_keyframe_stamp_tolerance);
-  MCP_LOAD_OPT(cfg, imu_nearby_keyframe_stamp_tolerance);
 
-  MCP_LOAD_OPT(cfg, imu_max_insert_rate_hz);
   MCP_LOAD_OPT(cfg, odometry_max_insert_rate_hz);
-  ASSERT_GE_(imu_max_insert_rate_hz, .0);
   ASSERT_GE_(odometry_max_insert_rate_hz, .0);
 
   MCP_LOAD_OPT(cfg, aggregate_high_rate_into_edges);
@@ -103,10 +100,8 @@ void Parameters::loadFrom(const mrpt::containers::yaml & cfg)
   // -----------------------------------------------------
   MCP_LOAD_OPT(cfg, imu_attitude_sigma_deg);
   MCP_LOAD_OPT(cfg, imu_attitude_azimuth_offset_deg);
-  MCP_LOAD_OPT(cfg, imu_normalized_gravity_alignment_sigma);
   MCP_LOAD_OPT(cfg, imu_angular_velocity_sigma_deg);
 
-  MCP_LOAD_OPT(cfg, imu_use_filtered_gravity);
   MCP_LOAD_OPT(cfg, imu_gravity_window_sec);
   MCP_LOAD_OPT(cfg, imu_gravity_accel_tol_frac);
   MCP_LOAD_OPT(cfg, imu_gravity_gyro_tol_deg);

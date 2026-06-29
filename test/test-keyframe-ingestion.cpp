@@ -127,7 +127,6 @@ void test_keyframe_ingestion_imu_corrects_drift()
 params:
   vehicle_frame_name: "base_link"
   reference_frame_name: "map"
-  imu_max_insert_rate_hz: 0.0
   odometry_max_insert_rate_hz: 0.0
   kinematic_model: KinematicModel::ConstantVelocity
   max_time_to_use_velocity_model: 2.0
@@ -135,7 +134,9 @@ params:
   sigma_random_walk_acceleration_angular: 1.0
   sigma_integrator_position: 0.10
   sigma_integrator_orientation: 0.5
-  imu_normalized_gravity_alignment_sigma: 0.2
+  # Dense (per-step) keyframes => ~1 IMU sample per interval; allow the gravity
+  # reducer to emit from a single sample (real LIO keyframes are sparse).
+  imu_gravity_min_samples: 1
   keyframe_ingestion_sigma_lin: 0.02
   keyframe_ingestion_sigma_ang_deg: 0.5
   link_first_pose_to_reference_origin_sigma: 0.01
@@ -173,12 +174,10 @@ params:
     const mrpt::poses::CPose3D deltaOdom(v * T, 0, 0, 0.0, pitchDriftPerStep, 0.0);
     currentOdom = currentOdom + deltaOdom;
 
-    const auto req = make_request(t, "odom_lidar", currentOdom, 0.01, 0.3);
-    const auto kfId = nav.requestInsertKeyframe(req);
-    ASSERT_(kfId.has_value());
-
     // IMU: the robot is physically flat; the accelerometer senses gravity
     // straight down in the body frame regardless of LIO's drifted estimate.
+    // Streamed in BEFORE the keyframe request, so the sample is already
+    // buffered when the keyframe closes and drains its interval.
     mrpt::obs::CObservationIMU obsImu;
     obsImu.timestamp = t;
     obsImu.sensorLabel = "imu";
@@ -186,6 +185,10 @@ params:
     obsImu.set(mrpt::obs::IMU_Y_ACC, rng.drawGaussian1D(0.0, 0.05));
     obsImu.set(mrpt::obs::IMU_Z_ACC, 9.81 + rng.drawGaussian1D(0.0, 0.05));
     nav.fuse_imu(obsImu);
+
+    const auto req = make_request(t, "odom_lidar", currentOdom, 0.01, 0.3);
+    const auto kfId = nav.requestInsertKeyframe(req);
+    ASSERT_(kfId.has_value());
 
     if (i == kMid1Step) {
       tMid1 = t;

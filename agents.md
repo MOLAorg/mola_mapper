@@ -35,17 +35,22 @@ module/include/mola_mapper_3d/   Public headers
   Mapper3D.h                     Main class
   Parameters.h                   YAML-loaded config (navstate group mirrors the smoother)
   WorldModelState.h              Central map state (keyframes, connectivity, geo-ref, GTSAM pimpl)
-  ImuGravityFilter.h             Filtered low-dynamics gravity extractor (see design note)
+  ImuGravityFilter.h             Robust low-dynamics gravity-direction reducer
+                                 (now driven per-keyframe-interval; see design note)
 module/src/
   Mapper3D.cpp                   Lifecycle: initialize/spinOnce/reset/diagnostics + IMPLEMENTS_MRPT_OBJECT
   Mapper3D_Fusion.cpp            Keyframe management + factor-graph fusion + estimated_navstate
   Mapper3D_KeyframeIngestion.cpp SharedKeyframeMap sink: requestInsertKeyframe() (anchor-once + consecutive chain)
   Mapper3D_GUI.cpp               Optional MolaViz/MolaVizImGui viz: KF tree + graph edges + per-source movable {odom_i} frames + the {enu} geo-ref frame marker (drawn at inverse(T_enu_to_map) while geo-referencing) + GuiWidgetDescription panel (Status / Geo-ref / View tabs: KF/edge/IMU-factor counts, geo-ref T_enu_to_map + GNSS factors + per-source T_map_to_odom drift as trans/rot, now the INSTANTANEOUS derived transform -- see the T_map_to_odom_i design note). The View tab has a "Viz reference frame" combo (map / enu) selecting the scene origin: it applies a `vizXform` (identity for map, `T_enu_to_map` for enu) to all scene containers + movable odom frames, so "enu" renders the map North-oriented (default; {enu} always exists as the identity weak-prior until geo-ref converges). An XYZ "enu" corner is drawn at the scene origin only while the enu frame is selected. NOTE: odom drift is ~0 on pure-odometry runs (no GNSS => {map} == LIO's {odom}); once GNSS/IMU geo-referencing pulls/levels the map the ROTATION grows to the real map-vs-odom angle (e.g. ~11 deg on DCC01) and the TRANSLATION is its lever-arm consequence over the trajectory (100s of m), NOT a sign the map is wrong (DCC01 map is ~6.7 m RMSE to GT).
   Mapper3D_SensorCallbacks.cpp   onNewObservation dispatch -> fuse_*()
-  ImuGravityFilter.cpp           Filtered low-dynamics gravity-direction extractor
-                                  (pure/testable): pools the raw high-rate accel/
-                                  gyro stream, rejects motion-contaminated samples,
-                                  emits ONE gravity dir + data-earned sigma/window
+  ImuGravityFilter.cpp           Robust low-dynamics gravity-direction reducer
+                                  (pure/testable): given a window of (already
+                                  lever-arm-corrected) accel/gyro samples, rejects
+                                  motion-contaminated ones, robustly averages the
+                                  survivors -> ONE gravity dir + data-earned sigma.
+                                  fuse_imu feeds it per keyframe interval (the raw
+                                  buffering/lever-arm is mola_imu_preintegration's
+                                  ImuTransformer + LocalVelocityBuffer, reused)
   WorldModelState.cpp            GtsamData pimpl (ISAM2/Values/NonlinearFactorGraph) + map helpers
   Parameters.cpp                 loadFrom(yaml)
   register.cpp                   MOLA_REGISTER_MODULE(mola::mapper_3d::Mapper3D)
@@ -97,17 +102,33 @@ test/                            Unit tests (plain main() + MRPT ASSERT_ macros,
   `advertiseUpdatedLocalization()` at `high_rate_pose_publish_rate_hz` (gated on
   a subscriber existing). This is the first thing that actually drives the
   `LocalizationSourceBase` output.
-- **High-rate IMU/wheels aggregation** (`aggregate_high_rate_into_edges`, opt-in;
+- **IMU never creates keyframes nor inserts per-sample factors** (rewritten
+  2026-06-29). `fuse_imu()` ONLY moves each raw reading to the vehicle frame with
+  a per-`sensorLabel` `mola::imu::ImuTransformer` (rotation + rigid lever-arm /
+  centripetal correction `a_body = R*a_imu - alpha x t - w x (w x t)`, removing
+  the motion contamination the old code could only gate away) and pushes proper
+  accel / angular velocity / absolute attitude into ONE global
+  `mola::imu::LocalVelocityBuffer` (`imu_buffer_`, `max_time_window` >= the max
+  keyframe gap so a full interval survives pruning). It adds NO factor and wakes
+  no optimizer. The backend factors are built later, ONCE per real keyframe, by
+  `emit_imu_factors_for_keyframe_locked()` (hooked at the tail of
+  `create_or_get_keyframe_by_timestamp_locked()` so IMU rides WHATEVER source's
+  keyframe cadence): it drains `window_since(prev_imu_kf_t, new_kf_t)` and emits
+  the gravity/attitude/gyro factors below. So the IMU factor rate == the keyframe
+  rate (no `imu_max_insert_rate_hz` summarization anymore; that param + the
+  bespoke `imu_accum_` are deleted). The predictor side will read the same buffer
+  (future work, plan 4.12). See `Mapper3D_Fusion.cpp::fuse_imu` /
+  `ingest_imu_sample_locked` / `emit_imu_factors_for_keyframe_locked`.
+- **High-rate wheels aggregation** (`aggregate_high_rate_into_edges`, opt-in;
   default false so unit tests are unchanged; true in the BotanicGarden launch):
-  IMU and wheels no longer each spawn a keyframe per sample. They SHARE a
-  bounded-rate keyframe clock (`sensor_keyframe_min_period`, default 0.5 s), and
-  wheel odometry is aggregated into ONE relative-pose edge
+  wheels no longer spawn a keyframe per sample. They share a bounded-rate
+  keyframe clock (`sensor_keyframe_min_period`, default 0.5 s), and wheel
+  odometry is aggregated into ONE relative-pose edge
   `Between(T(prev_kf), T(cur_kf))` per keyframe transition (the "consecutive
   frame edge" model; no `{odom_wheels}` frame variable created). Synthetic test:
-  201 IMU+wheel samples -> 9 keyframes with the trajectory recovered
-  (`test-highrate-aggregation`). On BotanicGarden the IMU/wheels now reuse LIO's
-  denser scan keyframes, adding ~zero extra. See `Mapper3D_Fusion.cpp::
-  fuse_odometry` / `fuse_imu`.
+  201 IMU+wheel samples -> ~8 keyframes with the trajectory recovered
+  (`test-highrate-aggregation`). On BotanicGarden the wheels reuse LIO's denser
+  scan keyframes, adding ~zero extra. See `Mapper3D_Fusion.cpp::fuse_odometry`.
 - **Graph growth is still only PARTIALLY bounded** (known): the IMU/wheels
   explosion is fixed (above), but LIO's DENSE per-scan `fuse_pose()` (used for
   short-term prediction, plan 6.2b) still creates a keyframe per scan
@@ -203,34 +224,38 @@ test/                            Unit tests (plain main() + MRPT ASSERT_ macros,
   noise, NOT a systematic map tilt. A zero-mean observation can only pin the
   map's MEAN tilt to ~noise/sqrt(N) (~0.08 deg here) and never bends the stiff
   LIO orientation chain, so the slow z-drift (sub-degree pitch integrated over
-  km) survived. Three things were ALSO wrong and each mattered:
-  (1) with `estimate_geo_reference:false` and no `fixed_geo_reference`,
-  `T_enu_to_map` (F0) was left FREE (weak `ENU2MAP_WEAK_SIGMA` prior), so it
-  silently ABSORBED the leveling/azimuth (it took a few deg of roll/pitch + the
-  whole yaw) instead of the {map} keyframes -- now F0 is PINNED tight to identity
-  in that mode (`enu_to_map_prior_sigma_no_georef`, `reinitialize_gtsam_locked`);
-  (2) the absolute-attitude `Pose3RotationFactor` imposes the IMU's absolute
-  azimuth, which is meaningless without a GNSS/geo-ref yaw reference and fought
-  LIO heading (60-180 deg residuals) -- it is now ONLY added when
-  `estimate_geo_reference || fixed_geo_reference` (see `apply_imu_observation_locked`);
+  km) survived. The current architecture (rewritten 2026-06-29) addresses each:
+  (1) the leveling factor is built ONCE per keyframe by
+  `emit_imu_factors_for_keyframe_locked()`, NOT per sample: it drains the
+  `LocalVelocityBuffer` interval `(prev_imu_kf, new_kf]`, runs the robust
+  `ImuGravityFilter` reduce (now a STATELESS per-interval reducer: rejects
+  samples with `||a||` far from g or `||w||` above `imu_gravity_gyro_tol_deg`,
+  robustly averages the survivors) and emits ONE `MeasuredGravityFactor` with a
+  DATA-EARNED sigma (angular spread / sqrt(n), clamped). Because the accel was
+  lever-arm-corrected by `ImuTransformer` at ingest, the factor uses an IDENTITY
+  sensor pose and the centripetal/tangential contamination is SUBTRACTED, not
+  just gated. `imu_gravity_min_samples` (default 10) gates a window; on dense
+  synthetic keyframes (~1 sample/interval) lower it to 1.
+  (2) the absolute-attitude `Pose3RotationFactor` is now added ALWAYS when the
+  IMU reports an orientation quaternion, REGARDLESS of geo-ref. The absolute
+  attitude IS an azimuth reference, so feeding it lets iSAM2 AUTO-ESTIMATE the
+  geo-reference yaw even with GNSS off. To make that land on `T_enu_to_map`
+  (azimuth) instead of fighting the leveled {map}, the no-geo-ref F0 prior is now
+  ANISOTROPIC: tight on roll/pitch + translation (so gravity still levels the
+  KEYFRAMES, not F0) but WEAK on yaw (so IMU azimuth drives F0.yaw). See
+  `reinitialize_gtsam_locked`. Validated on DCC01 IMU-only (GNSS off,
+  `estimate_geo_reference:false`): F0 yaw auto-locked to -170.3 deg, within ~4
+  deg of the GNSS-derived -174.3 deg; roll/pitch stayed 0.
   (3) the LIO odometry between-edge chain is near-rigid in roll/pitch (data-driven
   sigma + a 1e-3 deg floor), so even a clean gravity factor cannot bend it --
   `odometry_edge_min_sigma_rollpitch_deg` (>0) RAISES only the roll/pitch floor,
-  leaving yaw stiff (no yaw gauge loss). The leveling itself now comes from
-  `ImuGravityFilter` (`imu_use_filtered_gravity`, default true): it pools the raw
-  ~100 Hz accel/gyro over `imu_gravity_window_sec` (1 s), rejects samples with
-  `||a||` far from g or `||w||` above `imu_gravity_gyro_tol_deg`, robustly
-  averages the survivors, and emits ONE `MeasuredGravityFactor` per window with a
-  DATA-EARNED sigma (angular spread / sqrt(n), clamped). Fed in `fuse_imu`,
-  emitted by `emit_filtered_gravity_factor_locked`; the legacy per-sample block
-  (2) in `apply_imu_observation_locked` runs only when
-  `imu_use_filtered_gravity:false`. Measured stacking on DCC01 (gravity-factor
-  residual mean / sum-chi2): per-sample+free-F0 2.2 deg / 16722 -> filtered+pinned
-  F0 1.9 deg / 278 -> + roll/pitch compliance (3 deg) **0.64 deg / 24** (map
-  leveled, systematic-tilt mean-vector back to 0.09 deg). The MulRan launcher
-  sets `odometry_edge_min_sigma_rollpitch_deg: 3.0` (env `MOLA_MAPPER3D_ODOM_RP_SIGMA`).
-  Real IMU preintegration + accel bias (plan 4.12) remains the principled
-  end-state (it would subtract modeled body accel instead of gating it away).
+  leaving yaw stiff (no yaw gauge loss). The MulRan launcher sets it to 3.0 (env
+  `MOLA_MAPPER3D_ODOM_RP_SIGMA`). Measured on DCC01 IMU-only after the rewrite:
+  gravity-resid mean 1.1 deg, mean-VECTOR-norm **0.24 deg** (random, not a
+  systematic tilt), keyframe path-tilt **0.46 deg** with graph z-span halving the
+  raw GICP-LIO drift (76 m -> 42 m). Real IMU preintegration + accel bias (plan
+  4.12) remains the principled end-state (it would subtract modeled body accel
+  instead of gating it away).
   **Diagnostic:** `MOLA_MAPPER3D_TRACE_IMU=1` logs F0's roll/pitch/yaw and the
   gravity-residual distribution (mean/median/p90/max + the mean residual VECTOR
   norm: ~mean => systematic tilt, <<mean => random motion noise) each solve
@@ -351,25 +376,19 @@ GUI runs confirmed working too: `mola-cli-launchs/lidar_odometry_mapper3d_from_k
 now ships with a `viz: mola::MolaVizImGui` module (`enabled: ${MOLA_WITH_GUI|true}`,
 the standard `mola_launcher` per-module `enabled` flag) on by default.
 
-6. **Bound any high-rate IMU/wheel-odometry feeding mapper3d directly via the
-   max-insert-rate caps (`imu_max_insert_rate_hz` / `odometry_max_insert_rate_hz`,
-   both default `5.0` Hz; `0` = insert every reading).** These REPLACED the older
-   `imu_min_sample_period` / `odometry_min_sample_period` decimation knobs
-   (2026-06-26): a positive max RATE is the natural spelling and lets us
-   SUMMARIZE rather than drop. The IMU path buffers samples and inserts at most
-   N summarized observations/second -- each carries the AVERAGED accelerometer
-   (less-noisy gravity/leveling), averaged angular velocity, and the latest
-   absolute orientation -- bounding BOTH the inserted-factor rate AND the
-   IMU-driven keyframe-creation rate (keyframe-reuse window = 1/rate). Wheel
-   odometry is merged (anchor held) up to its rate. Unit tests set both to `0`
-   to stay deterministic (default-on otherwise). Validated on real data:
-   BotanicGarden's ~400 Hz IMU + ~200 Hz wheels used to slow
-   `estimated_navstate()` to ~174 ms average undecimated; MulRan DCC01's ~100 Hz
-   Xsens IMU + the background optimizer thread now keeps `estimated_navstate()`
-   at a **42 us average / 730 us max** over 5406 LIO queries with the 5 Hz cap
-   on (the un-marginalized single ISAM2 graph still grows, plan 4.11 / Phase 10,
-   but the cap + thread keep the query path fast). ALWAYS keep these on (or set
-   `enable_optimizer_thread`) for any real high-rate IMU/wheel source.
+6. **Wheel odometry is rate-capped (`odometry_max_insert_rate_hz`, default
+   `5.0` Hz; `0` = insert every reading); the IMU no longer needs a cap.** The
+   old `imu_max_insert_rate_hz` summarization was DELETED in the 2026-06-29
+   `fuse_imu` rewrite: the IMU now creates no keyframes and inserts no per-sample
+   factors, so its factor rate is intrinsically bounded by the keyframe rate (one
+   gravity/attitude/gyro set per real keyframe, drained from the
+   `LocalVelocityBuffer`). Wheel odometry is still merged (anchor held) up to its
+   rate. Unit tests set the wheel cap to `0` to stay deterministic. Validated on
+   real data: MulRan DCC01's ~100 Hz Xsens IMU + the background optimizer thread
+   kept `estimated_navstate()` at a **42 us average / 730 us max** over 5406 LIO
+   queries (the un-marginalized single ISAM2 graph still grows, plan 4.11 /
+   Phase 10, but the keyframe-rate IMU factors + thread keep the query path fast).
+   ALWAYS keep `enable_optimizer_thread` on for any real high-rate source.
    (A `gui_preview_sensors` GOTCHA found along the way too: a per-entry
    `enabled:` flag, not just the module-level one, is needed if a
    `dataset_input` module both declares `gui_preview_sensors` AND might run
@@ -400,11 +419,10 @@ headless, full ~550 s / 69262-message sequence). This is the first run
 exercising LiDAR + IMU + **GNSS** together (KITTI/BotanicGarden have no GPS).
 It self-contains `estimate_geo_reference: true` and
 `link_first_pose_to_reference_origin_sigma: 1e-6` (needs both out of the box),
-plus `enable_optimizer_thread: true` and `imu_max_insert_rate_hz: 5.0` so it
-runs fast by default. Findings:
+plus `enable_optimizer_thread: true` so it runs fast by default. Findings:
 - **Query speed**: LIO's per-scan `estimated_navstate()` averaged **42 us**
   (max 730 us) over 5406 calls -- the >100 ms synchronous-solve problem is gone
-  (optimizer thread + the 5 Hz IMU summarization that bounds graph growth).
+  (optimizer thread + IMU factors now emitted only at the keyframe rate).
 - **Auto geo-referencing WORKS**: `T_enu_to_map` converges in a few seconds /
   ~10-23 GNSS factors; yaw locks to ~0.2-0.66 deg (the Xsens absolute-attitude
   `Pose3RotationFactor`), position sigma floors at ~1.1-1.5 m (GNSS noise).

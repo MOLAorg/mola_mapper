@@ -21,6 +21,8 @@
  */
 #pragma once
 
+#include <mola_imu_preintegration/ImuTransformer.h>
+#include <mola_imu_preintegration/LocalVelocityBuffer.h>
 #include <mola_kernel/GuiWidgetDescription.h>
 #include <mola_kernel/interfaces/DiagnosticsProvider.h>
 #include <mola_kernel/interfaces/LocalizationSourceBase.h>
@@ -195,34 +197,24 @@ private:
   // Stamp of the last *kept* (not rate-capped) wheel-odometry reading.
   std::optional<mrpt::Clock::time_point> last_wheels_odometry_stamp_;
 
-  // --- High-rate IMU max-rate summarization (imu_max_insert_rate_hz) ---
-  // Buffers incoming IMU samples and inserts at most imu_max_insert_rate_hz
-  // SUMMARIZED observations/second (averaged accel + gyro, latest orientation),
-  // bounding both the factor and the IMU-keyframe creation rate. See fuse_imu().
-  struct ImuAccumulator
-  {
-    std::size_t n_acc = 0;
-    std::size_t n_gyro = 0;
-    std::array<double, 3> acc_sum = {0, 0, 0};
-    std::array<double, 3> gyro_sum = {0, 0, 0};
-    bool has_quat = false;
-    std::array<double, 4> quat_wxyz = {1, 0, 0, 0};  //!< latest absolute orientation
-    mrpt::poses::CPose3D sensor_pose;
-    mrpt::Clock::time_point last_stamp;
-    [[nodiscard]] bool empty() const { return n_acc == 0 && n_gyro == 0 && !has_quat; }
-    void clear() { *this = ImuAccumulator{}; }
-  };
-  ImuAccumulator imu_accum_;
-  std::optional<mrpt::Clock::time_point> last_imu_summary_stamp_;
-
-  // --- Filtered low-dynamics gravity leveling (imu_use_filtered_gravity) ---
-  // Accumulates the RAW high-rate accelerometer/gyro stream, rejects samples
-  // contaminated by vehicle acceleration/rotation, and emits ONE strong
-  // MeasuredGravityFactor per window with a data-earned sigma. This replaces the
-  // per-sample gravity factor, whose ~2 deg random motion noise could never
-  // level the map (see agents.md "IMU gravity leveling"). Guarded by stateMutex_.
+  // --- High-rate IMU accumulation (vehicle-frame buffer, no factors here) ---
+  // fuse_imu() does NOT touch the graph: each raw reading is moved to the
+  // vehicle "base_link" frame by a per-sensor ImuTransformer (rotation + rigid
+  // lever-arm/centripetal correction) and pushed into ONE global
+  // LocalVelocityBuffer (proper accel, angular velocity, latest absolute
+  // orientation). The backend factors are built later, once per real keyframe,
+  // by emit_imu_factors_for_keyframe_locked() draining the buffer window. This
+  // decouples the IMU sample rate from both keyframe creation and factor
+  // insertion (see agents.md "IMU gravity leveling"). Guarded by stateMutex_.
+  std::map<std::string, mola::imu::ImuTransformer> imu_transformers_;
+  mola::imu::LocalVelocityBuffer imu_buffer_;
+  // The keyframe the last IMU window was attached to; the next keyframe drains
+  // the buffer window since this one. nullopt until the first keyframe is seen.
+  std::optional<KeyFrameID> last_imu_kf_;
+  // Reused as a STATELESS per-interval robust-gravity reducer (its accept/avg
+  // math is fed the buffered window and flush()ed on each keyframe close; the
+  // internal window timer is not used). Guarded by stateMutex_.
   ImuGravityFilter imu_gravity_filter_;
-  mrpt::poses::CPose3D last_imu_sensor_pose_;
 
   // --- Geo-referencing diagnostics counters (guarded by stateMutex_) ---
   std::size_t gnss_factors_inserted_ = 0;
@@ -399,16 +391,17 @@ private:
   /// Adds kinematic factors between two time-adjacent keyframes (once).
   void add_kinematic_factor_between(KeyFrameID from, KeyFrameID to);
 
-  /// Adds an IMU observation's attitude / gravity-leveling / gyro factors to a
-  /// keyframe selected by the given keyframe-reuse tolerance. Shared by the
-  /// per-sample and the summarized (max-rate) IMU paths.
-  void apply_imu_observation_locked(
-    const mrpt::obs::CObservationIMU & imu, double keyframe_reuse_tolerance);
+  /// Moves one raw IMU reading to the vehicle frame (per-sensor ImuTransformer)
+  /// and pushes proper accel / angular velocity / absolute orientation into the
+  /// global LocalVelocityBuffer. Adds NO factor and creates NO keyframe.
+  void ingest_imu_sample_locked(const mrpt::obs::CObservationIMU & imu);
 
-  /// Emits ONE MeasuredGravityFactor from a filtered low-dynamics gravity
-  /// estimate (see ImuGravityFilter), attached to the keyframe nearest the
-  /// estimate's stamp, using the data-earned sigma.
-  void emit_filtered_gravity_factor_locked(const ImuGravityFilter::Estimate & est);
+  /// Builds the IMU backend factors for a freshly created keyframe by draining
+  /// the LocalVelocityBuffer window since the previous IMU keyframe: ONE
+  /// robust-gravity MeasuredGravityFactor (data-earned sigma), the absolute
+  /// attitude Pose3RotationFactor (always, so IMU azimuth can drive geo-ref),
+  /// and an averaged-gyro W prior. No-op until a previous IMU keyframe exists.
+  void emit_imu_factors_for_keyframe_locked(KeyFrameID newKf);
 
   /// Env-gated (MOLA_MAPPER3D_TRACE_IMU) diagnostic: logs T_enu_to_map (F0) and
   /// the distribution of IMU gravity-factor residuals (mean/median/p90/max +
@@ -423,13 +416,6 @@ private:
   /// axis vs map +Z (orientation leveling). This separates a real {map}-frame
   /// path tilt from an uncorrected {odom} LIO-local-map tilt. No-op unless set.
   void trace_keyframe_geometry_locked(const gtsam::Values & estimate);
-
-  /// Accumulates one raw IMU sample into imu_accum_ (max-rate summarization).
-  void accumulate_imu_sample_locked(const mrpt::obs::CObservationIMU & imu);
-
-  /// Builds a summarized CObservationIMU from imu_accum_ (averaged accel/gyro,
-  /// latest orientation) and clears the accumulator. False if nothing buffered.
-  [[nodiscard]] bool build_summarized_imu_locked(mrpt::obs::CObservationIMU & out);
 
   /// Drains pending factors/values, runs the incremental iSAM2 update and
   /// refreshes the cached estimates. Does its OWN locking in three phases

@@ -53,7 +53,6 @@ void test_imu_leveling()
 params:
   vehicle_frame_name: "base_link"
   reference_frame_name: "map"
-  imu_max_insert_rate_hz: 0.0
   odometry_max_insert_rate_hz: 0.0
   kinematic_model: KinematicModel::ConstantVelocity
   max_time_to_use_velocity_model: 2.0
@@ -61,7 +60,10 @@ params:
   sigma_random_walk_acceleration_angular: 1.0
   sigma_integrator_position: 0.10
   sigma_integrator_orientation: 0.5
-  imu_normalized_gravity_alignment_sigma: 0.1
+  # This synthetic test creates a keyframe per step (dense), so each per-keyframe
+  # IMU interval holds only ~1 accel sample; allow the gravity reducer to emit
+  # from a single sample (real LIO has sparse keyframes => many samples/interval).
+  imu_gravity_min_samples: 1
   link_first_pose_to_reference_origin_sigma: 0.01
 )###";
 
@@ -98,8 +100,10 @@ params:
     obsImu.set(mrpt::obs::IMU_Y_ACC, rng.drawGaussian1D(0.0, 0.1));
     obsImu.set(mrpt::obs::IMU_Z_ACC, 9.81 + rng.drawGaussian1D(0.0, 0.1));
 
-    nav.fuse_pose(time, odomLidarPdf, "lidar");
+    // IMU is streamed in BEFORE the keyframe-creating fuse_pose, so the sample
+    // is already buffered when the keyframe closes and drains its interval.
     nav.fuse_imu(obsImu);
+    nav.fuse_pose(time, odomLidarPdf, "lidar");
   }
 
   const auto stateOpt =

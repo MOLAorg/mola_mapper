@@ -107,20 +107,6 @@ public:
   /// Permissive temporal tolerance to attach GNSS factors to a nearby keyframe.
   double gnss_nearby_keyframe_stamp_tolerance = 1.0;  // [s]
 
-  /// Permissive temporal tolerance to attach IMU attitude/gravity factors.
-  double imu_nearby_keyframe_stamp_tolerance = 0.10;  // [s]
-
-  /// Maximum rate [Hz] of SUMMARIZED IMU observations actually inserted into the
-  /// graph (0 = disabled = insert every reading). When > 0, the high-rate IMU
-  /// stream is buffered and at most this many summarized observations per second
-  /// are fused: each carries the AVERAGED accelerometer (a less-noisy
-  /// gravity/leveling estimate), the averaged angular velocity, and the latest
-  /// absolute orientation, instead of just dropping the in-between samples. This
-  /// bounds BOTH the inserted-factor rate AND the IMU-driven keyframe-creation
-  /// rate (the keyframe-reuse window becomes 1/rate), keeping the central graph
-  /// tractable for real ~100-400 Hz IMUs without a fixed decimation ratio.
-  double imu_max_insert_rate_hz = 5.0;  // [Hz]
-
   /// Maximum rate [Hz] of wheel-odometry increments inserted into the graph
   /// (0 = disabled = insert every reading). Readings arriving sooner than 1/rate
   /// after the last kept one are dropped WITHOUT advancing the integration anchor
@@ -203,8 +189,8 @@ public:
   /// If > 0, RAISES the odometry-edge roll/pitch floor to this many degrees
   /// (yaw stays at odometry_edge_min_sigma_ang_deg), making the orientation
   /// chain compliant in roll/pitch so an IMU gravity factor can level the map.
-  /// 0 disables it. ONLY enable together with a gravity-leveling source
-  /// (imu_use_filtered_gravity); otherwise roll/pitch would drift unconstrained.
+  /// 0 disables it. ONLY enable together with the IMU gravity-leveling factor;
+  /// otherwise roll/pitch would drift unconstrained.
   double odometry_edge_min_sigma_rollpitch_deg = 0.0;
 
   /** @} */
@@ -212,24 +198,23 @@ public:
   /** @name IMU related
    * @{ */
 
+  /// Absolute-attitude (Pose3RotationFactor) sigma [deg]. Set to 0 to disable
+  /// the attitude factor. This factor is added at every keyframe whenever the
+  /// IMU provides an orientation quaternion, REGARDLESS of geo-referencing: the
+  /// absolute attitude is itself an azimuth reference, so it lets iSAM2 estimate
+  /// the geo-reference (T_enu_to_map yaw) automatically even with GNSS off (the
+  /// no-geo-ref F0 prior is yaw-free; see Mapper3D::reinitialize_gtsam_locked).
   double imu_attitude_sigma_deg = 2.0;
   double imu_attitude_azimuth_offset_deg = 0.0;
-  /// Sigma to estimate the up-vector from accelerometer (gravity alignment).
-  /// Set to 0 to disable. Only used by the LEGACY per-sample gravity path, i.e.
-  /// when imu_use_filtered_gravity is false.
-  double imu_normalized_gravity_alignment_sigma = 0.4;
   /// If > 0 and the IMU provides angular velocity, add a body-frame gyro prior
-  /// on the keyframe's W variable with this sigma [deg/s]. 0 disables it (the
-  /// inter-keyframe angular-velocity integration factor still runs).
+  /// on the keyframe's W variable with this sigma [deg/s] (built from the
+  /// interval-averaged angular velocity). 0 disables it.
   double imu_angular_velocity_sigma_deg = 0.0;
 
-  /// Filtered low-dynamics gravity leveling (recommended; see agents.md "IMU
-  /// gravity leveling"). When true, the RAW accelerometer/gyro stream is pooled
-  /// over a time window, motion-contaminated samples are rejected, and ONE
-  /// MeasuredGravityFactor with a DATA-EARNED sigma is emitted per window,
-  /// instead of one noisy per-sample factor. Replaces imu_normalized_gravity_
-  /// alignment_sigma when enabled.
-  bool imu_use_filtered_gravity = true;
+  /// IMU gravity-leveling reducer (see agents.md "IMU gravity leveling"). The
+  /// proper-acceleration samples accumulated between two keyframes are pooled,
+  /// motion-contaminated ones (|a| far from g, high |w|) rejected, and ONE
+  /// MeasuredGravityFactor with a DATA-EARNED sigma is emitted on the keyframe.
   /// Length of the gravity-pooling window [s]. ~1 s @ 100 Hz IMU -> ~100 samples.
   double imu_gravity_window_sec = 1.0;
   /// Accept a sample only if | ‖a‖ - g | <= this fraction of g.

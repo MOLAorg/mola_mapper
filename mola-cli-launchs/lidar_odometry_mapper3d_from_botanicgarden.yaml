@@ -31,16 +31,16 @@
 #    floats, iSAM2 throws gtsam::IndeterminantLinearSystemException a few
 #    seconds in, and LidarOdometry then discards its motion model and dies.
 #
-#  - `imu_max_insert_rate_hz` / `odometry_max_insert_rate_hz` (default 5 Hz both,
-#    in the shared params file too): bound the IMU (~400 Hz) and wheel-odometry
-#    (~200 Hz) inputs before they grow the graph. The IMU path SUMMARIZES
-#    (averaged accel+gyro, latest orientation) at most N obs/s rather than
-#    dropping. KITTI/MulRan barely exercised this; here, unbounded 400+200 Hz
-#    input keeps growing the single, never-marginalized ISAM2 graph (mapper_3d
-#    has no spatial paging yet -- see plan section 4.11 / Phase 10) and
-#    `estimated_navstate()` was observed to slow from single-digit ms to a
-#    174 ms average (690 ms worst case) over this ~150 s bag; the 5 Hz caps +
-#    the background optimizer thread keep it fast.
+#  - `odometry_max_insert_rate_hz` (default 5 Hz, in the shared params file too):
+#    bounds the wheel-odometry (~200 Hz) input before it grows the graph. The IMU
+#    (~400 Hz) is NO LONGER rate-capped: it never creates keyframes nor inserts
+#    per-sample factors -- every reading is accumulated (lever-arm corrected) in a
+#    LocalVelocityBuffer and the backend gravity/attitude/gyro factors are built
+#    once per real keyframe, so the IMU factor rate equals the keyframe rate.
+#    Unbounded 400+200 Hz used to grow the single, never-marginalized ISAM2 graph
+#    (mapper_3d has no spatial paging yet -- see plan 4.11 / Phase 10) and slow
+#    `estimated_navstate()` to a 174 ms average; the wheel cap + the keyframe-rate
+#    IMU factors + the background optimizer thread keep it fast.
 #
 # BotanicGarden has no /tf or /tf_static: all sensor extrinsics below are
 # `fixed_sensor_pose` values taken from

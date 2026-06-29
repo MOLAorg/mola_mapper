@@ -150,16 +150,19 @@ void Mapper3D::reinitialize_gtsam_locked()
   auto enu2map = gtsam::Pose3::Identity();
   gtsam::Matrix6 enu2map_cov = gtsam::Matrix6::Identity() * mrpt::square(ENU2MAP_WEAK_SIGMA);
 
-  // When NOT estimating (and not fixing) the geo-reference, T_enu_to_map is not
-  // an unknown: pin it tight to identity so {map}=={enu}. Otherwise it stays a
-  // FREE weakly-prior'd variable that silently ABSORBS the IMU gravity/attitude
-  // correction (it can take ~all of a uniform tilt + the whole azimuth), so the
-  // leveling never reaches the {map} keyframes the map is rendered in. With it
-  // pinned, "gravity up in ENU" == "gravity up in map" and the gravity factors
-  // level the keyframe poses directly (see agents.md "IMU gravity leveling").
+  // When NOT estimating (and not fixing) the geo-reference, T_enu_to_map is
+  // pinned ANISOTROPICALLY: tight on roll/pitch + translation so the gravity
+  // factors level the {map} keyframes directly (a FREE roll/pitch F0 would
+  // silently ABSORB the tilt and leave the rendered {map} tilted -- see
+  // agents.md "IMU gravity leveling"), but LOOSE on yaw so the absolute IMU
+  // attitude can drive the map azimuth (automatic geo-referencing from iSAM2
+  // even with GNSS off). gtsam Pose3 tangent order: (roll, pitch, yaw, x, y, z).
   if (!params_.estimate_geo_reference && !params_.fixed_geo_reference.has_value()) {
-    enu2map_cov =
-      gtsam::Matrix6::Identity() * mrpt::square(params_.enu_to_map_prior_sigma_no_georef);
+    const double tight = params_.enu_to_map_prior_sigma_no_georef;
+    enu2map_cov = gtsam::Matrix6::Zero();
+    enu2map_cov.diagonal() << mrpt::square(tight), mrpt::square(tight),
+      mrpt::square(ENU2MAP_WEAK_SIGMA), mrpt::square(tight), mrpt::square(tight),
+      mrpt::square(tight);
   }
 
   if (params_.fixed_geo_reference.has_value()) {
@@ -281,6 +284,12 @@ KeyFrameID Mapper3D::create_or_get_keyframe_by_timestamp_locked(
   if (closestPost.second != dm.end()) {
     add_kinematic_factor_between(newId, closestPost.second->second);
   }
+
+  // IMU rides the backend keyframe cadence: whenever ANY source creates a new
+  // keyframe, drain the IMU buffer for the interval since the previous keyframe
+  // and attach the gravity/attitude/gyro factors to it. IMU itself never
+  // creates keyframes (see fuse_imu / emit_imu_factors_for_keyframe_locked).
+  emit_imu_factors_for_keyframe_locked(newId);
 
   return newId;
 }
@@ -731,210 +740,161 @@ void Mapper3D::fuse_imu(const mrpt::obs::CObservationIMU & imu)
 {
   const ProfilerEntry tle(profiler_, "fuse_imu");
   auto lck = mrpt::lockHelper(stateMutex_);
-
-  // Filtered low-dynamics gravity leveling: feed the RAW accelerometer/gyro
-  // stream to the gravity filter and, once a window has accumulated, emit ONE
-  // strong gravity factor with a data-earned sigma. This is the leveling path;
-  // the per-sample MeasuredGravityFactor in apply_imu_observation_locked() is
-  // disabled when imu_use_filtered_gravity is set (see agents.md).
-  if (params_.imu_use_filtered_gravity && imu.has(mrpt::obs::IMU_X_ACC)) {
-    last_imu_sensor_pose_ = imu.sensorPose;
-    const mrpt::math::TVector3D acc = {
-      imu.get(mrpt::obs::IMU_X_ACC), imu.get(mrpt::obs::IMU_Y_ACC), imu.get(mrpt::obs::IMU_Z_ACC)};
-    std::optional<mrpt::math::TVector3D> w;
-    if (imu.has(mrpt::obs::IMU_WX)) {
-      w = mrpt::math::TVector3D{
-        imu.get(mrpt::obs::IMU_WX), imu.get(mrpt::obs::IMU_WY), imu.get(mrpt::obs::IMU_WZ)};
-    }
-    imu_gravity_filter_.addSample(imu.timestamp, acc, w);
-    if (imu_gravity_filter_.windowReady(imu.timestamp)) {
-      if (const auto est = imu_gravity_filter_.flush(); est.has_value()) {
-        emit_filtered_gravity_factor_locked(*est);
-      }
-    }
-  }
-
-  // Path A: max-rate summarization (preferred for real high-rate IMUs). Buffer
-  // every sample and insert at most imu_max_insert_rate_hz SUMMARIZED
-  // observations/second: averaged accelerometer (less-noisy gravity/leveling),
-  // averaged angular velocity, latest absolute orientation. This bounds BOTH the
-  // factor rate AND the IMU-driven keyframe creation rate (the keyframe-reuse
-  // window becomes 1/rate), without a fixed decimation ratio that would just
-  // throw the in-between information away.
-  if (params_.imu_max_insert_rate_hz > 0) {
-    accumulate_imu_sample_locked(imu);
-
-    const double period = 1.0 / params_.imu_max_insert_rate_hz;
-    if (last_imu_summary_stamp_.has_value()) {
-      const double dt = mrpt::system::timeDifference(*last_imu_summary_stamp_, imu.timestamp);
-      if (dt < period) {
-        return;  // keep accumulating; a summary is inserted once 1/rate elapses
-      }
-    }
-    mrpt::obs::CObservationIMU summarized;
-    if (!build_summarized_imu_locked(summarized)) {
-      return;
-    }
-    last_imu_summary_stamp_ = summarized.timestamp;
-    apply_imu_observation_locked(summarized, period);
-    notify_optimizer();
-    return;
-  }
-
-  // Path B: no rate cap (imu_max_insert_rate_hz == 0): insert every reading.
-  // In aggregation mode, attach to the shared bounded-rate keyframe clock (the
-  // same one wheel odometry uses), so IMU does not spawn its own dense
-  // keyframes either.
-  const double imuKfTolerance = params_.aggregate_high_rate_into_edges
-                                  ? params_.sensor_keyframe_min_period
-                                  : params_.imu_nearby_keyframe_stamp_tolerance;
-  apply_imu_observation_locked(imu, imuKfTolerance);
-  notify_optimizer();
+  // fuse_imu NEVER touches the graph: it only moves the reading to the vehicle
+  // frame and accumulates it in the LocalVelocityBuffer. The backend factors
+  // are built later, once per real keyframe, in
+  // emit_imu_factors_for_keyframe_locked() (hooked from keyframe creation).
+  // This is the IMU's short-term-evidence store; the predictor side reads from
+  // the same buffer (future work, plan 4.12). No notify_optimizer() here: no
+  // pending factor/value was produced.
+  ingest_imu_sample_locked(imu);
 }
 
-void Mapper3D::accumulate_imu_sample_locked(const mrpt::obs::CObservationIMU & imu)
+void Mapper3D::ingest_imu_sample_locked(const mrpt::obs::CObservationIMU & imu)
 {
-  if (imu.has(mrpt::obs::IMU_X_ACC)) {
-    imu_accum_.acc_sum[0] += imu.get(mrpt::obs::IMU_X_ACC);
-    imu_accum_.acc_sum[1] += imu.get(mrpt::obs::IMU_Y_ACC);
-    imu_accum_.acc_sum[2] += imu.get(mrpt::obs::IMU_Z_ACC);
-    imu_accum_.n_acc++;
+  // Move the raw reading to the vehicle "base_link" frame with a per-sensor,
+  // STATEFUL ImuTransformer (rotation + rigid lever-arm/centripetal correction
+  // a_body = R*a_imu - alpha x t - w x (w x t)). One transformer per sensor
+  // label, since it keeps angular-velocity/acceleration low-pass state.
+  auto & transformer = imu_transformers_[imu.sensorLabel];
+  const mrpt::obs::CObservationIMU bodyImu = transformer.process(imu);
+  // After process() the reading is expressed at the vehicle frame (sensorPose
+  // is identity), so the factors built from the buffer use an identity sensor
+  // pose and the orientation we store is the VEHICLE attitude in the world.
+  const mola::imu::TimeStamp t = mrpt::Clock::toDouble(bodyImu.timestamp);
+
+  if (bodyImu.has(mrpt::obs::IMU_X_ACC)) {
+    imu_buffer_.add_linear_acceleration(
+      t, {bodyImu.get(mrpt::obs::IMU_X_ACC), bodyImu.get(mrpt::obs::IMU_Y_ACC),
+          bodyImu.get(mrpt::obs::IMU_Z_ACC)});
   }
-  if (imu.has(mrpt::obs::IMU_WX)) {
-    imu_accum_.gyro_sum[0] += imu.get(mrpt::obs::IMU_WX);
-    imu_accum_.gyro_sum[1] += imu.get(mrpt::obs::IMU_WY);
-    imu_accum_.gyro_sum[2] += imu.get(mrpt::obs::IMU_WZ);
-    imu_accum_.n_gyro++;
+  if (bodyImu.has(mrpt::obs::IMU_WX)) {
+    imu_buffer_.add_angular_velocity(
+      t, {bodyImu.get(mrpt::obs::IMU_WX), bodyImu.get(mrpt::obs::IMU_WY),
+          bodyImu.get(mrpt::obs::IMU_WZ)});
   }
   if (imu.has(mrpt::obs::IMU_ORI_QUAT_W)) {
-    // Orientation can't be linearly averaged; keep the latest (window is short
-    // at >= a few Hz). It is the absolute-attitude observation for this summary.
-    imu_accum_.quat_wxyz[0] = imu.get(mrpt::obs::IMU_ORI_QUAT_W);
-    imu_accum_.quat_wxyz[1] = imu.get(mrpt::obs::IMU_ORI_QUAT_X);
-    imu_accum_.quat_wxyz[2] = imu.get(mrpt::obs::IMU_ORI_QUAT_Y);
-    imu_accum_.quat_wxyz[3] = imu.get(mrpt::obs::IMU_ORI_QUAT_Z);
-    imu_accum_.has_quat = true;
-  }
-  imu_accum_.sensor_pose = imu.sensorPose;
-  imu_accum_.last_stamp = imu.timestamp;
-}
-
-bool Mapper3D::build_summarized_imu_locked(mrpt::obs::CObservationIMU & out)
-{
-  if (imu_accum_.empty()) {
-    return false;
-  }
-  out.sensorLabel = "imu_summary";
-  out.timestamp = imu_accum_.last_stamp;
-  out.sensorPose = imu_accum_.sensor_pose;
-  if (imu_accum_.n_acc > 0) {
-    const double inv = 1.0 / static_cast<double>(imu_accum_.n_acc);
-    out.set(mrpt::obs::IMU_X_ACC, imu_accum_.acc_sum[0] * inv);
-    out.set(mrpt::obs::IMU_Y_ACC, imu_accum_.acc_sum[1] * inv);
-    out.set(mrpt::obs::IMU_Z_ACC, imu_accum_.acc_sum[2] * inv);
-  }
-  if (imu_accum_.n_gyro > 0) {
-    const double inv = 1.0 / static_cast<double>(imu_accum_.n_gyro);
-    out.set(mrpt::obs::IMU_WX, imu_accum_.gyro_sum[0] * inv);
-    out.set(mrpt::obs::IMU_WY, imu_accum_.gyro_sum[1] * inv);
-    out.set(mrpt::obs::IMU_WZ, imu_accum_.gyro_sum[2] * inv);
-  }
-  if (imu_accum_.has_quat) {
-    out.set(mrpt::obs::IMU_ORI_QUAT_W, imu_accum_.quat_wxyz[0]);
-    out.set(mrpt::obs::IMU_ORI_QUAT_X, imu_accum_.quat_wxyz[1]);
-    out.set(mrpt::obs::IMU_ORI_QUAT_Y, imu_accum_.quat_wxyz[2]);
-    out.set(mrpt::obs::IMU_ORI_QUAT_Z, imu_accum_.quat_wxyz[3]);
-  }
-  imu_accum_.clear();
-  return true;
-}
-
-void Mapper3D::apply_imu_observation_locked(
-  const mrpt::obs::CObservationIMU & imu, double keyframe_reuse_tolerance)
-{
-  KeyFrameID this_kf_id = 0;
-  if (sensor_kf_creation_allowed()) {
-    this_kf_id =
-      create_or_get_keyframe_by_timestamp_locked(imu.timestamp, keyframe_reuse_tolerance);
-  } else {
-    // SharedMapOnly mode: snap IMU factors to the nearest existing KF (created
-    // by requestInsertKeyframe()). If no KF exists yet, skip this reading.
-    const auto nearestOpt = find_nearest_kf_locked(imu.timestamp);
-    if (!nearestOpt.has_value()) {
-      return;
-    }
-    this_kf_id = *nearestOpt;
-  }
-
-  const auto sensorOnVehicle = mrpt::gtsam_wrappers::toPose3(imu.sensorPose);
-
-  bool addedFactor = false;
-
-  // (1) Absolute attitude / azimuth observation (IMU orientation quaternion).
-  // This factor imposes the IMU's ABSOLUTE orientation (including azimuth/yaw)
-  // on the keyframe via T_enu_to_map. Without an external azimuth reference
-  // (GNSS-driven geo-referencing or a fixed geo-reference) the absolute yaw is
-  // meaningless and actively fights LIO's own heading (observed on MulRan: 60-
-  // 180 deg residuals destabilizing T_enu_to_map). Only add it when such a
-  // reference exists; roll/pitch leveling comes from the gravity factor instead.
-  const bool haveAzimuthReference =
-    params_.estimate_geo_reference || params_.fixed_geo_reference.has_value();
-  if (haveAzimuthReference && imu.has(mrpt::obs::IMU_ORI_QUAT_W)) {
     mrpt::math::CQuaternionDouble q;
     q.w(imu.get(mrpt::obs::IMU_ORI_QUAT_W));
     q.x(imu.get(mrpt::obs::IMU_ORI_QUAT_X));
     q.y(imu.get(mrpt::obs::IMU_ORI_QUAT_Y));
     q.z(imu.get(mrpt::obs::IMU_ORI_QUAT_Z));
-    if (std::isnan(q.w()) || std::isnan(q.x()) || std::isnan(q.y()) || std::isnan(q.z())) {
-      MRPT_LOG_THROTTLE_WARN(5.0, "Ignoring IMU orientation quaternion with NaN components");
-    } else if (std::abs(q.norm() - 1.0) > 0.02) {
-      MRPT_LOG_THROTTLE_WARN(5.0, "Ignoring non-normalized IMU orientation quaternion");
-    } else {
-      auto measuredRotation = gtsam::Rot3::Quaternion(q.w(), q.x(), q.y(), q.z());
-      // ENU has yaw=0 => East; correct to azimuth wrt true North:
-      measuredRotation =
-        gtsam::Rot3::Rz(mrpt::DEG2RAD(90.0 + params_.imu_attitude_azimuth_offset_deg)) *
-        measuredRotation;
-      auto rotationNoise =
-        gtsam::noiseModel::Isotropic::Sigma(3, mrpt::DEG2RAD(params_.imu_attitude_sigma_deg));
-      state_.gtsam->newFactors.emplace_shared<mola::factors::Pose3RotationFactor>(
-        symbol_T_enu_to_map, T(this_kf_id), sensorOnVehicle, measuredRotation, rotationNoise);
-      addedFactor = true;
-    }
-  }
-
-  // (2) Gravity-aligned acceleration observation (accelerometer leveling).
-  // LEGACY per-sample path: only used when imu_use_filtered_gravity is OFF. By
-  // default the leveling is produced by ImuGravityFilter (one strong, low-
-  // dynamics, data-earned factor per window) in fuse_imu(); see agents.md.
-  if (
-    !params_.imu_use_filtered_gravity && imu.has(mrpt::obs::IMU_X_ACC) &&
-    params_.imu_normalized_gravity_alignment_sigma > 0) {
-    const gtsam::Vector3 measuredGravity = {
-      imu.get(mrpt::obs::IMU_X_ACC), imu.get(mrpt::obs::IMU_Y_ACC), imu.get(mrpt::obs::IMU_Z_ACC)};
-    // Accept either m/s^2 (~9.8) or normalized (~1.0) accelerometer scales:
     if (
-      std::abs(measuredGravity.norm() - 9.8) < 2.0 ||
-      std::abs(measuredGravity.norm() - 1.0) < 0.2) {
-      const gtsam::Vector3 measuredGravityNormalized = measuredGravity.normalized();
-      auto accNoise = gtsam::noiseModel::Isotropic::Sigma(
-        3, mrpt::DEG2RAD(params_.imu_normalized_gravity_alignment_sigma));
+      !std::isnan(q.w()) && !std::isnan(q.x()) && !std::isnan(q.y()) && !std::isnan(q.z()) &&
+      std::abs(q.norm() - 1.0) <= 0.02) {
+      // Sensor's measured world attitude R_world_sensor, brought to the vehicle
+      // frame: R_world_vehicle = R_world_sensor * R_vehicle_sensor^T. This keeps
+      // all sensor-mount handling at ingest time, mirroring ImuTransformer.
+      mrpt::math::CMatrixDouble33 R_world_sensor;
+      q.rotationMatrixNoResize(R_world_sensor);
+      const auto R_vehicle_sensor = imu.sensorPose.getRotationMatrix();
+      mola::imu::SO3 R_world_vehicle;
+      R_world_vehicle.asEigen() = R_world_sensor.asEigen() * R_vehicle_sensor.asEigen().transpose();
+      imu_buffer_.add_orientation(t, R_world_vehicle);
+    } else {
+      MRPT_LOG_THROTTLE_WARN(5.0, "Ignoring invalid/NaN IMU orientation quaternion");
+    }
+  }
+}
+
+void Mapper3D::emit_imu_factors_for_keyframe_locked(KeyFrameID newKf)
+{
+  // First IMU keyframe: nothing accumulated behind it yet. Anchor and return.
+  if (!last_imu_kf_.has_value()) {
+    last_imu_kf_ = newKf;
+    return;
+  }
+  const KeyFrameID prevKf = *last_imu_kf_;
+  last_imu_kf_ = newKf;
+
+  const mola::imu::TimeStamp tFrom = mrpt::Clock::toDouble(state_.time_to_kf_id.inverse(prevKf));
+  const mola::imu::TimeStamp tTo = mrpt::Clock::toDouble(state_.time_to_kf_id.inverse(newKf));
+  if (!(tTo > tFrom)) {
+    return;
+  }
+  const auto window = imu_buffer_.window_since(tFrom, tTo);
+
+  bool addedFactor = false;
+  const auto identitySensor = gtsam::Pose3::Identity();
+
+  // (1) Robust gravity-leveling factor: pool the interval's proper-acceleration
+  // samples, reject motion-contaminated ones (|a| far from g, high |w|), and
+  // emit ONE MeasuredGravityFactor with a data-earned sigma. Reuses the
+  // (well-tested) ImuGravityFilter accept/average math as a stateless reducer:
+  // we feed the buffered window and flush() it (its internal window timer is
+  // unused here). Accel/gyro are already in the vehicle frame, so the factor
+  // takes an identity sensor pose.
+  if (!window.a_b.empty()) {
+    imu_gravity_filter_.clear();
+    for (const auto & [ta, a] : window.a_b) {
+      std::optional<mrpt::math::TVector3D> w;
+      if (const auto itw = window.w_b.find(ta); itw != window.w_b.end()) {
+        w = itw->second;
+      }
+      imu_gravity_filter_.addSample(mrpt::Clock::fromDouble(ta), a, w);
+    }
+    if (const auto est = imu_gravity_filter_.flush(); est.has_value()) {
+      const gtsam::Vector3 g = {
+        est->gravity_body_normalized.x, est->gravity_body_normalized.y,
+        est->gravity_body_normalized.z};
+      auto accNoise = gtsam::noiseModel::Isotropic::Sigma(3, mrpt::DEG2RAD(est->sigma_deg));
       state_.gtsam->newFactors.emplace_shared<mola::factors::MeasuredGravityFactor>(
-        symbol_T_enu_to_map, T(this_kf_id), sensorOnVehicle, measuredGravityNormalized, accNoise);
+        symbol_T_enu_to_map, T(newKf), identitySensor, g, accNoise);
       addedFactor = true;
+
+      static const bool traceGeom = (::getenv("MOLA_MAPPER3D_TRACE_GEOM") != nullptr);
+      if (traceGeom) {
+        static mrpt::math::TVector3D gAccum{0, 0, 0};
+        static size_t gN = 0;
+        gAccum = gAccum + est->gravity_body_normalized;
+        gN++;
+        auto m = gAccum * (1.0 / static_cast<double>(gN));
+        const double mn = m.norm();
+        if (mn > 1e-9) {
+          m = m * (1.0 / mn);
+        }
+        MRPT_LOG_THROTTLE_WARN_FMT(
+          1.0,
+          "[GRAV-BODY-TRACE] n=%zu mean up_vehicle=(%.4f,%.4f,%.4f) -> systematic "
+          "pitch-lean=%.2f deg roll-lean=%.2f deg",
+          gN, m.x, m.y, m.z, mrpt::RAD2DEG(std::atan2(m.x, m.z)),
+          mrpt::RAD2DEG(std::atan2(m.y, m.z)));
+      }
     }
   }
 
-  // (3) Optional gyroscope body-frame angular-velocity prior:
-  if (params_.imu_angular_velocity_sigma_deg > 0 && imu.has(mrpt::obs::IMU_WX)) {
-    const gtsam::Vector3 wSensor = {
-      imu.get(mrpt::obs::IMU_WX), imu.get(mrpt::obs::IMU_WY), imu.get(mrpt::obs::IMU_WZ)};
-    // Rotate from sensor frame to vehicle/body frame:
-    const auto Rsv = sensorOnVehicle.rotation().matrix();
-    const gtsam::Vector3 wBody = Rsv * wSensor;
+  // (2) Absolute attitude / azimuth observation (vehicle world attitude). Now
+  // added ALWAYS (when available), not only under geo-referencing: the absolute
+  // attitude IS an azimuth reference, so feeding it lets iSAM2 estimate the
+  // geo-reference (T_enu_to_map yaw) automatically even with GNSS off. The
+  // no-geo-ref F0 prior is yaw-free (see reinitialize_gtsam_locked) so this
+  // azimuth lands on T_enu_to_map instead of fighting the pinned map. Uses the
+  // LATEST orientation in the interval; identity sensor pose (already in body).
+  if (params_.imu_attitude_sigma_deg > 0 && !window.q.empty()) {
+    const mola::imu::SO3 & R = window.q.rbegin()->second;
+    auto measuredRotation = gtsam::Rot3(R.asEigen());
+    // ENU has yaw=0 => East; correct to azimuth wrt true North:
+    measuredRotation =
+      gtsam::Rot3::Rz(mrpt::DEG2RAD(90.0 + params_.imu_attitude_azimuth_offset_deg)) *
+      measuredRotation;
+    auto rotationNoise =
+      gtsam::noiseModel::Isotropic::Sigma(3, mrpt::DEG2RAD(params_.imu_attitude_sigma_deg));
+    state_.gtsam->newFactors.emplace_shared<mola::factors::Pose3RotationFactor>(
+      symbol_T_enu_to_map, T(newKf), identitySensor, measuredRotation, rotationNoise);
+    addedFactor = true;
+  }
+
+  // (3) Optional gyroscope angular-velocity prior (averaged over the interval,
+  // already in the vehicle/body frame):
+  if (params_.imu_angular_velocity_sigma_deg > 0 && !window.w_b.empty()) {
+    gtsam::Vector3 wSum = gtsam::Vector3::Zero();
+    for (const auto & [tw, w] : window.w_b) {
+      wSum += gtsam::Vector3(w.x, w.y, w.z);
+    }
+    const gtsam::Vector3 wBody = wSum / static_cast<double>(window.w_b.size());
     auto wNoise =
       gtsam::noiseModel::Isotropic::Sigma(3, mrpt::DEG2RAD(params_.imu_angular_velocity_sigma_deg));
-    state_.gtsam->newFactors.addPrior(W(this_kf_id), wBody, wNoise);
+    state_.gtsam->newFactors.addPrior(W(newKf), wBody, wNoise);
     addedFactor = true;
   }
 
@@ -942,8 +902,8 @@ void Mapper3D::apply_imu_observation_locked(
     imu_factors_inserted_++;
   }
   MRPT_LOG_THROTTLE_DEBUG_FMT(
-    5.0, "[fuse_imu] kf=%zu attitude/gravity/gyro factors so far=%zu",
-    static_cast<size_t>(this_kf_id), imu_factors_inserted_);
+    5.0, "[fuse_imu] kf=%zu (interval %zu accel / %zu ori samples) factors so far=%zu",
+    static_cast<size_t>(newKf), window.a_b.size(), window.q.size(), imu_factors_inserted_);
 }
 
 void Mapper3D::trace_imu_factors_locked(const gtsam::Values & estimate)
@@ -1103,63 +1063,6 @@ void Mapper3D::trace_keyframe_geometry_locked(const gtsam::Values & estimate)
       rawZspan, rawMeanPitch);
   } catch (const std::exception & e) {
     MRPT_LOG_ERROR_STREAM("[GEOM-TRACE] failed:\n" << e.what());
-  }
-}
-
-void Mapper3D::emit_filtered_gravity_factor_locked(const ImuGravityFilter::Estimate & est)
-{
-  // Pick the keyframe nearest the window's representative time.
-  KeyFrameID kfId = 0;
-  if (sensor_kf_creation_allowed()) {
-    kfId = create_or_get_keyframe_by_timestamp_locked(
-      est.stamp, params_.imu_nearby_keyframe_stamp_tolerance);
-  } else {
-    const auto nearestOpt = find_nearest_kf_locked(est.stamp);
-    if (!nearestOpt.has_value()) {
-      return;  // no keyframe yet to attach to
-    }
-    kfId = *nearestOpt;
-  }
-
-  const auto sensorOnVehicle = mrpt::gtsam_wrappers::toPose3(last_imu_sensor_pose_);
-  const gtsam::Vector3 g = {
-    est.gravity_body_normalized.x, est.gravity_body_normalized.y, est.gravity_body_normalized.z};
-  auto accNoise = gtsam::noiseModel::Isotropic::Sigma(3, mrpt::DEG2RAD(est.sigma_deg));
-  state_.gtsam->newFactors.emplace_shared<mola::factors::MeasuredGravityFactor>(
-    symbol_T_enu_to_map, T(kfId), sensorOnVehicle, g, accNoise);
-  imu_factors_inserted_++;
-
-  MRPT_LOG_THROTTLE_DEBUG_FMT(
-    2.0, "[fuse_imu] filtered-gravity factor kf=%zu sigma=%.2f deg from %zu/%zu accepted samples",
-    static_cast<size_t>(kfId), est.sigma_deg, est.n_accepted, est.n_total);
-
-  // Diagnostic (MOLA_MAPPER3D_TRACE_GEOM): running mean of the filtered gravity
-  // direction in the IMU/body frame. For a level vehicle on flat ground this
-  // should be ~(0,0,+-1); a SYSTEMATIC tilt of its mean (forward/right lean)
-  // is an accelerometer-bias / unmodeled-IMU-mount tilt that the gravity factor
-  // faithfully levels TO, biasing every keyframe's orientation by that angle.
-  static const bool traceGeom = (::getenv("MOLA_MAPPER3D_TRACE_GEOM") != nullptr);
-  if (traceGeom) {
-    static mrpt::math::TVector3D gAccum{0, 0, 0};
-    static size_t gN = 0;
-    // Express the measured up in the VEHICLE frame (apply sensorPose rotation):
-    const auto up_vehicle = last_imu_sensor_pose_.rotateVector(est.gravity_body_normalized);
-    gAccum = gAccum + up_vehicle;
-    gN++;
-    auto m = gAccum * (1.0 / static_cast<double>(gN));
-    const double mn = m.norm();
-    if (mn > 1e-9) {
-      m = m * (1.0 / mn);
-    }
-    // Tilt of the mean up-direction from the vehicle +Z axis, split into the
-    // pitch (about -y, from the x component) and roll (about x, from y) leans:
-    const double pitchLeanDeg = mrpt::RAD2DEG(std::atan2(m.x, m.z));
-    const double rollLeanDeg = mrpt::RAD2DEG(std::atan2(m.y, m.z));
-    MRPT_LOG_THROTTLE_WARN_FMT(
-      1.0,
-      "[GRAV-BODY-TRACE] n=%zu mean up_vehicle=(%.4f,%.4f,%.4f) -> systematic "
-      "pitch-lean=%.2f deg roll-lean=%.2f deg",
-      gN, m.x, m.y, m.z, pitchLeanDeg, rollLeanDeg);
   }
 }
 

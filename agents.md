@@ -67,6 +67,27 @@ test/                            Unit tests (plain main() + MRPT ASSERT_ macros,
   test-keyframe-ingestion.cpp    SharedKeyframeMap sink: basic plumbing + IMU-corrects-drift scenario
   test-georef-convergence.cpp    60-case synthetic odom+GNSS sweep: T_enu_to_map convergence,
                                   has_converged_localization(), with/without GNSS
+  test-multisource-georef-stability.cpp  MulRan-style end-to-end sweep driven via
+                                  onNewObservation()/requestInsertKeyframe(): a ~1 km flat
+                                  trajectory with a systematic per-keyframe LIO pitch (tilt)
+                                  bias, wheels in a FAR-offset frame, IMU accel+attitude, and
+                                  noisy GNSS (0.1 m XY / 0.2 m Z). Sweeps source ON/OFF combos
+                                  (LIO+IMUacc, +IMUatt, +GPS, +wheels, full) and asserts pose
+                                  recovery, IMU leveling / attitude azimuth recovery,
+                                  travel-direction consistency, and that T_enu_to_map stays
+                                  BOUNDED (anti-regression for the DCC01 unbounded-growth
+                                  report). NOTE: in this CLEAN synthetic world T_enu_to_map
+                                  stays bounded (~10 m, never 100s of m) in ALL GNSS combos --
+                                  the unbounded-growth failure is NOT reproduced by clean
+                                  multi-source data, so it is real-data-specific (GNSS outliers /
+                                  height jumps / larger or yaw drift / revisits). The LIO+GPS
+                                  case uses centimeter (RTK) GNSS: it recovers the HORIZONTAL
+                                  trajectory to <1 m; full-3D recovery is bounded but not cm
+                                  because the LIO tilt drift distorts the trajectory SHAPE (it
+                                  lives in the stiff relative-position edges, not removable by
+                                  position fixes nor IMU attitude). This test drove the
+                                  reinitialize_gtsam_locked T_enu_to_map prior fix (pin roll/pitch
+                                  even when estimating geo-ref; see the IMU-gravity-leveling note).
 ```
 
 ## Key design notes (and why)
@@ -240,12 +261,22 @@ test/                            Unit tests (plain main() + MRPT ASSERT_ macros,
   IMU reports an orientation quaternion, REGARDLESS of geo-ref. The absolute
   attitude IS an azimuth reference, so feeding it lets iSAM2 AUTO-ESTIMATE the
   geo-reference yaw even with GNSS off. To make that land on `T_enu_to_map`
-  (azimuth) instead of fighting the leveled {map}, the no-geo-ref F0 prior is now
-  ANISOTROPIC: tight on roll/pitch + translation (so gravity still levels the
-  KEYFRAMES, not F0) but WEAK on yaw (so IMU azimuth drives F0.yaw). See
-  `reinitialize_gtsam_locked`. Validated on DCC01 IMU-only (GNSS off,
+  (azimuth) instead of fighting the leveled {map}, the F0 prior is now
+  ANISOTROPIC: tight on roll/pitch (so gravity / GNSS still level the KEYFRAMES,
+  not F0) but WEAK on yaw (so IMU azimuth drives F0.yaw). Translation is tight
+  ONLY for pure odometry (map origin == ENU origin); when ESTIMATING geo-ref the
+  translation stays WEAK (it is the unknown geo offset). **This roll/pitch pin
+  applies whether or not geo-ref is being estimated** (`reinitialize_gtsam_locked`,
+  the `!fixed_geo_reference` branch): ENU and {map} are BOTH gravity-aligned, so
+  `T_enu_to_map` is a level yaw+translation, and a FREE roll/pitch on it lets
+  GNSS satisfy itself for free by TILTING the weakly-prior'd transform instead
+  of flattening the keyframes -- leaving {map} z/tilt-drifted and GNSS unable to
+  correct it (it previously fell through to an all-weak isotropic prior when
+  estimating geo-ref). Validated on DCC01 IMU-only (GNSS off,
   `estimate_geo_reference:false`): F0 yaw auto-locked to -170.3 deg, within ~4
-  deg of the GNSS-derived -174.3 deg; roll/pitch stayed 0.
+  deg of the GNSS-derived -174.3 deg; roll/pitch stayed 0. Synthetic LIO+GPS
+  (no IMU, `test-multisource-georef-stability`): the pin takes the {map} z/tilt
+  drift from ~40 m to ~2.5 m even with GNSS position only.
   (3) the LIO odometry between-edge chain is near-rigid in roll/pitch (data-driven
   sigma + a 1e-3 deg floor), so even a clean gravity factor cannot bend it --
   `odometry_edge_min_sigma_rollpitch_deg` (>0) RAISES only the roll/pitch floor,
@@ -326,6 +357,48 @@ test/                            Unit tests (plain main() + MRPT ASSERT_ macros,
   (e.g. a relocalization seed). On DCC01 LIO+IMU this took map z-drift from
   ~37.6 m to ~3.6 m (GT z-span ~2 m). The factor MEAN still uses the exact
   relative pose; only the noise is data-driven.
+
+## Design ideas (planned rewire: geo-ref robustness + kinematics)
+
+These are agreed design directions, not all implemented yet. Keep this in sync
+as the rewire lands.
+
+- **Two-phase geo-ref estimation (GNC bootstrap, then iSAM2 + robust).** A single
+  rigid `T_enu_to_map` plus a Huber kernel inside the live iSAM2 graph is a poor
+  bootstrap: when only a FEW GNSS fixes exist and the geo-ref is not yet
+  established, the joint problem is ill-conditioned and Huber DOWNWEIGHTS exactly
+  the large residuals needed to pull the transform toward the true basin, so it
+  can wander (the DCC01 unbounded-growth report). Plan:
+  1. While geo-ref is NOT established, do NOT add GNSS factors to the live iSAM2
+     graph. iSAM2 runs LIO (+IMU) only.
+  2. Collect `(T(kf) in {map}, observed ENU point)` correspondences. Run a
+     SEPARATE, small GNC optimization (`gtsam::GncOptimizer`, e.g. TLS) over the
+     single unknown `T_enu_to_map` (keyframe poses fixed at their current iSAM2
+     estimate) using the `FactorGnssMapEnu` factors with NON-robust base noise
+     models. GNC's graduated non-convexity escapes bad local minima and rejects
+     outliers more reliably than a fixed Huber threshold during bootstrap.
+  3. Once GNC converges with a tight covariance, LATCH `geo_reference` and from
+     then on add GNSS factors to the live iSAM2 graph WITH a robust (Huber)
+     kernel for ongoing per-fix outlier rejection.
+- **Undefined-geo-ref guard (do not estimate until observable).** Do not even
+  attempt the GNC bootstrap until the SPAN of the collected ENU points is
+  significant relative to their own noise, i.e. `span > N * sigma_enu` for some
+  N (a few). A short cluster of fixes (vehicle ~stationary, or only a couple of
+  fixes) does NOT determine the geo-ref yaw / plane and must be treated as an
+  UNDEFINED situation: keep `T_enu_to_map` at its prior and publish no geo-ref.
+  Roll/pitch of the geo-ref are only observable from a CURVED (non-degenerate)
+  trajectory or from IMU gravity; a straight-line GNSS track leaves roll free.
+- **Kinematics factors are distinct from odometry BetweenFactors.** SE(3)
+  relative-pose `Between` edges along consecutive keyframes encode ONE odometry
+  source's measured increment (e.g. LIO or VIO). KINEMATIC factors
+  (`add_kinematic_factors`: constant-velocity / tricycle) should additionally
+  link EVERY pair of consecutive keyframes regardless of which source created
+  them, so poses from different odometry sources are merged via the shared
+  kinematic/twist model, and the body twist `V(kf)/W(kf)` is estimated even with
+  a single source (they act as a smoothing / filtering prior and the twist
+  estimator). Kinematic factors must be SOFT (loose enough to allow non-constant
+  velocity and not prevent long trajectories from being blended by GNSS/IMU) and
+  are NEVER robustified (unlike GNSS).
 
 ## Real end-to-end validation lessons (KITTI, via real `mola-cli`, not unit tests)
 

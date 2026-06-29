@@ -108,8 +108,7 @@ KeyFrameID Mapper3D::request_insert_keyframe_locked(
     const auto increment = *last_wheels_odometry_ - *wheel_odom_at_prev_shared_kf_;
 
     mrpt::obs::CActionRobotMovement2D odoAct;
-    odoAct.motionModelConfiguration.modelSelection =
-      mrpt::obs::CActionRobotMovement2D::mmGaussian;
+    odoAct.motionModelConfiguration.modelSelection = mrpt::obs::CActionRobotMovement2D::mmGaussian;
     odoAct.motionModelConfiguration.gaussianModel.minStdXY = 1e-3;
     odoAct.motionModelConfiguration.gaussianModel.minStdPHI = mrpt::DEG2RAD(0.1);
     odoAct.computeFromOdometry(increment, odoAct.motionModelConfiguration);
@@ -126,11 +125,9 @@ KeyFrameID Mapper3D::request_insert_keyframe_locked(
     state_.add_kf_connectivity(*prev_shared_kf_id_, kfId);
 
     MRPT_LOG_THROTTLE_DEBUG_FMT(
-      5.0,
-      "[SharedKeyframeMap] Added wheel edge KF#%llu→#%llu (Δx=%.3f m, Δy=%.3f m, Δφ=%.2f°)",
-      static_cast<unsigned long long>(*prev_shared_kf_id_),
-      static_cast<unsigned long long>(kfId), increment.x(), increment.y(),
-      mrpt::RAD2DEG(increment.phi()));
+      5.0, "[SharedKeyframeMap] Added wheel edge KF#%llu→#%llu (Δx=%.3f m, Δy=%.3f m, Δφ=%.2f°)",
+      static_cast<unsigned long long>(*prev_shared_kf_id_), static_cast<unsigned long long>(kfId),
+      increment.x(), increment.y(), mrpt::RAD2DEG(increment.phi()));
   }
   // Update sparse-KF wheel anchor for the next interval.
   prev_shared_kf_id_ = kfId;

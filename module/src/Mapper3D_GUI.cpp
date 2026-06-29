@@ -356,8 +356,9 @@ void Mapper3D::internalBuildGUI()
     // default) renders the map North-oriented via T_enu_to_map (identity, hence
     // == map, until a geo-reference is estimated).
     tab.widgets.emplace_back(ComboBox{
-      "Viz reference frame", {"map", "enu"}, viz_reference_frame_.load(),
-      [this](int index) { viz_reference_frame_.store(index); }});
+      "Viz reference frame", {"map", "enu"}, viz_reference_frame_.load(), [this](int index) {
+        viz_reference_frame_.store(index);
+      }});
     tab.widgets.emplace_back(CheckBox{
       "Show keyframes", viz_show_keyframes_.load(),
       [this](bool checked) { viz_show_keyframes_.store(checked); }});

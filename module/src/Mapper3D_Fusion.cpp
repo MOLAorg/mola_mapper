@@ -151,19 +151,32 @@ void Mapper3D::reinitialize_gtsam_locked()
   auto enu2map = gtsam::Pose3::Identity();
   gtsam::Matrix6 enu2map_cov = gtsam::Matrix6::Identity() * mrpt::square(ENU2MAP_WEAK_SIGMA);
 
-  // When NOT estimating (and not fixing) the geo-reference, T_enu_to_map is
-  // pinned ANISOTROPICALLY: tight on roll/pitch + translation so the gravity
-  // factors level the {map} keyframes directly (a FREE roll/pitch F0 would
-  // silently ABSORB the tilt and leave the rendered {map} tilted -- see
-  // agents.md "IMU gravity leveling"), but LOOSE on yaw so the absolute IMU
-  // attitude can drive the map azimuth (automatic geo-referencing from iSAM2
-  // even with GNSS off). gtsam Pose3 tangent order: (roll, pitch, yaw, x, y, z).
-  if (!params_.estimate_geo_reference && !params_.fixed_geo_reference.has_value()) {
+  // T_enu_to_map is the transform between TWO gravity-aligned world frames (both
+  // {enu} and {map} are level), so it is PHYSICALLY a level transform: a yaw
+  // rotation plus a 3D translation, with roll == pitch == 0. We therefore pin
+  // its roll/pitch TIGHT regardless of whether the geo-reference is estimated.
+  // This is the crux of geo-ref stability: a FREE roll/pitch on T_enu_to_map
+  // lets GNSS (or the gravity factor) satisfy itself "for free" by TILTING the
+  // weakly-prior'd transform instead of flattening the drifted keyframe chain,
+  // leaving {map} z/tilt-drifted and the keyframes uncorrected. With roll/pitch
+  // pinned, the only way to satisfy the absolute factors is to bend the (soft)
+  // keyframe chain back to level/true, which is what we want.
+  //   - yaw: WEAK always (the geo-reference azimuth is the unknown; the IMU
+  //     attitude or the GNSS trajectory shape drives it).
+  //   - translation: TIGHT for pure odometry (map origin == ENU origin), but
+  //     WEAK when estimating geo-ref (the ENU offset of the map origin is the
+  //     unknown being solved for).
+  // gtsam Pose3 tangent order: (roll, pitch, yaw, x, y, z).
+  // NOTE: bending the keyframe chain no longer corrupts LidarOdometry's ICP
+  // initial guess, because estimated_navstate(t,{odom_i}) is now frame-local
+  // (anchored on the source's own raw pose, NOT reconstructed through {map}).
+  if (!params_.fixed_geo_reference.has_value()) {
     const double tight = params_.enu_to_map_prior_sigma_no_georef;
+    const double transSigma = params_.estimate_geo_reference ? ENU2MAP_WEAK_SIGMA : tight;
     enu2map_cov = gtsam::Matrix6::Zero();
     enu2map_cov.diagonal() << mrpt::square(tight), mrpt::square(tight),
-      mrpt::square(ENU2MAP_WEAK_SIGMA), mrpt::square(tight), mrpt::square(tight),
-      mrpt::square(tight);
+      mrpt::square(ENU2MAP_WEAK_SIGMA), mrpt::square(transSigma), mrpt::square(transSigma),
+      mrpt::square(transSigma);
   }
 
   if (params_.fixed_geo_reference.has_value()) {
@@ -339,10 +352,9 @@ void Mapper3D::initialize_new_frame(
   state_.gtsam->newValues.insert(W(id), angVelocity);
 
   if (params_.enforce_planar_motion) {
-    const auto planar_z_noise = gtsam::noiseModel::Diagonal::Sigmas(
-      gtsam::Vector6(
-        PLANAR_Z_SIGMA, PLANAR_Z_SIGMA, PLANAR_XY_SIGMA, PLANAR_XY_SIGMA, PLANAR_XY_SIGMA,
-        PLANAR_Z_SIGMA));
+    const auto planar_z_noise = gtsam::noiseModel::Diagonal::Sigmas(gtsam::Vector6(
+      PLANAR_Z_SIGMA, PLANAR_Z_SIGMA, PLANAR_XY_SIGMA, PLANAR_XY_SIGMA, PLANAR_XY_SIGMA,
+      PLANAR_Z_SIGMA));
     state_.gtsam->newFactors.addPrior(T(id), gtsam::Pose3::Identity(), planar_z_noise);
   }
 }

@@ -61,3 +61,10 @@ mola_add_test(
   LINK_LIBRARIES
     mola::mola_mapper_3d
 )
+
+mola_add_test(
+  TARGET  test-multisource-georef-stability
+  SOURCES test-multisource-georef-stability.cpp
+  LINK_LIBRARIES
+    mola::mola_mapper_3d
+)

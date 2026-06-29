@@ -226,15 +226,24 @@ test/                            Unit tests (plain main() + MRPT ASSERT_ macros,
   proximity check). Gating the whole query on KF proximity previously returned
   `nullopt` on those gaps, starved LIO's motion model ("Not able to use velocity
   motion model"), and eventually froze it on MulRan DCC01 with sparse KFs.
-- **TEMPORARY WORKAROUND (plan 4.7 investigation): the predictor extrapolates
-  with a FINITE-DIFFERENCE twist from each source's consecutive raw poses
-  (`RawSourcePose::local_twist`), not the graph `V(kf)`/`W(kf)`.** With IMU on,
-  the graph body-twist variables came out wrong on MulRan (V ~0.2 m/s vs ~10
-  true, W ~42 rad/s), so the prediction was near-static and LIO appeared frozen.
-  Architecturally V/W are body-local + chain-tied and SHOULD be correct/IMU-
-  immune; the corruption is unexplained -- see the plan 4.7 note. Trace with
-  `MOLA_MAPPER3D_TRACE_PREDICT=1`. Remove the `has_local_twist` branches once the
-  graph V/W is fixed.
+- **The `{odom_i}` prediction extrapolates with a FINITE-DIFFERENCE twist from
+  each source's consecutive raw poses (`RawSourcePose::local_twist`), NOT the
+  graph `V(kf)`/`W(kf)`.** This is the TWIST half of the frame-local design (the
+  pose ANCHOR being frame-local is only half the story): the graph twist is
+  re-optimized every iSAM2 solve by the ABSOLUTE factors (GNSS / IMU-gravity
+  leveling / loop closure), so it JITTERS independently of the source's true
+  motion. That jitter became catastrophic once `T_enu_to_map` roll/pitch was
+  pinned (so those factors bend the soft keyframe chain rather than tilt the
+  transform): the latest keyframe's V/W swung per solve and -- because the
+  prediction extrapolated the (stable) raw anchor with that (volatile) graph
+  twist -- consecutive scans got wildly different motion priors, collapsing LIO's
+  ICP to ~0% goodness on MulRan DCC01. Differencing the source's OWN raw poses
+  gives a twist immune to every `{map}`-frame correction, so anchor AND twist are
+  both frame-local. (Originally added as a plan-4.7 workaround for an IMU-induced
+  graph V/W corruption -- V ~0.2 m/s vs ~10 true, W ~42 rad/s -- since fixed by
+  "IMU on keyframes only"; kept because the absolute-factor jitter above is a
+  permanent property of the non-windowed central map, not that one bug.) Trace
+  with `MOLA_MAPPER3D_TRACE_PREDICT=1`.
 - **IMU gravity leveling (why a per-sample accelerometer factor does NOT level
   the map, and the filtered-gravity fix).** A single accelerometer sample
   measures specific force = gravity + body acceleration, so its "up" is

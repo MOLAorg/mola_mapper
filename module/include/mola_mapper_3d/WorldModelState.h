@@ -128,6 +128,23 @@ public:
   {
     mrpt::Clock::time_point stamp;
     mrpt::poses::CPose3DPDFGaussian pose;  //!< in {odom_i}
+
+    /// Body-frame twist (vx,vy,vz,wx,wy,wz) finite-differenced from THIS
+    /// source's OWN consecutive raw poses in {odom_i}. The short-term predictor
+    /// extrapolates the {odom_i} anchor with THIS twist, NOT the per-keyframe
+    /// graph V(kf)/W(kf). Reason: the {odom_i} prediction must be FULLY
+    /// frame-local. The graph twist is re-optimized every iSAM2 solve by the
+    /// absolute factors (GNSS / IMU-gravity leveling / loop closure); once
+    /// T_enu_to_map roll/pitch is pinned (so those factors bend the soft
+    /// keyframe chain rather than tilt the transform), the latest keyframe's
+    /// V/W swings per solve and that jitter would leak into the prediction --
+    /// producing meter/degree jumps between consecutive scans that wreck a
+    /// front end's ICP initial guess (observed on MulRan DCC01). The
+    /// finite-difference twist is the source's OWN measured velocity, immune to
+    /// those {map}-frame corrections, so the anchor + twist are both
+    /// frame-local. Falls back to the graph V/W until two raw poses exist.
+    mrpt::math::TTwist3D local_twist;
+    bool has_local_twist = false;
   };
   std::map<OdometryFrameID, RawSourcePose> last_raw_pose_by_source;
 

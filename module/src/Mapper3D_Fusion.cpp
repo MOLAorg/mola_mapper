@@ -167,9 +167,14 @@ void Mapper3D::reinitialize_gtsam_locked()
   //     WEAK when estimating geo-ref (the ENU offset of the map origin is the
   //     unknown being solved for).
   // gtsam Pose3 tangent order: (roll, pitch, yaw, x, y, z).
-  // NOTE: bending the keyframe chain no longer corrupts LidarOdometry's ICP
-  // initial guess, because estimated_navstate(t,{odom_i}) is now frame-local
-  // (anchored on the source's own raw pose, NOT reconstructed through {map}).
+  // NOTE: bending the keyframe chain does not corrupt LidarOdometry's ICP
+  // initial guess ONLY because estimated_navstate(t,{odom_i}) is FULLY
+  // frame-local: it anchors on the source's own raw pose (not reconstructed
+  // through {map}) AND extrapolates with the source's own finite-difference
+  // twist (RawSourcePose::local_twist), NOT the graph V/W. The graph twist is
+  // re-optimized by these same absolute factors every solve, so feeding it to
+  // the predictor would leak the chain-bending jitter back into LIO's ICP guess
+  // (it did: ~0% goodness on DCC01 until the twist was made frame-local too).
   if (!params_.fixed_geo_reference.has_value()) {
     const double tight = params_.enu_to_map_prior_sigma_no_georef;
     const double transSigma = params_.estimate_geo_reference ? ENU2MAP_WEAK_SIGMA : tight;
@@ -440,7 +445,29 @@ void Mapper3D::fuse_pose_locked(
 
   // Odometry frame: ALWAYS record the predictor anchor so estimated_navstate()
   // in {odom_i} remains fresh regardless of whether we create a KF.
-  state_.last_raw_pose_by_source[frame_id_idx] = {timestamp, poseSanitized};
+  //
+  // Also derive the body-frame twist from THIS source's consecutive raw poses
+  // (finite difference in {odom_i}). The short-term {odom_i} prediction must be
+  // FULLY frame-local: the per-keyframe graph V(kf)/W(kf) is re-optimized every
+  // solve by the absolute factors (GNSS / IMU-gravity leveling / loop closure),
+  // so it jitters (especially once T_enu_to_map roll/pitch is pinned and those
+  // factors bend the soft keyframe chain) and would leak meter/degree jumps into
+  // the prediction. The source's own finite-difference velocity is immune to
+  // those {map}-frame corrections. See WorldModelState::RawSourcePose.
+  WorldModelState::RawSourcePose newAnchor{timestamp, poseSanitized, {}, false};
+  if (const auto itPrev = state_.last_raw_pose_by_source.find(frame_id_idx);
+      itPrev != state_.last_raw_pose_by_source.end()) {
+    const double dt = mrpt::system::timeDifference(itPrev->second.stamp, timestamp);
+    if (dt > 1e-4 && dt <= params_.max_time_to_use_velocity_model) {
+      // Relative body motion prev^-1 (+) curr, then log() / dt -> body twist.
+      const mrpt::poses::CPose3D rel = poseSanitized.mean - itPrev->second.pose.mean;
+      const auto logv = mrpt::poses::Lie::SE<3>::log(rel);
+      newAnchor.local_twist = mrpt::math::TTwist3D(
+        logv[0] / dt, logv[1] / dt, logv[2] / dt, logv[3] / dt, logv[4] / dt, logv[5] / dt);
+      newAnchor.has_local_twist = true;
+    }
+  }
+  state_.last_raw_pose_by_source[frame_id_idx] = newAnchor;
 
   if (!sensor_kf_creation_allowed()) {
     // SharedMapOnly (or Auto after first requestInsertKeyframe()): dense
@@ -1651,8 +1678,13 @@ std::optional<NavState> Mapper3D::estimated_navstate(
         }
 
         freshestStamp = rawAnchor.stamp;
+        // Extrapolate in the source's OWN frame with its OWN finite-difference
+        // twist (frame-local, immune to the graph V/W re-optimization jitter the
+        // absolute factors inject), then compose into {map}.
+        const mrpt::math::TTwist3D & twistOdom =
+          rawAnchor.has_local_twist ? rawAnchor.local_twist : ret.twist;
         const auto poseInOdom =
-          rawAnchor.pose.mean + body_twist_delta(params_, ret.twist, dtFromRaw);
+          rawAnchor.pose.mean + body_twist_delta(params_, twistOdom, dtFromRaw);
         freshestPoseInMap = pFrame->mean + poseInOdom;
       }
 
@@ -1712,6 +1744,16 @@ std::optional<NavState> Mapper3D::estimated_navstate(
   if (std::abs(dtPred) > params_.max_time_to_use_velocity_model) {
     // This source's last raw pose is too old to extrapolate from.
     return {};
+  }
+
+  // Frame-local twist: prefer the source's OWN finite-difference velocity over
+  // the graph V/W. The graph twist is re-optimized every solve by the absolute
+  // factors (GNSS / IMU-gravity leveling / loop closure); once T_enu_to_map
+  // roll/pitch is pinned those factors bend the soft keyframe chain, so the
+  // latest keyframe's V/W swings per solve and would otherwise leak meter/degree
+  // jumps into this prediction (wrecking the front end's ICP guess on MulRan).
+  if (rawAnchor.has_local_twist) {
+    ret.twist = rawAnchor.local_twist;
   }
 
   mrpt::poses::CPose3DPDFGaussian pred;

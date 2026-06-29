@@ -22,6 +22,7 @@
 
 #include <mola_mapper_3d/Mapper3D.h>
 #include <mrpt/core/lock_helper.h>
+#include <mrpt/opengl/CGridPlaneXY.h>
 #include <mrpt/opengl/CSetOfLines.h>
 #include <mrpt/opengl/CSetOfObjects.h>
 #include <mrpt/opengl/CText.h>
@@ -186,6 +187,40 @@ void Mapper3D::updateVisualization()
     }
     glEdges->setPose(vizXform);
     visualizer_->update_3d_object("mapper3d/edges", glEdges);
+  }
+
+  // --- Ground grid (XY extent from the trajectory bounding box) ---
+  {
+    auto glGroundGrid = mrpt::opengl::CSetOfObjects::Create();
+    if (viz_show_ground_grid_.load()) {
+      const float spacing = viz_params_.getOrDefault<float>("ground_grid_spacing", 10.0f);
+
+      float xMin = -50.0f, xMax = 50.0f, yMin = -50.0f, yMax = 50.0f;
+      if (!kfPoses.empty()) {
+        xMin = xMax = static_cast<float>(kfPoses.front().second.x());
+        yMin = yMax = static_cast<float>(kfPoses.front().second.y());
+        for (const auto & [kfId, pose] : kfPoses) {
+          const float x = static_cast<float>(pose.x());
+          const float y = static_cast<float>(pose.y());
+          xMin = std::min(xMin, x);
+          xMax = std::max(xMax, x);
+          yMin = std::min(yMin, y);
+          yMax = std::max(yMax, y);
+        }
+        xMin -= spacing;
+        xMax += spacing;
+        yMin -= spacing;
+        yMax += spacing;
+      }
+
+      auto glGrid = mrpt::opengl::CGridPlaneXY::Create();
+      glGrid->setPlaneLimits(xMin, xMax, yMin, yMax);
+      glGrid->setGridFrequency(spacing);
+      glGrid->setColor_u8(0xff, 0xff, 0xff, 0x80);
+      glGroundGrid->insert(glGrid);
+    }
+    glGroundGrid->setPose(vizXform);
+    visualizer_->update_3d_object("mapper3d/groundgrid", glGroundGrid);
   }
 
   // --- Per-source movable frame nodes + visible markers ---
@@ -379,6 +414,9 @@ void Mapper3D::internalBuildGUI()
     tab.widgets.emplace_back(CheckBox{
       "Camera follows vehicle", viz_camera_follows_vehicle_.load(),
       [this](bool checked) { viz_camera_follows_vehicle_.store(checked); }});
+    tab.widgets.emplace_back(CheckBox{
+      "Show ground grid", viz_show_ground_grid_.load(),
+      [this](bool checked) { viz_show_ground_grid_.store(checked); }});
     desc.tabs.emplace_back(std::move(tab));
   }
 

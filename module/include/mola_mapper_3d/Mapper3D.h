@@ -310,6 +310,7 @@ private:
   std::atomic_bool viz_show_edges_{true};
   std::atomic_bool viz_show_odom_frames_{true};
   std::atomic_bool viz_camera_follows_vehicle_{false};
+  std::atomic_bool viz_show_ground_grid_{true};
 
   /// Which frame is the origin (0,0,0) of the 3D viz scene: 0 = {map},
   /// 1 = {enu}. Default {enu} so the map is rendered North-oriented via the

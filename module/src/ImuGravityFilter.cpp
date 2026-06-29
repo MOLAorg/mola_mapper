@@ -22,6 +22,7 @@
 #include <mola_mapper_3d/ImuGravityFilter.h>
 #include <mrpt/core/bits_math.h>
 #include <mrpt/core/exceptions.h>
+#include <mrpt/core/get_env.h>
 #include <mrpt/system/datetime.h>
 
 #include <algorithm>
@@ -148,6 +149,15 @@ std::optional<ImuGravityFilter::Estimate> ImuGravityFilter::flush()
   const double spreadDeg = std::sqrt(sumSqDeg / static_cast<double>(accepted.size()));
   const double earned = spreadDeg / std::sqrt(static_cast<double>(accepted.size()));
   const double sigmaDeg = std::clamp(earned, params_.sigma_floor_deg, params_.sigma_ceil_deg);
+
+  thread_local const bool MOLA_IMU_GRAVITY_FILTER_DEBUG =
+    mrpt::get_env<bool>("MOLA_IMU_GRAVITY_FILTER_DEBUG", false);
+  if (MOLA_IMU_GRAVITY_FILTER_DEBUG) {
+    printf(
+      "[ImuGravityFilter] Window: %zu accepted / %zu total, sigma_deg=%.3f (spread=%.3f) "
+      "earned=%.3f\n",
+      accepted.size(), nTotal, sigmaDeg, spreadDeg, earned);
+  }
 
   Estimate e;
   const double n = norm3(mean);

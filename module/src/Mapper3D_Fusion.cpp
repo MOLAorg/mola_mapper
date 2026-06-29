@@ -894,9 +894,11 @@ void Mapper3D::emit_imu_factors_for_keyframe_locked(KeyFrameID newKf)
         }
         MRPT_LOG_THROTTLE_WARN_FMT(
           1.0,
-          "[GRAV-BODY-TRACE] n=%zu mean up_vehicle=(%.4f,%.4f,%.4f) -> systematic "
+          "[GRAV-BODY-TRACE] n=%zu cur up_veh=(%.04f,%.04f,%.04f) mean up_vehicle=(%.4f,%.4f,%.4f) "
+          "-> systematic "
           "pitch-lean=%.2f deg roll-lean=%.2f deg",
-          gN, m.x, m.y, m.z, mrpt::RAD2DEG(std::atan2(m.x, m.z)),
+          gN, est->gravity_body_normalized.x, est->gravity_body_normalized.y,
+          est->gravity_body_normalized.z, m.x, m.y, m.z, mrpt::RAD2DEG(std::atan2(m.x, m.z)),
           mrpt::RAD2DEG(std::atan2(m.y, m.z)));
       }
     }
@@ -982,6 +984,7 @@ void Mapper3D::trace_imu_factors_locked(const gtsam::Values & estimate)
       return;
     }
     std::sort(gravDeg.begin(), gravDeg.end());
+    const double min = gravDeg.front();
     const double mean =
       std::accumulate(gravDeg.begin(), gravDeg.end(), 0.0) / static_cast<double>(gravDeg.size());
     const double median = gravDeg[gravDeg.size() / 2];
@@ -989,9 +992,9 @@ void Mapper3D::trace_imu_factors_locked(const gtsam::Values & estimate)
     const double meanVecNorm =
       mrpt::RAD2DEG((residSum / static_cast<double>(gravDeg.size())).norm());
     MRPT_LOG_WARN_FMT(
-      "[IMU-TRACE] gravity-resid(deg): n=%zu mean=%.2f median=%.2f p90=%.2f max=%.2f "
+      "[IMU-TRACE] gravity-resid(deg): n=%zu min=%.2f mean=%.2f median=%.2f p90=%.2f max=%.2f "
       "sum_chi2=%.0f | mean-VECTOR-norm=%.2f deg (systematic if ~mean; random/motion if <<mean)",
-      gravDeg.size(), mean, median, p90, gravDeg.back(), gravChi2, meanVecNorm);
+      gravDeg.size(), min, mean, median, p90, gravDeg.back(), gravChi2, meanVecNorm);
   } catch (const std::exception & e) {
     MRPT_LOG_ERROR_STREAM("[IMU-TRACE] failed:\n" << e.what());
   }

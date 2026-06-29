@@ -102,8 +102,8 @@ convergence_max_position_sigma: ${MOLA_MAPPER3D_CONV_POS_SIGMA|1.0}
 # mola_sm_loop_closure::add_odometry_edges), so z/roll/pitch stay soft enough for
 # IMU-gravity / GNSS to level the map. sigma = sqrt(diag) * multiplier + floor.
 odometry_edge_uncertainty_multiplier: ${MOLA_ODOM_EDGE_MULT|1.0}
-odometry_edge_min_sigma_xyz: ${MOLA_ODOM_EDGE_MIN_XYZ|0.001}
-odometry_edge_min_sigma_ang_deg: ${MOLA_ODOM_EDGE_MIN_ANG|0.001}
+odometry_edge_min_sigma_xyz: ${MOLA_ODOM_EDGE_MIN_XYZ|0.01}
+odometry_edge_min_sigma_ang_deg: ${MOLA_ODOM_EDGE_MIN_ANG|0.1}
 convergence_max_orientation_sigma_deg: 5.0
 publish_estimated_georef_on_convergence: true
 

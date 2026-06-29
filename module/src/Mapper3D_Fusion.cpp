@@ -33,6 +33,7 @@
 #include <mola_gtsam_factors/Pose3RotationFactor.h>
 #include <mola_mapper_3d/Mapper3D.h>
 #include <mrpt/core/format.h>
+#include <mrpt/core/get_env.h>
 #include <mrpt/core/lock_helper.h>
 #include <mrpt/math/CQuaternion.h>
 #include <mrpt/math/gtsam_wrappers.h>
@@ -338,9 +339,10 @@ void Mapper3D::initialize_new_frame(
   state_.gtsam->newValues.insert(W(id), angVelocity);
 
   if (params_.enforce_planar_motion) {
-    const auto planar_z_noise = gtsam::noiseModel::Diagonal::Sigmas(gtsam::Vector6(
-      PLANAR_Z_SIGMA, PLANAR_Z_SIGMA, PLANAR_XY_SIGMA, PLANAR_XY_SIGMA, PLANAR_XY_SIGMA,
-      PLANAR_Z_SIGMA));
+    const auto planar_z_noise = gtsam::noiseModel::Diagonal::Sigmas(
+      gtsam::Vector6(
+        PLANAR_Z_SIGMA, PLANAR_Z_SIGMA, PLANAR_XY_SIGMA, PLANAR_XY_SIGMA, PLANAR_XY_SIGMA,
+        PLANAR_Z_SIGMA));
     state_.gtsam->newFactors.addPrior(T(id), gtsam::Pose3::Identity(), planar_z_noise);
   }
 }
@@ -540,8 +542,7 @@ void Mapper3D::link_into_odometry_chain_locked(
         // dead-reckoned pose for keyframes the optimizer has not solved yet.
         const auto itSt = state_.last_estimated_states.find(kf);
         if (itSt != state_.last_estimated_states.end()) {
-          itSt->second.pose =
-            mrpt::poses::CPose3D(mrpt::gtsam_wrappers::toTPose3D(init));
+          itSt->second.pose = mrpt::poses::CPose3D(mrpt::gtsam_wrappers::toTPose3D(init));
         }
       }
     }
@@ -579,8 +580,7 @@ void Mapper3D::add_odom_chain_edge_locked(KeyFrameID a, KeyFrameID b)
     kf_odom_abs_pose_.at(to) - kf_odom_abs_pose_.at(from);
 
   // MRPT covariance order: [x, y, z, yaw, pitch, roll].
-  gtsam::Vector6 sigmasXYZYPR =
-    relPdf.cov.asEigen().diagonal().cwiseMax(0.0).array().sqrt().eval();
+  gtsam::Vector6 sigmasXYZYPR = relPdf.cov.asEigen().diagonal().cwiseMax(0.0).array().sqrt().eval();
   sigmasXYZYPR *= params_.odometry_edge_uncertainty_multiplier;
   for (int k = 0; k < 3; k++) {
     sigmasXYZYPR[k] += params_.odometry_edge_min_sigma_xyz;
@@ -758,6 +758,7 @@ void Mapper3D::ingest_imu_sample_locked(const mrpt::obs::CObservationIMU & imu)
   // label, since it keeps angular-velocity/acceleration low-pass state.
   auto & transformer = imu_transformers_[imu.sensorLabel];
   const mrpt::obs::CObservationIMU bodyImu = transformer.process(imu);
+
   // After process() the reading is expressed at the vehicle frame (sensorPose
   // is identity), so the factors built from the buffer use an identity sensor
   // pose and the orientation we store is the VEHICLE attitude in the world.
@@ -842,7 +843,7 @@ void Mapper3D::emit_imu_factors_for_keyframe_locked(KeyFrameID newKf)
         symbol_T_enu_to_map, T(newKf), identitySensor, g, accNoise);
       addedFactor = true;
 
-      static const bool traceGeom = (::getenv("MOLA_MAPPER3D_TRACE_GEOM") != nullptr);
+      thread_local const bool traceGeom = mrpt::get_env<bool>("MOLA_MAPPER3D_TRACE_GEOM", false);
       if (traceGeom) {
         static mrpt::math::TVector3D gAccum{0, 0, 0};
         static size_t gN = 0;
@@ -908,7 +909,7 @@ void Mapper3D::emit_imu_factors_for_keyframe_locked(KeyFrameID newKf)
 
 void Mapper3D::trace_imu_factors_locked(const gtsam::Values & estimate)
 {
-  static const bool traceImu = (::getenv("MOLA_MAPPER3D_TRACE_IMU") != nullptr);
+  thread_local const bool traceImu = mrpt::get_env<bool>("MOLA_MAPPER3D_TRACE_IMU", false);
   if (!traceImu || !state_.gtsam->isam2.has_value()) {
     return;
   }
@@ -960,7 +961,7 @@ void Mapper3D::trace_imu_factors_locked(const gtsam::Values & estimate)
 
 void Mapper3D::trace_keyframe_geometry_locked(const gtsam::Values & estimate)
 {
-  static const bool traceGeom = (::getenv("MOLA_MAPPER3D_TRACE_GEOM") != nullptr);
+  thread_local const bool traceGeom = mrpt::get_env<bool>("MOLA_MAPPER3D_TRACE_GEOM", false);
   if (!traceGeom) {
     return;
   }
@@ -1074,7 +1075,7 @@ void Mapper3D::fuse_gnss(const mrpt::obs::CObservationGPS & gps)
   // Diagnostic: dump EVERY raw GNSS reading (and why it is accepted/rejected),
   // un-throttled, when MOLA_MAPPER3D_TRACE_GPS is set. Lets us inspect the data
   // quality (height constancy + per-fix ENU covariance) end to end.
-  static const bool traceGps = (::getenv("MOLA_MAPPER3D_TRACE_GPS") != nullptr);
+  thread_local const bool traceGps = mrpt::get_env<bool>("MOLA_MAPPER3D_TRACE_GPS", false);
   gnss_readings_seen_++;
   if (traceGps) {
     std::string lla = "(no GGA)";
@@ -1295,8 +1296,8 @@ void Mapper3D::optimize_and_refresh()
         continue;
       }
       TmpKf t;
-      t.pose =
-        mrpt::poses::CPose3D(mrpt::gtsam_wrappers::toTPose3D(localEstimate.at<gtsam::Pose3>(T(id))));
+      t.pose = mrpt::poses::CPose3D(
+        mrpt::gtsam_wrappers::toTPose3D(localEstimate.at<gtsam::Pose3>(T(id))));
       const auto linV = localEstimate.at<gtsam::Vector3>(V(id));
       const auto angV = localEstimate.at<gtsam::Vector3>(W(id));
       t.twist = {linV.x(), linV.y(), linV.z(), angV.x(), angV.y(), angV.z()};
@@ -1304,12 +1305,13 @@ void Mapper3D::optimize_and_refresh()
         enforce_planar_pose(t.pose);
         enforce_planar_twist(t.twist);
       }
-      static const bool traceVW = (::getenv("MOLA_MAPPER3D_TRACE_VW") != nullptr);
+      thread_local const bool traceVW = mrpt::get_env<bool>("MOLA_MAPPER3D_TRACE_VW", false);
       if (traceVW && (angV.norm() > 5.0 || linV.norm() < 0.5)) {
         // dt to the time-adjacent previous keyframe (the kinematic-factor dt):
         double dtPrev = -1.0;
         const auto & m = state_.time_to_kf_id.getDirectMap();
-        if (auto itT = m.find(state_.time_to_kf_id.inverse(id)); itT != m.end() && itT != m.begin()) {
+        if (auto itT = m.find(state_.time_to_kf_id.inverse(id));
+            itT != m.end() && itT != m.begin()) {
           dtPrev = mrpt::system::timeDifference(std::prev(itT)->first, itT->first);
         }
         MRPT_LOG_WARN_FMT(
@@ -1567,8 +1569,7 @@ std::optional<NavState> Mapper3D::estimated_navstate(
   // motion model") and eventually froze it on MulRan. The reference-frame path
   // and the no-raw-anchor fallback re-apply the proximity check themselves so
   // their behavior is unchanged.
-  const bool closestWithinVelWindow =
-    (*closestFrameDt <= params_.max_time_to_use_velocity_model);
+  const bool closestWithinVelWindow = (*closestFrameDt <= params_.max_time_to_use_velocity_model);
 
   // 3) Recover the closest state (in the reference/map frame).
   NavState ret = get_latest_state_and_covariance(*closestFrameIdx);
@@ -1714,12 +1715,13 @@ std::optional<NavState> Mapper3D::estimated_navstate(
   const double adt = std::abs(dtPred);
   for (int i = 0; i < 3; i++) {
     pred.cov(i, i) += mrpt::square(params_.sigma_random_walk_acceleration_linear * adt * adt);
-    pred.cov(3 + i, 3 + i) += mrpt::square(params_.sigma_random_walk_acceleration_angular * adt * adt);
+    pred.cov(3 + i, 3 + i) +=
+      mrpt::square(params_.sigma_random_walk_acceleration_angular * adt * adt);
   }
 
   ret.pose.copyFrom(pred);  // NavState.pose is CPose3DPDFGaussianInf
 
-  static const bool tracePred = (::getenv("MOLA_MAPPER3D_TRACE_PREDICT") != nullptr);
+  thread_local const bool tracePred = mrpt::get_env<bool>("MOLA_MAPPER3D_TRACE_PREDICT", false);
   if (tracePred) {
     const auto disp = body_twist_delta(params_, ret.twist, dtPred);
     MRPT_LOG_INFO_FMT(
@@ -1816,8 +1818,7 @@ std::optional<KeyFrameID> Mapper3D::pick_closest(
   return (dtBefore < dtAfter) ? before->second : after->second;
 }
 
-std::optional<KeyFrameID> Mapper3D::find_nearest_kf_locked(
-  const mrpt::Clock::time_point & t) const
+std::optional<KeyFrameID> Mapper3D::find_nearest_kf_locked(const mrpt::Clock::time_point & t) const
 {
   return pick_closest(find_before_after(t, true), t);
 }

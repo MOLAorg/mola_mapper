@@ -211,6 +211,15 @@ private:
   // The keyframe the last IMU window was attached to; the next keyframe drains
   // the buffer window since this one. nullopt until the first keyframe is seen.
   std::optional<KeyFrameID> last_imu_kf_;
+  // Gravity-leveling factors are emitted from the IMU stream at a BOUNDED rate
+  // (every imu_gravity_window_sec), NOT on keyframe creation: keyframes are
+  // created from distance traveled, so they never land during the STOPS where
+  // the accelerometer sees clean, motion-free gravity. last_gravity_check_t_ is
+  // the timestamp [s] of the last bounded-rate check; last_gravity_kf_id_ is the
+  // keyframe the last gravity factor was attached to (at most ONE per keyframe,
+  // so a long stop does not over-constrain the same pose).
+  std::optional<mola::imu::TimeStamp> last_gravity_check_t_;
+  std::optional<KeyFrameID> last_gravity_kf_id_;
   // Reused as a STATELESS per-interval robust-gravity reducer (its accept/avg
   // math is fed the buffered window and flush()ed on each keyframe close; the
   // internal window timer is not used). Guarded by stateMutex_.
@@ -408,6 +417,14 @@ private:
   /// attitude Pose3RotationFactor (always, so IMU azimuth can drive geo-ref),
   /// and an averaged-gyro W prior. No-op until a previous IMU keyframe exists.
   void emit_imu_factors_for_keyframe_locked(KeyFrameID newKf);
+
+  /// Bounded-rate gravity-leveling emission, driven from the IMU stream (NOT
+  /// keyframe creation). Every imu_gravity_window_sec it reduces the recent
+  /// proper-acceleration window and, if it is a clean low-dynamics reading,
+  /// attaches ONE MeasuredGravityFactor to the latest keyframe. This is what
+  /// lets the clean gravity seen during STOPS (when no keyframe is created) level
+  /// the map. Called from ingest_imu_sample_locked under stateMutex_.
+  void maybe_emit_gravity_factor_locked(mola::imu::TimeStamp tNow);
 
   /// Env-gated (MOLA_MAPPER3D_TRACE_IMU) diagnostic: logs T_enu_to_map (F0) and
   /// the distribution of IMU gravity-factor residuals (mean/median/p90/max +

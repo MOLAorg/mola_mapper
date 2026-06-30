@@ -87,6 +87,12 @@ imu_gravity_window_sec: ${MOLA_IMU_GRAVITY_WINDOW_SEC|1.0}
 imu_gravity_accel_tol_frac: ${MOLA_IMU_GRAVITY_ACCEL_TOL|0.05}
 imu_gravity_gyro_tol_deg: ${MOLA_IMU_GRAVITY_GYRO_TOL|3.0}
 imu_gravity_min_samples: ${MOLA_IMU_GRAVITY_MIN_SAMPLES|10}
+# Reject motion-contaminated gravity windows (would tilt the map): the accepted
+# samples must agree (low RMS angular spread) and most raw samples must pass the
+# low-dynamics gates. Critical for ground vehicles whose short per-keyframe
+# intervals never average out longitudinal acceleration.
+imu_gravity_max_spread_deg: ${MOLA_IMU_GRAVITY_MAX_SPREAD|3.0}
+imu_gravity_min_accept_fraction: ${MOLA_IMU_GRAVITY_MIN_ACCEPT_FRAC|0.0}
 imu_gravity_sigma_floor_deg: ${MOLA_IMU_GRAVITY_SIGMA_FLOOR|0.5}
 imu_gravity_sigma_ceil_deg: ${MOLA_IMU_GRAVITY_SIGMA_CEIL|5.0}
 

@@ -223,6 +223,15 @@ public:
   double imu_gravity_gyro_tol_deg = 3.0;
   /// Minimum accepted samples in a window to emit a gravity factor.
   std::size_t imu_gravity_min_samples = 10;
+  /// Reject a window whose accepted samples disagree by more than this RMS
+  /// angular spread [deg] (motion-contaminated; would tilt the map). <=0 off.
+  double imu_gravity_max_spread_deg = 3.0;
+  /// Reject a window unless at least this fraction of raw samples passed the
+  /// low-dynamics gates (a hard-accel/turning epoch accepts very few). <=0 off.
+  /// Off by default: a high-vibration IMU accepts only a few percent of samples
+  /// even when stationary, so this would block the clean stops too; the
+  /// spread gate is the robust discriminator. Useful for low-noise IMUs.
+  double imu_gravity_min_accept_fraction = 0.0;
   /// Lower / upper clamp on the earned gravity-factor sigma [deg].
   double imu_gravity_sigma_floor_deg = 0.5;
   double imu_gravity_sigma_ceil_deg = 5.0;

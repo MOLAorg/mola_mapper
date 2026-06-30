@@ -70,6 +70,17 @@ public:
     double gyro_tol_dps = 3.0;
     /// Do not emit an estimate from fewer than this many accepted samples.
     std::size_t min_accepted = 10;
+    /// Reject the whole window if the accepted samples disagree by more than
+    /// this RMS angular spread [deg]. A genuine low-dynamics gravity reading has
+    /// its survivors tightly clustered; a high spread means the "accepted"
+    /// samples are still motion-contaminated and their mean is an unreliable
+    /// "up" that would TILT the map. (<=0 disables this gate.)
+    double max_spread_deg = 3.0;
+    /// Reject the whole window unless at least this fraction of the raw samples
+    /// passed the low-dynamics gates. A near-static / steady-cruise epoch accepts
+    /// most samples; a hard-accel / turning epoch accepts very few, and the few
+    /// survivors are a biased, untrustworthy subsample. (<=0 disables this gate.)
+    double min_accept_fraction = 0.30;
     /// Lower clamp on the earned 1-sigma [deg] (sensor/quantization floor).
     double sigma_floor_deg = 0.5;
     /// Upper clamp on the earned 1-sigma [deg] (above this the window is noisy).

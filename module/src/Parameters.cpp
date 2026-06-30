@@ -106,6 +106,8 @@ void Parameters::loadFrom(const mrpt::containers::yaml & cfg)
   MCP_LOAD_OPT(cfg, imu_gravity_accel_tol_frac);
   MCP_LOAD_OPT(cfg, imu_gravity_gyro_tol_deg);
   MCP_LOAD_OPT(cfg, imu_gravity_min_samples);
+  MCP_LOAD_OPT(cfg, imu_gravity_max_spread_deg);
+  MCP_LOAD_OPT(cfg, imu_gravity_min_accept_fraction);
   MCP_LOAD_OPT(cfg, imu_gravity_sigma_floor_deg);
   MCP_LOAD_OPT(cfg, imu_gravity_sigma_ceil_deg);
 

@@ -803,10 +803,21 @@ void Mapper3D::ingest_imu_sample_locked(const mrpt::obs::CObservationIMU & imu)
   // pose and the orientation we store is the VEHICLE attitude in the world.
   const mola::imu::TimeStamp t = mrpt::Clock::toDouble(bodyImu.timestamp);
 
-  if (bodyImu.has(mrpt::obs::IMU_X_ACC)) {
-    imu_buffer_.add_linear_acceleration(
-      t, {bodyImu.get(mrpt::obs::IMU_X_ACC), bodyImu.get(mrpt::obs::IMU_Y_ACC),
-          bodyImu.get(mrpt::obs::IMU_Z_ACC)});
+  if (imu.has(mrpt::obs::IMU_X_ACC) && imu.has(mrpt::obs::IMU_Y_ACC) &&
+      imu.has(mrpt::obs::IMU_Z_ACC)) {
+    // ROTATION-ONLY accel for the gravity buffer (NOT the lever-arm-corrected
+    // bodyImu accel). Gravity DIRECTION is invariant to a rigid sensor offset,
+    // and the ImuTransformer's lever-arm term (-alpha x t - w x (w x t)) turns
+    // this IMU's noisy gyro into several m/s^2 of direction scatter over its
+    // ~0.44 m lever arm, destroying otherwise-clean stationary gravity windows
+    // (the very low-dynamics epochs the leveling relies on). The low-dynamics
+    // gates + spread gate already reject genuine motion accel, so the lever-arm
+    // correction is not needed here and is actively harmful.
+    const auto aSensor = mrpt::math::TVector3D(
+      imu.get(mrpt::obs::IMU_X_ACC), imu.get(mrpt::obs::IMU_Y_ACC),
+      imu.get(mrpt::obs::IMU_Z_ACC));
+    const auto aBodyRot = imu.sensorPose.rotateVector(aSensor);
+    imu_buffer_.add_linear_acceleration(t, aBodyRot);
   }
   if (bodyImu.has(mrpt::obs::IMU_WX)) {
     imu_buffer_.add_angular_velocity(
@@ -856,6 +867,88 @@ void Mapper3D::ingest_imu_sample_locked(const mrpt::obs::CObservationIMU & imu)
       MRPT_LOG_THROTTLE_WARN(5.0, "Ignoring invalid/NaN IMU orientation quaternion");
     }
   }
+
+  // Bounded-rate gravity leveling from the IMU stream (fires during stops, when
+  // no keyframe is created but the accelerometer sees clean gravity).
+  maybe_emit_gravity_factor_locked(t);
+}
+
+void Mapper3D::maybe_emit_gravity_factor_locked(mola::imu::TimeStamp tNow)
+{
+  // No keyframe yet -> nothing to attach a gravity factor to.
+  if (state_.empty()) {
+    return;
+  }
+  const mola::imu::TimeStamp gWin = params_.imu_gravity_window_sec;
+
+  // Bounded rate: evaluate the window at most once every gWin seconds, so
+  // consecutive emitted factors use NON-overlapping (independent) windows.
+  if (last_gravity_check_t_.has_value() && (tNow - *last_gravity_check_t_) < gWin) {
+    return;
+  }
+  last_gravity_check_t_ = tNow;
+
+  // At most ONE gravity factor per keyframe: a long stop keeps the same latest
+  // keyframe and must not pile up dozens of constraints on the same pose.
+  const KeyFrameID latestKf = state_.last_kf_id();
+  if (last_gravity_kf_id_.has_value() && *last_gravity_kf_id_ == latestKf) {
+    return;
+  }
+
+  // Reduce the recent proper-acceleration window to a robust, low-dynamics
+  // gravity direction (the filter rejects motion-contaminated samples and whole
+  // windows whose survivors disagree). A motion-canceling window of length gWin
+  // makes the mean residual acceleration ~(v_end - v_start)/gWin, which is small
+  // for steady or stop-and-go driving; the clean stops dominate the survivors.
+  const auto window = imu_buffer_.window_since(tNow - gWin, tNow);
+  if (window.a_b.empty()) {
+    return;
+  }
+  imu_gravity_filter_.clear();
+  for (const auto & [ta, a] : window.a_b) {
+    std::optional<mrpt::math::TVector3D> w;
+    if (const auto itw = window.w_b.find(ta); itw != window.w_b.end()) {
+      w = itw->second;
+    }
+    imu_gravity_filter_.addSample(mrpt::Clock::fromDouble(ta), a, w);
+  }
+  const auto est = imu_gravity_filter_.flush();
+  if (!est.has_value()) {
+    return;
+  }
+  last_gravity_kf_id_ = latestKf;
+
+  // Accel is already in the vehicle frame (ImuTransformer at ingest), so the
+  // factor takes an identity sensor pose. The latest keyframe's orientation
+  // matches the (stationary) vehicle attitude this gravity was measured at.
+  const gtsam::Vector3 g = {
+    est->gravity_body_normalized.x, est->gravity_body_normalized.y,
+    est->gravity_body_normalized.z};
+  auto accNoise = gtsam::noiseModel::Isotropic::Sigma(3, mrpt::DEG2RAD(est->sigma_deg));
+  state_.gtsam->newFactors.emplace_shared<mola::factors::MeasuredGravityFactor>(
+    symbol_T_enu_to_map, T(latestKf), gtsam::Pose3::Identity(), g, accNoise);
+  geo_ref_counters_.imu_gravity++;
+  notify_optimizer();
+
+  thread_local const bool traceGeom = mrpt::get_env<bool>("MOLA_MAPPER3D_TRACE_GEOM", false);
+  if (traceGeom) {
+    static mrpt::math::TVector3D gAccum{0, 0, 0};
+    static size_t gN = 0;
+    gAccum = gAccum + est->gravity_body_normalized;
+    gN++;
+    auto m = gAccum * (1.0 / static_cast<double>(gN));
+    const double mn = m.norm();
+    if (mn > 1e-9) {
+      m = m * (1.0 / mn);
+    }
+    MRPT_LOG_THROTTLE_WARN_FMT(
+      1.0,
+      "[GRAV-BODY-TRACE] n=%zu cur up_veh=(%.04f,%.04f,%.04f) mean up_vehicle=(%.4f,%.4f,%.4f) "
+      "-> systematic pitch-lean=%.2f deg roll-lean=%.2f deg",
+      gN, est->gravity_body_normalized.x, est->gravity_body_normalized.y,
+      est->gravity_body_normalized.z, m.x, m.y, m.z, mrpt::RAD2DEG(std::atan2(m.x, m.z)),
+      mrpt::RAD2DEG(std::atan2(m.y, m.z)));
+  }
 }
 
 void Mapper3D::emit_imu_factors_for_keyframe_locked(KeyFrameID newKf)
@@ -877,53 +970,12 @@ void Mapper3D::emit_imu_factors_for_keyframe_locked(KeyFrameID newKf)
 
   const auto identitySensor = gtsam::Pose3::Identity();
 
-  // (1) Robust gravity-leveling factor: pool the interval's proper-acceleration
-  // samples, reject motion-contaminated ones (|a| far from g, high |w|), and
-  // emit ONE MeasuredGravityFactor with a data-earned sigma. Reuses the
-  // (well-tested) ImuGravityFilter accept/average math as a stateless reducer:
-  // we feed the buffered window and flush() it (its internal window timer is
-  // unused here). Accel/gyro are already in the vehicle frame, so the factor
-  // takes an identity sensor pose.
-  if (!window.a_b.empty()) {
-    imu_gravity_filter_.clear();
-    for (const auto & [ta, a] : window.a_b) {
-      std::optional<mrpt::math::TVector3D> w;
-      if (const auto itw = window.w_b.find(ta); itw != window.w_b.end()) {
-        w = itw->second;
-      }
-      imu_gravity_filter_.addSample(mrpt::Clock::fromDouble(ta), a, w);
-    }
-    if (const auto est = imu_gravity_filter_.flush(); est.has_value()) {
-      const gtsam::Vector3 g = {
-        est->gravity_body_normalized.x, est->gravity_body_normalized.y,
-        est->gravity_body_normalized.z};
-      auto accNoise = gtsam::noiseModel::Isotropic::Sigma(3, mrpt::DEG2RAD(est->sigma_deg));
-      state_.gtsam->newFactors.emplace_shared<mola::factors::MeasuredGravityFactor>(
-        symbol_T_enu_to_map, T(newKf), identitySensor, g, accNoise);
-      geo_ref_counters_.imu_gravity++;
-
-      thread_local const bool traceGeom = mrpt::get_env<bool>("MOLA_MAPPER3D_TRACE_GEOM", false);
-      if (traceGeom) {
-        static mrpt::math::TVector3D gAccum{0, 0, 0};
-        static size_t gN = 0;
-        gAccum = gAccum + est->gravity_body_normalized;
-        gN++;
-        auto m = gAccum * (1.0 / static_cast<double>(gN));
-        const double mn = m.norm();
-        if (mn > 1e-9) {
-          m = m * (1.0 / mn);
-        }
-        MRPT_LOG_THROTTLE_WARN_FMT(
-          1.0,
-          "[GRAV-BODY-TRACE] n=%zu cur up_veh=(%.04f,%.04f,%.04f) mean up_vehicle=(%.4f,%.4f,%.4f) "
-          "-> systematic "
-          "pitch-lean=%.2f deg roll-lean=%.2f deg",
-          gN, est->gravity_body_normalized.x, est->gravity_body_normalized.y,
-          est->gravity_body_normalized.z, m.x, m.y, m.z, mrpt::RAD2DEG(std::atan2(m.x, m.z)),
-          mrpt::RAD2DEG(std::atan2(m.y, m.z)));
-      }
-    }
-  }
+  // (1) Gravity-leveling factors are NOT emitted here. Keyframes are created from
+  // distance traveled, so they never land during the STOPS where the
+  // accelerometer sees clean, motion-free gravity; hooking gravity to keyframe
+  // creation would only ever sample the moving (motion-contaminated) epochs and
+  // TILT the map. Gravity is emitted instead from the IMU stream at a bounded
+  // rate, attached to the latest keyframe (see maybe_emit_gravity_factor_locked).
 
   // (2) Absolute attitude / azimuth observation (vehicle world attitude). Now
   // added ALWAYS (when available), not only under geo-referencing: the absolute

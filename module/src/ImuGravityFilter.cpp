@@ -147,6 +147,27 @@ std::optional<ImuGravityFilter::Estimate> ImuGravityFilter::flush()
     sumSqDeg += ang * ang;
   }
   const double spreadDeg = std::sqrt(sumSqDeg / static_cast<double>(accepted.size()));
+
+  // Low-dynamics consistency gates: a trustworthy gravity reading has its
+  // accepted samples tightly clustered (low spread) AND most raw samples passed
+  // the per-sample gates (high acceptance fraction). Otherwise the window is
+  // motion-contaminated and its mean "up" is a biased tilt that would deform the
+  // map; emit nothing rather than a confident-but-wrong factor.
+  const double acceptFrac =
+    nTotal > 0 ? static_cast<double>(accepted.size()) / static_cast<double>(nTotal) : 0.0;
+  if (
+    (params_.max_spread_deg > 0 && spreadDeg > params_.max_spread_deg) ||
+    (params_.min_accept_fraction > 0 && acceptFrac < params_.min_accept_fraction)) {
+    thread_local const bool dbg = mrpt::get_env<bool>("MOLA_IMU_GRAVITY_FILTER_DEBUG", false);
+    if (dbg) {
+      printf(
+        "[ImuGravityFilter] REJECT window: %zu accepted / %zu total (frac=%.2f), spread=%.2f deg\n",
+        accepted.size(), nTotal, acceptFrac, spreadDeg);
+    }
+    resetWindow();
+    return std::nullopt;
+  }
+
   const double earned = spreadDeg / std::sqrt(static_cast<double>(accepted.size()));
   const double sigmaDeg = std::clamp(earned, params_.sigma_floor_deg, params_.sigma_ceil_deg);
 

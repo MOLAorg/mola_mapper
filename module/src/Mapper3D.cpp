@@ -81,14 +81,18 @@ void Mapper3D::initialize(const mrpt::containers::yaml & cfg)
     gf.accel_tol_frac = params_.imu_gravity_accel_tol_frac;
     gf.gyro_tol_dps = params_.imu_gravity_gyro_tol_deg;
     gf.min_accepted = params_.imu_gravity_min_samples;
+    gf.max_spread_deg = params_.imu_gravity_max_spread_deg;
+    gf.min_accept_fraction = params_.imu_gravity_min_accept_fraction;
     gf.sigma_floor_deg = params_.imu_gravity_sigma_floor_deg;
     gf.sigma_ceil_deg = params_.imu_gravity_sigma_ceil_deg;
     imu_gravity_filter_.setParams(gf);
 
-    // The LocalVelocityBuffer must retain samples for at least one full
-    // keyframe interval (it is drained once per keyframe close); otherwise its
-    // default 0.5 s pruning would evict the early part of a longer interval.
-    imu_buffer_.parameters.max_time_window = std::max(2.0, params_.time_between_frames_to_warning);
+    // The LocalVelocityBuffer must retain enough history to cover BOTH a full
+    // keyframe interval and the (possibly longer) gravity-leveling look-back
+    // window, which is drained on keyframe close; otherwise its default 0.5 s
+    // pruning would evict the early part of a longer window.
+    imu_buffer_.parameters.max_time_window = std::max(
+      std::max(2.0, params_.time_between_frames_to_warning), params_.imu_gravity_window_sec + 0.5);
 
     state_.clear();
     reinitialize_gtsam_locked();
@@ -239,6 +243,8 @@ void Mapper3D::reset_sensor_anchors_locked()
   imu_buffer_.clear();
   imu_transformers_.clear();
   last_imu_kf_.reset();
+  last_gravity_check_t_.reset();
+  last_gravity_kf_id_.reset();
   imu_gravity_filter_.clear();
   wheel_chain_last_kf_.reset();
   wheel_chain_anchor_odom_.reset();

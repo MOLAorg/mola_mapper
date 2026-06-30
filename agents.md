@@ -63,6 +63,11 @@ mola-cli-launchs/                Live system YAMLs:
   lidar_odometry_mapper3d_from_mulran.yaml   + IMU/GNSS (MulRan); headless; prepared, NOT yet run on real data
   lidar_odometry_mapper3d_from_botanicgarden.yaml  LiDAR+IMU+wheels (ROS1 .bag via mola_input_rosbag1,
                                               no GNSS in this dataset); GUI on by default; validated end-to-end
+  lidar_odometry_mapper3d_from_oxford_spires.yaml  LiDAR (Hesai PandarXT-32) + IMU (Alphasense) from
+                                              Oxford Spires ROS2 bags (no GNSS); GUI on by default.
+                                              Set OXFORD_SPIRES_ROSBAG2 to a bag sub-folder path.
+                                              Multi-segment sequences: Rosbag2Dataset now accepts a YAML
+                                              sequence for rosbag_filename (bags replayed in order).
 test/                            Unit tests (plain main() + MRPT ASSERT_ macros, run by mola_add_test)
   test-keyframe-ingestion.cpp    SharedKeyframeMap sink: basic plumbing + IMU-corrects-drift scenario
   test-georef-convergence.cpp    60-case synthetic odom+GNSS sweep: T_enu_to_map convergence,
@@ -503,6 +508,17 @@ export MOLA_ODOMETRY_PIPELINE_YAML=$(ros2 pkg prefix mola_lidar_odometry)/share/
 KITTI_SEQ=04 MOLA_LINK_FIRST_POSE_SIGMA=1e-6 \
   mola-cli mola-cli-launchs/lidar_odometry_mapper3d_from_kitti.yaml
 # MOLA_WITH_GUI=false for headless; MOLA_TIME_WARP=N to speed up/slow down.
+```
+
+Oxford Spires launcher (`lidar_odometry_mapper3d_from_oxford_spires.yaml`), LiDAR
+(Hesai PandarXT-32) + IMU (Alphasense), no GNSS:
+
+```bash
+export OXFORD_SPIRES_ROSBAG2=/mnt/storage/oxford-spires/data/sequences/2024-03-14-blenheim-palace-01/raw/ros2bag/1710406700_2024-03-14-08-58-21_0
+mola-cli mola-cli-launchs/lidar_odometry_mapper3d_from_oxford_spires.yaml
+# For a multi-segment sequence (e.g. keble-college-01 has 3 sub-folders),
+# either run each sub-folder separately, or override rosbag_filename in the
+# YAML with a sequence list (Rosbag2Dataset now supports multi-bag playback).
 ```
 
 MulRan launcher (`lidar_odometry_mapper3d_from_mulran.yaml`), RUN for real end

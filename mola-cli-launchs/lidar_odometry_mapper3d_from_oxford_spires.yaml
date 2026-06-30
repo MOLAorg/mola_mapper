@@ -1,0 +1,130 @@
+# -----------------------------------------------------------------------------
+#                        SLAM system definition for MOLA
+# -----------------------------------------------------------------------------
+# Integration: mola_mapper_3d::Mapper3D acts as BOTH the `NavStateFilter`
+# that `LidarOdometry` queries for short-term prediction AND the
+# `SharedKeyframeMap` sink it pushes sparse central-map keyframes to.
+#
+# Dataset: Oxford Spires (https://dynamic.robots.ox.ac.uk/datasets/oxford-spires/)
+# Read from a ROS 2 bag via mola::Rosbag2Dataset.
+#
+# Sensor inventory (from dataset calibration / rosbag2rawlog.yaml):
+#   /hesai/pandar                  sensor_msgs/PointCloud2  Hesai PandarXT-32, ~10 Hz
+#   /alphasense_driver_ros/imu     sensor_msgs/Imu          Alphasense IMU, ~200 Hz
+# NO GNSS/GPS is published in the Oxford Spires bags; this launcher fuses
+# LiDAR + IMU only. mapper3d's `estimate_geo_reference` stays at its default
+# `false`.
+#
+# Sensor extrinsics (T_base_sensor, from rosbag2rawlog.yaml + dataset calib):
+#   LiDAR: x=0, y=0, z=0.124 m, yaw=180 deg (Hesai mounted upside-down)
+#   IMU:   x=-0.018, y=0.006, z=0.058 m, yaw=90 deg (Alphasense)
+#
+# Each Oxford Spires sequence may span multiple ROS 2 bag sub-folders (e.g.
+# keble-college-01 has three). Rosbag2Dataset accepts a YAML sequence so you
+# can pass all sub-folders at once; they are replayed in order. Example:
+#
+#   Single sub-folder (blenheim-palace-01 has only one):
+#   export OXFORD_SPIRES_ROSBAG2=\
+#     /mnt/storage/oxford-spires/data/sequences/2024-03-14-blenheim-palace-01/raw/ros2bag/1710406700_2024-03-14-08-58-21_0
+#
+#   Multiple sub-folders (keble-college-01 has three): override rosbag_filename
+#   inline with a YAML sequence or set three separate env vars and join them in
+#   a custom YAML snippet.
+#
+#   mola-cli $(ros2 pkg prefix mola_mapper_3d)/share/mola_mapper_3d/mola-cli-launchs/lidar_odometry_mapper3d_from_oxford_spires.yaml
+#
+# Recommended env vars (defaults already set for Oxford Spires below):
+#   MOLA_DESKEW_METHOD=MotionCompensationMethod::IMU      (IMU-based deskew)
+#   MOLA_LO_INITIAL_LOCALIZATION_METHOD=InitLocalization::PitchAndRollFromIMU
+#   MOLA_WITH_GUI=false    for headless / batch runs
+#   MOLA_TIME_WARP=N       to speed up (N>1) or slow down (N<1) playback
+#   MOLA_QUIT_ON_DATASET_END=true  to exit automatically when the bag ends
+# -----------------------------------------------------------------------------
+
+modules:
+  # =====================
+  # MolaViz / MolaVizImGui
+  # =====================
+  - name: viz
+    type: ${MOLA_GUI_MODULE|mola::MolaVizImGui}
+    enabled: ${MOLA_WITH_GUI|true}
+    verbosity_level: "${MOLA_VERBOSITY_MOLA_VIZ|INFO}"
+    params:
+      imgui_app_name: mapper3d_oxford_spires
+
+  # =====================
+  # Rosbag2Dataset (Oxford Spires)
+  # =====================
+  - name: dataset_input
+    type: mola::Rosbag2Dataset
+    verbosity_level: "${MOLA_VERBOSITY_ROSBAG2|INFO}"
+    execution_rate: 50 # Hz
+    quit_mola_app_on_dataset_end: ${MOLA_QUIT_ON_DATASET_END|true}
+
+    gui_preview_sensors:
+      - raw_sensor_label: lidar
+        decimation: 1
+        enabled: ${MOLA_WITH_GUI|true}
+        win_pos: 5 5 400 400
+
+    params:
+      rosbag_filename: ${OXFORD_SPIRES_ROSBAG2}
+      time_warp_scale: ${MOLA_TIME_WARP|1.0}
+      start_paused: ${MOLA_DATASET_START_PAUSED|false}
+
+      base_link_frame_id: base_link
+
+      sensors:
+        - topic: /hesai/pandar   # Hesai PandarXT-32, ~10 Hz
+          type: CObservationPointCloud
+          sensorLabel: lidar
+          # Hesai is mounted inverted (yaw=180 deg) and lifted 12.4 cm above base_link:
+          fixed_sensor_pose: "0.0 0.0 0.124 180 0 0" # 'x y z yaw_deg pitch_deg roll_deg'
+          use_fixed_sensor_pose: true
+
+        - topic: /alphasense_driver_ros/imu   # Alphasense IMU, ~200 Hz
+          type: CObservationIMU
+          sensorLabel: imu
+          fixed_sensor_pose: "-0.018 0.006 0.058 90 0 0" # 'x y z yaw_deg pitch_deg roll_deg'
+          use_fixed_sensor_pose: true
+
+  # =====================
+  # LidarOdometry
+  # =====================
+  - name: lidar_odom
+    type: mola::LidarOdometry
+    verbosity_level: "${MOLA_VERBOSITY_MOLA_LO|INFO}"
+    raw_data_source: "dataset_input"
+
+    $import: "${MOLA_ODOMETRY_PIPELINE_YAML|$(ros2 pkg prefix mola_lidar_odometry)/share/mola_lidar_odometry/pipelines/lidar3d-default.yaml}"
+    params:
+      # Oxford Spires uses the Alphasense IMU for deskewing and pitch/roll init:
+      initial_localization:
+        method: "${MOLA_LO_INITIAL_LOCALIZATION_METHOD|InitLocalization::PitchAndRollFromIMU}"
+      observation_layers_deskew:
+        method: "${MOLA_DESKEW_METHOD|MotionCompensationMethod::IMU}"
+      visualization:
+        show_ground_grid: false
+
+  # =====================
+  # mola_mapper_3d (NavStateFilter + SharedKeyframeMap sink + direct IMU)
+  # =====================
+  - name: mapper3d
+    type: mola::mapper_3d::Mapper3D
+    verbosity_level: "${MOLA_VERBOSITY_MAPPER3D|INFO}"
+    # Subscribe directly to the dataset's IMU observations. LidarOdometry
+    # keyframes arrive separately via the SharedKeyframeMap sink:
+    raw_data_source: "dataset_input"
+
+    params:
+      $import: ../params/mapper-3d-common.yaml
+
+      # MANDATORY gauge anchor: pure-odometry run (no GNSS). Without this the
+      # graph floats and iSAM2 throws IndeterminantLinearSystemException.
+      # estimate_geo_reference stays false (the common default).
+      link_first_pose_to_reference_origin_sigma: ${MOLA_LINK_FIRST_POSE_SIGMA|1e-6}
+
+      # ~200 Hz IMU: buffer all readings in LocalVelocityBuffer and emit one
+      # gravity/attitude/gyro factor set per keyframe (no per-sample factors).
+      # aggregate_high_rate_into_edges is not needed here (no wheel odometry).
+      high_rate_pose_publish_rate_hz: ${MOLA_MAPPER3D_PUBLISH_RATE_HZ|20.0}

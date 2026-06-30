@@ -19,11 +19,11 @@
  * @date   2026
  *
  * Adapted from mola_state_estimation_smoother's test-navstate-basic.cpp and
- * test-two-odometries.cpp, since Mapper3D's NavStateFilter fusion mirrors the
+ * test-two-odometries.cpp, since Mapper's NavStateFilter fusion mirrors the
  * smoother (native iSAM2 graph over the central keyframes).
  */
 
-#include <mola_mapper_3d/Mapper3D.h>
+#include <mola_mapper/Mapper.h>
 #include <mrpt/core/exceptions.h>
 #include <mrpt/poses/Lie/SE.h>
 #include <mrpt/random/RandomGenerators.h>
@@ -87,7 +87,7 @@ double pose_err(const mrpt::poses::CPose3D & a, const mrpt::poses::CPose3D & b)
 
 void test_one_pose()
 {
-  mola::mapper_3d::Mapper3D nav;
+  mola::mapper::Mapper nav;
   nav.initialize(mrpt::containers::yaml::FromText(kParams));
 
   const auto t0 = mrpt::Clock::fromDouble(0.0);
@@ -101,7 +101,7 @@ void test_one_pose()
 
 void test_two_poses_extrapolate()
 {
-  mola::mapper_3d::Mapper3D nav;
+  mola::mapper::Mapper nav;
   nav.initialize(mrpt::containers::yaml::FromText(kParams));
 
   nav.fuse_pose(mrpt::Clock::fromDouble(0.0), pdf_at(0.0), "odom");
@@ -116,7 +116,7 @@ void test_two_poses_extrapolate()
 
 void test_velocity_estimate_straight()
 {
-  mola::mapper_3d::Mapper3D nav;
+  mola::mapper::Mapper nav;
   nav.initialize(mrpt::containers::yaml::FromText(kParams));
 
   auto & rng = mrpt::random::getRandomGenerator();
@@ -138,7 +138,7 @@ void test_velocity_estimate_straight()
 
 void test_two_odometries()
 {
-  mola::mapper_3d::Mapper3D nav;
+  mola::mapper::Mapper nav;
   nav.initialize(mrpt::containers::yaml::FromText(kParamsTwoOdom));
 
   auto & rng = mrpt::random::getRandomGenerator();

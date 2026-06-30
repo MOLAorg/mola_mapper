@@ -20,11 +20,11 @@
  *
  * This private header defines the GTSAM pimpl payload. It is shared by the
  * translation units that need to touch the factor graph (WorldModelState.cpp,
- * Mapper3D_Fusion.cpp) while keeping GTSAM out of the public Mapper3D headers.
+ * Mapper3D_Fusion.cpp) while keeping GTSAM out of the public Mapper headers.
  */
 #pragma once
 
-#include <mola_mapper_3d/WorldModelState.h>
+#include <mola_mapper/WorldModelState.h>
 
 // GTSAM:
 #include <gtsam/nonlinear/ISAM2.h>
@@ -33,7 +33,7 @@
 
 #include <optional>
 
-namespace mola::mapper_3d
+namespace mola::mapper
 {
 struct WorldModelState::GtsamData
 {
@@ -51,4 +51,4 @@ struct WorldModelState::GtsamData
   gtsam::Values estimate;
 };
 
-}  // namespace mola::mapper_3d
+}  // namespace mola::mapper

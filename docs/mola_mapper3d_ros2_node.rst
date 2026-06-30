@@ -1,15 +1,15 @@
 .. _mola_mapper3d_ros2_node:
 
 ==============================
-Mapper3D ROS 2 node
+Mapper ROS 2 node
 ==============================
 
 .. note::
-  ROS 2 launch files and a dedicated bridge node for ``mola_mapper_3d`` are
+  ROS 2 launch files and a dedicated bridge node for ``mola_mapper`` are
   under active development.  This page will be populated with topic names,
   parameters, and ``/tf`` conventions once the bridge is finalised.
   In the meantime, refer to the mola-cli launch files in
-  ``mola-cli-launchs/`` for working examples that combine LIO + Mapper3D.
+  ``mola-cli-launchs/`` for working examples that combine LIO + Mapper.
 
 .. contents::
    :depth: 1
@@ -21,11 +21,11 @@ Mapper3D ROS 2 node
 Overview
 -----------
 
-The Mapper3D ROS 2 integration consists of:
+The Mapper ROS 2 integration consists of:
 
 1. A ``mola_bridge_ros2`` adapter that subscribes to sensor topics
    (``nav_msgs/Odometry``, ``sensor_msgs/Imu``, ``sensor_msgs/NavSatFix``)
-   and forwards them to the Mapper3D module via the MOLA sensor-fusion API.
+   and forwards them to the Mapper module via the MOLA sensor-fusion API.
 2. A publisher for ``nav_msgs/Odometry`` and ``/tf`` (``map → base_link``),
    driven by ``mola::LocalizationSourceBase::advertiseUpdatedLocalization()``.
 3. (Planned) A ``nav_msgs/Path`` publisher for the full optimized trajectory.

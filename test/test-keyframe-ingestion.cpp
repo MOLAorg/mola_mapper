@@ -19,7 +19,7 @@
  * @date   2026
  */
 
-#include <mola_mapper_3d/Mapper3D.h>
+#include <mola_mapper/Mapper.h>
 #include <mrpt/core/exceptions.h>
 #include <mrpt/obs/CObservationIMU.h>
 #include <mrpt/poses/CPose3D.h>
@@ -78,7 +78,7 @@ params:
   keyframe_ingestion_sigma_ang_deg: 0.2
 )###";
 
-  mola::mapper_3d::Mapper3D nav;
+  mola::mapper::Mapper nav;
   nav.initialize(mrpt::containers::yaml::FromText(params));
 
   constexpr size_t numKFs = 10;
@@ -142,7 +142,7 @@ params:
   link_first_pose_to_reference_origin_sigma: 0.01
 )###";
 
-  mola::mapper_3d::Mapper3D nav;
+  mola::mapper::Mapper nav;
   nav.initialize(mrpt::containers::yaml::FromText(params));
 
   auto & rng = mrpt::random::getRandomGenerator();

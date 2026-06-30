@@ -1,7 +1,7 @@
 # -----------------------------------------------------------------------------
 #                        SLAM system definition for MOLA
 # -----------------------------------------------------------------------------
-# Integration validation: mola_mapper_3d::Mapper3D acts as BOTH the
+# Integration validation: mola_mapper::Mapper acts as BOTH the
 # `NavStateFilter` that `LidarOdometry` queries for short-term prediction
 # (replacing mola_state_estimation_{simple,smoother}) AND the
 # `SharedKeyframeMap` sink it pushes sparse central-map keyframes to.
@@ -13,7 +13,7 @@
 #
 # Usage:
 #   export KITTI_BASE_DIR=/path/to/kitti_root
-#   KITTI_SEQ=04 MOLA_LINK_FIRST_POSE_SIGMA=1e-6 mola-cli $(ros2 pkg prefix mola_mapper_3d)/share/mola_mapper_3d/mola-cli-launchs/lidar_odometry_mapper3d_from_kitti.yaml
+#   KITTI_SEQ=04 MOLA_LINK_FIRST_POSE_SIGMA=1e-6 mola-cli $(ros2 pkg prefix mola_mapper)/share/mola_mapper/mola-cli-launchs/lidar_odometry_mapper_from_kitti.yaml
 #
 # MOLA_LINK_FIRST_POSE_SIGMA is REQUIRED for pure-odometry runs like this one
 # (no GNSS/fixed_geo_reference to fix the gauge): without it, mapper_3d's
@@ -73,10 +73,10 @@ modules:
     params: "${MOLA_ODOMETRY_PIPELINE_YAML|$(ros2 pkg prefix mola_lidar_odometry)/share/mola_lidar_odometry/pipelines/lidar3d-default.yaml}"
 
   # =====================
-  # mola_mapper_3d (NavStateFilter + SharedKeyframeMap sink)
+  # mola_mapper (NavStateFilter + SharedKeyframeMap sink)
   # =====================
   - name: mapper3d
-    type: mola::mapper_3d::Mapper3D
+    type: mola::mapper::Mapper
     verbosity_level: "${MOLA_VERBOSITY_MAPPER3D|INFO}"
     # This includes here a whole block "params: (...)":
     params: "${MOLA_MAPPER3D_YAML|../params/mapper-3d.yaml}"

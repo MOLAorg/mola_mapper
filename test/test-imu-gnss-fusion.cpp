@@ -22,7 +22,7 @@
  * test-static-gnss-imu-orientation.cpp.
  */
 
-#include <mola_mapper_3d/Mapper3D.h>
+#include <mola_mapper/Mapper.h>
 #include <mrpt/core/exceptions.h>
 #include <mrpt/math/CQuaternion.h>
 #include <mrpt/obs/CObservationGPS.h>
@@ -89,7 +89,7 @@ params:
 )###";
   params += "  imu_attitude_sigma_deg: " + std::to_string(attitudeSigmaDeg) + "\n";
 
-  mola::mapper_3d::Mapper3D nav;
+  mola::mapper::Mapper nav;
   nav.initialize(mrpt::containers::yaml::FromText(params));
 
   auto & rng = mrpt::random::getRandomGenerator();
@@ -245,7 +245,7 @@ params:
   cfg["params"]["fixed_geo_reference"]["longitude_deg"] = lonDeg;
   cfg["params"]["fixed_geo_reference"]["altitude"] = altM;
 
-  mola::mapper_3d::Mapper3D nav;
+  mola::mapper::Mapper nav;
   nav.initialize(cfg);
 
   auto & rng = mrpt::random::getRandomGenerator();
@@ -376,7 +376,7 @@ params:
   initial_twist_sigma_ang: 3.0
 )###";
 
-  mola::mapper_3d::Mapper3D nav;
+  mola::mapper::Mapper nav;
   nav.initialize(mrpt::containers::yaml::FromText(params));
 
   mrpt::poses::CPose3DPDFGaussian p0;

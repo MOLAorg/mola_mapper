@@ -1,5 +1,5 @@
 # ============================================================================
-# Shared default parameters for mola::mapper_3d::Mapper3D
+# Shared default parameters for mola::mapper::Mapper
 # ============================================================================
 # This is a FLAT parameter fragment (no top-level `params:` wrapper) meant to be
 # pulled in via the mola_yaml `$import` directive, so per-dataset launch files
@@ -13,7 +13,7 @@
 #
 # Refer to:
 # https://docs.mola-slam.org/latest/
-# https://github.com/MOLAorg/mola_mapper_3d
+# https://github.com/MOLAorg/mola_mapper
 # ============================================================================
 
 # --------------------------------------------------------------------------

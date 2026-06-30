@@ -25,7 +25,7 @@
  * checks the result matches what the deterministic synchronous path produces.
  */
 
-#include <mola_mapper_3d/Mapper3D.h>
+#include <mola_mapper/Mapper.h>
 #include <mrpt/core/exceptions.h>
 #include <mrpt/poses/Lie/SE.h>
 
@@ -72,7 +72,7 @@ double pose_err(const mrpt::poses::CPose3D & a, const mrpt::poses::CPose3D & b)
 }
 
 // Feed a straight-line, constant-velocity trajectory at 1 m/s along +x.
-void feed_straight_line(mola::mapper_3d::Mapper3D & nav, int steps, double dt)
+void feed_straight_line(mola::mapper::Mapper & nav, int steps, double dt)
 {
   for (int i = 0; i <= steps; i++) {
     const double t = i * dt;
@@ -83,7 +83,7 @@ void feed_straight_line(mola::mapper_3d::Mapper3D & nav, int steps, double dt)
 // Poll estimated_navstate() until the x estimate reaches `expectedX` (the
 // backend thread caught up) or the timeout elapses.
 std::optional<mola::NavState> poll_until_converged(
-  mola::mapper_3d::Mapper3D & nav, double queryT, double expectedX, double tol, double timeout_s)
+  mola::mapper::Mapper & nav, double queryT, double expectedX, double tol, double timeout_s)
 {
   const auto t0 = std::chrono::steady_clock::now();
   std::optional<mola::NavState> last;
@@ -101,7 +101,7 @@ std::optional<mola::NavState> poll_until_converged(
 // estimate matches the known constant-velocity trajectory.
 void test_threaded_query_converges()
 {
-  mola::mapper_3d::Mapper3D nav;
+  mola::mapper::Mapper nav;
   nav.initialize(mrpt::containers::yaml::FromText(params_yaml(true)));
 
   const int steps = 50;
@@ -128,9 +128,9 @@ void test_threaded_query_converges()
 // The threaded and synchronous paths converge to the same estimate.
 void test_threaded_matches_synchronous()
 {
-  mola::mapper_3d::Mapper3D navSync;
+  mola::mapper::Mapper navSync;
   navSync.initialize(mrpt::containers::yaml::FromText(params_yaml(false)));
-  mola::mapper_3d::Mapper3D navThreaded;
+  mola::mapper::Mapper navThreaded;
   navThreaded.initialize(mrpt::containers::yaml::FromText(params_yaml(true)));
 
   const int steps = 40;
@@ -145,7 +145,8 @@ void test_threaded_matches_synchronous()
   ASSERT_(retSync.has_value());
 
   // Threaded path: poll until caught up:
-  const auto retThreaded = poll_until_converged(navThreaded, lastT, retSync->pose.mean.x(), 0.05, 5.0);
+  const auto retThreaded =
+    poll_until_converged(navThreaded, lastT, retSync->pose.mean.x(), 0.05, 5.0);
   ASSERT_(retThreaded.has_value());
 
   ASSERT_NEAR_(pose_err(retSync->pose.mean, retThreaded->pose.mean), 0.0, 0.05);
@@ -157,7 +158,7 @@ void test_threaded_matches_synchronous()
 void test_clean_shutdown_while_busy()
 {
   for (int rep = 0; rep < 3; rep++) {
-    mola::mapper_3d::Mapper3D nav;
+    mola::mapper::Mapper nav;
     nav.initialize(mrpt::containers::yaml::FromText(params_yaml(true)));
     feed_straight_line(nav, 30, 0.1);
     // Intentionally do NOT wait: the destructor must stop+join the thread even

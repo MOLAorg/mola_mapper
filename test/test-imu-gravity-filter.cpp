@@ -19,7 +19,7 @@
  * @date   2026
  */
 
-#include <mola_mapper_3d/ImuGravityFilter.h>
+#include <mola_mapper/ImuGravityFilter.h>
 #include <mrpt/core/Clock.h>
 #include <mrpt/core/exceptions.h>
 #include <mrpt/random/RandomGenerators.h>
@@ -27,7 +27,7 @@
 #include <cmath>
 #include <iostream>
 
-using mola::mapper_3d::ImuGravityFilter;
+using mola::mapper::ImuGravityFilter;
 
 namespace
 {

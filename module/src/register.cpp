@@ -19,12 +19,12 @@
  * @date   2026
  */
 
-#include <mola_mapper_3d/Mapper3D.h>
+#include <mola_mapper/Mapper.h>
 #include <mrpt/core/initializer.h>
 #include <mrpt/rtti/CObject.h>
 
-MRPT_INITIALIZER(do_register_mola_mapper_3d)  // NOLINT
+MRPT_INITIALIZER(do_register_mola_mapper)  // NOLINT
 {
   // Register modules:
-  MOLA_REGISTER_MODULE(mola::mapper_3d::Mapper3D);
+  MOLA_REGISTER_MODULE(mola::mapper::Mapper);
 }

@@ -1,4 +1,4 @@
-# mola_mapper_3d - AI agent context guide
+# mola_mapper - AI agent context guide
 
 Central 3D SLAM map for MOLA: fuses LIO/VIO/IMU/GNSS/wheels into ONE optimized
 world model (keyframes as a `CSimpleMap` + a GTSAM factor graph), with anytime
@@ -12,7 +12,7 @@ Use clang-format-14 on generated code.
 
 ## What it is
 
-`mola::mapper_3d::Mapper3D` implements `mola::NavStateFilter`,
+`mola::mapper::Mapper` implements `mola::NavStateFilter`,
 `LocalizationSourceBase`, `MapSourceBase`, `DiagnosticsProvider`, and
 `mola::SharedKeyframeMap`. It is the single source of truth for short-term
 pose prediction that LIO/VIO query (replacing `mola_state_estimation_
@@ -29,13 +29,13 @@ the dense path's frame) so the two paths don't collide.
 ## Layout
 
 ```
-module/include/mola_mapper_3d/   Public headers
-  Mapper3D.h                     Main class
+module/include/mola_mapper/   Public headers
+  Mapper.h                     Main class
   Parameters.h                   YAML-loaded config (navstate group mirrors the smoother)
   WorldModelState.h              Central map state (keyframes, connectivity, geo-ref, GTSAM pimpl)
   ImuGravityFilter.h             Robust low-dynamics gravity-direction reducer
 module/src/
-  Mapper3D.cpp                   Lifecycle: initialize/spinOnce/reset/diagnostics + IMPLEMENTS_MRPT_OBJECT
+  Mapper.cpp                   Lifecycle: initialize/spinOnce/reset/diagnostics + IMPLEMENTS_MRPT_OBJECT
   Mapper3D_Fusion.cpp            Keyframe management + factor-graph fusion + estimated_navstate
   Mapper3D_KeyframeIngestion.cpp SharedKeyframeMap sink: requestInsertKeyframe()
   Mapper3D_GUI.cpp               MolaViz/MolaVizImGui viz: KF tree, graph edges, per-source movable
@@ -47,7 +47,7 @@ module/src/
                                   survivors -> ONE gravity dir + data-earned sigma
   WorldModelState.cpp            GtsamData pimpl (ISAM2/Values/NonlinearFactorGraph) + map helpers
   Parameters.cpp                 loadFrom(yaml)
-  register.cpp                   MOLA_REGISTER_MODULE(mola::mapper_3d::Mapper3D)
+  register.cpp                   MOLA_REGISTER_MODULE(mola::mapper::Mapper)
   GtsamData.h, factor_builders.h Private GTSAM symbol scheme + factor builders (shared by the two fusion TUs)
 apps/mola-mapper-3d-cli.cpp      Offline front end (skeleton)
 params/mapper-3d.yaml            Default config (no fixed geo-ref; pure-odometry-safe defaults)
@@ -133,8 +133,8 @@ checklist.
 
 ```bash
 cd ~/ros2_ws
-colcon build --packages-select mola_mapper_3d
-colcon test  --packages-select mola_mapper_3d && colcon test-result --verbose
+colcon build --packages-select mola_mapper
+colcon test  --packages-select mola_mapper && colcon test-result --verbose
 ```
 
 ## Real-dataset runs
@@ -143,13 +143,13 @@ colcon test  --packages-select mola_mapper_3d && colcon test-result --verbose
 export KITTI_BASE_DIR=/path/to/kitti_root
 export MOLA_ODOMETRY_PIPELINE_YAML=$(ros2 pkg prefix mola_lidar_odometry)/share/mola_lidar_odometry/pipelines/lidar3d-default.yaml
 KITTI_SEQ=04 MOLA_LINK_FIRST_POSE_SIGMA=1e-6 \
-  mola-cli mola-cli-launchs/lidar_odometry_mapper3d_from_kitti.yaml
+  mola-cli mola-cli-launchs/lidar_odometry_mapper_from_kitti.yaml
 # MOLA_WITH_GUI=false for headless; MOLA_TIME_WARP=N to speed up/slow down.
 ```
 
 ```bash
 export OXFORD_SPIRES_ROSBAG2=/path/to/sequence/raw/ros2bag/<segment>
-mola-cli mola-cli-launchs/lidar_odometry_mapper3d_from_oxford_spires.yaml
+mola-cli mola-cli-launchs/lidar_odometry_mapper_from_oxford_spires.yaml
 # Multi-segment sequences: override rosbag_filename in the YAML with a list
 # (Rosbag2Dataset supports multi-bag playback).
 ```
@@ -157,14 +157,14 @@ mola-cli mola-cli-launchs/lidar_odometry_mapper3d_from_oxford_spires.yaml
 ```bash
 export BOTANICGARDEN_LIO_BAG=$HOME/datasets/botanic/1018_00_LIO.bag
 export MOLA_ODOMETRY_PIPELINE_YAML=$(ros2 pkg prefix mola_lidar_odometry)/share/mola_lidar_odometry/pipelines/lidar3d-default.yaml
-mola-cli mola-cli-launchs/lidar_odometry_mapper3d_from_botanicgarden.yaml
+mola-cli mola-cli-launchs/lidar_odometry_mapper_from_botanicgarden.yaml
 ```
 Reads a ROS 1 `.bag` directly via `mola::Rosbag1Dataset` (`mola_input_rosbag1`,
 no ROS 1 install needed); use that package's `rosbag1-info <bag>` CLI to
 confirm a dataset's sensor inventory before wiring a new launcher (don't trust
 a dataset's own README blindly).
 
-MulRan launcher (`lidar_odometry_mapper3d_from_mulran.yaml`,
+MulRan launcher (`lidar_odometry_mapper_from_mulran.yaml`,
 `MULRAN_BASE_DIR=... MULRAN_SEQ=DCC01`) is the LiDAR+IMU+GNSS reference case;
 self-contains `estimate_geo_reference: true` and
 `link_first_pose_to_reference_origin_sigma: 1e-6`.

@@ -15,7 +15,7 @@ if("$ENV{ROS_VERSION}" STREQUAL "2")
 endif()
 
 # Tell CMake we'll use C++ for use in its tests/flags
-project(mola_mapper_3d LANGUAGES CXX)
+project(mola_mapper LANGUAGES CXX)
 
 # MOLA CMake scripts: "mola_xxx()"
 find_package(mola_common REQUIRED)
@@ -36,21 +36,21 @@ find_package(mola_imu_preintegration REQUIRED)
 # -----------------------
 # define lib:
 set(LIB_SOURCES
-  module/src/Mapper3D.cpp
-  module/src/Mapper3D_Fusion.cpp
+  module/src/Mapper.cpp
+  module/src/Mapper_Fusion.cpp
   module/src/ImuGravityFilter.cpp
-  module/src/Mapper3D_GUI.cpp
-  module/src/Mapper3D_KeyframeIngestion.cpp
-  module/src/Mapper3D_SensorCallbacks.cpp
+  module/src/Mapper_GUI.cpp
+  module/src/Mapper_KeyframeIngestion.cpp
+  module/src/Mapper_SensorCallbacks.cpp
   module/src/WorldModelState.cpp
   module/src/Parameters.cpp
   module/src/register.cpp
 )
 set(LIB_PUBLIC_HEADERS
-  module/include/mola_mapper_3d/Mapper3D.h
-  module/include/mola_mapper_3d/Parameters.h
-  module/include/mola_mapper_3d/WorldModelState.h
-  module/include/mola_mapper_3d/ImuGravityFilter.h
+  module/include/mola_mapper/Mapper.h
+  module/include/mola_mapper/Parameters.h
+  module/include/mola_mapper/WorldModelState.h
+  module/include/mola_mapper/ImuGravityFilter.h
 )
 
 mola_add_library(

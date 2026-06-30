@@ -14,7 +14,7 @@
 
 /**
  * @file   Parameters.h
- * @brief  Parameters for the Mapper3D central 3D SLAM module.
+ * @brief  Parameters for the Mapper central 3D SLAM module.
  * @author Jose Luis Blanco Claraco
  * @date   2026
  */
@@ -29,7 +29,7 @@
 #include <optional>
 #include <string>
 
-namespace mola::mapper_3d
+namespace mola::mapper
 {
 /** Kinematic motion model used to build the inter-keyframe factors. */
 enum class KinematicModel : uint8_t
@@ -60,12 +60,12 @@ enum class KeyframeCreationSource : uint8_t
   SensorClock,    //!< Sensor paths create KFs at sensor_clock_min_period_s rate.
 };
 
-/** All configuration parameters of Mapper3D, loaded from a YAML map node.
+/** All configuration parameters of Mapper, loaded from a YAML map node.
  *
  * The navigation-state fusion group mirrors
  * `mola::state_estimation_smoother::Parameters` so existing tuning carries over.
  *
- * \ingroup mola_mapper_3d_grp
+ * \ingroup mola_mapper_grp
  */
 class Parameters
 {
@@ -203,7 +203,7 @@ public:
   /// IMU provides an orientation quaternion, REGARDLESS of geo-referencing: the
   /// absolute attitude is itself an azimuth reference, so it lets iSAM2 estimate
   /// the geo-reference (T_enu_to_map yaw) automatically even with GNSS off (the
-  /// no-geo-ref F0 prior is yaw-free; see Mapper3D::reinitialize_gtsam_locked).
+  /// no-geo-ref F0 prior is yaw-free; see Mapper::reinitialize_gtsam_locked).
   double imu_attitude_sigma_deg = 2.0;
   double imu_attitude_azimuth_offset_deg = 0.0;
   /// If > 0 and the IMU provides angular velocity, add a body-frame gyro prior
@@ -318,14 +318,14 @@ public:
   /** @} */
 };
 
-}  // namespace mola::mapper_3d
+}  // namespace mola::mapper
 
-MRPT_ENUM_TYPE_BEGIN_NAMESPACE(mola::mapper_3d, mola::mapper_3d::KinematicModel)
+MRPT_ENUM_TYPE_BEGIN_NAMESPACE(mola::mapper, mola::mapper::KinematicModel)
 MRPT_FILL_ENUM(KinematicModel::ConstantVelocity);
 MRPT_FILL_ENUM(KinematicModel::Tricycle);
 MRPT_ENUM_TYPE_END()
 
-MRPT_ENUM_TYPE_BEGIN_NAMESPACE(mola::mapper_3d, mola::mapper_3d::KeyframeCreationSource)
+MRPT_ENUM_TYPE_BEGIN_NAMESPACE(mola::mapper, mola::mapper::KeyframeCreationSource)
 // Short lower-case aliases accepted in YAML; canonical C++ name registered last
 // so enum->string (logs/diagnostics) returns the full scoped name.
 MRPT_FILL_ENUM_CUSTOM_NAME(KeyframeCreationSource::Auto, "auto");

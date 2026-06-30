@@ -19,7 +19,7 @@
  * @date   2026
  *
  * Single source of truth for the GTSAM symbol scheme and the kinematic/twist
- * factor construction used by Mapper3D. Ported from
+ * factor construction used by Mapper. Ported from
  * mola_state_estimation_smoother (same factor library, mola_gtsam_factors).
  *
  * Symbol scheme (per keyframe i): T(i)=Pose3 in {map}, V(i)=linear velocity
@@ -37,12 +37,12 @@
 #include <mola_gtsam_factors/FactorConstLocalVelocity.h>
 #include <mola_gtsam_factors/FactorTrapezoidalIntegrator.h>
 #include <mola_gtsam_factors/FactorTricycleKinematic.h>
-#include <mola_mapper_3d/Parameters.h>
+#include <mola_mapper/Parameters.h>
 #include <mrpt/core/exceptions.h>
 
 #include <cstdint>
 
-namespace mola::mapper_3d
+namespace mola::mapper
 {
 using gtsam::symbol_shorthand::F;  // Frames of reference (Pose3):
                                    // F(0): T_enu_to_map
@@ -176,4 +176,4 @@ inline void add_twist_priors(
   graph.addPrior(W(kf), w, gtsam::noiseModel::Gaussian::Covariance(wCov));
 }
 
-}  // namespace mola::mapper_3d
+}  // namespace mola::mapper

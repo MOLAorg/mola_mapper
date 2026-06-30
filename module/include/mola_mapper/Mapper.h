@@ -13,7 +13,7 @@
 */
 
 /**
- * @file   Mapper3D.h
+ * @file   Mapper.h
  * @brief  Central 3D SLAM map: online multi-sensor fusion, loop closure and
  *         geo-referencing into one optimized world model.
  * @author Jose Luis Blanco Claraco
@@ -30,9 +30,9 @@
 #include <mola_kernel/interfaces/NavStateFilter.h>
 #include <mola_kernel/interfaces/SharedKeyframeMap.h>
 #include <mola_kernel/interfaces/VizInterface.h>
-#include <mola_mapper_3d/ImuGravityFilter.h>
-#include <mola_mapper_3d/Parameters.h>
-#include <mola_mapper_3d/WorldModelState.h>
+#include <mola_mapper/ImuGravityFilter.h>
+#include <mola_mapper/Parameters.h>
+#include <mola_mapper/WorldModelState.h>
 #include <mrpt/containers/yaml.h>
 #include <mrpt/obs/CObservationGPS.h>
 #include <mrpt/obs/CObservationIMU.h>
@@ -58,11 +58,11 @@ namespace gtsam
 class Values;
 }  // namespace gtsam
 
-namespace mola::mapper_3d
+namespace mola::mapper
 {
 /** Central 3D SLAM map and multi-sensor fusion backend.
  *
- * Mapper3D holds one global, optimized representation of the world, based on
+ * Mapper holds one global, optimized representation of the world, based on
  * keyframes (a CSimpleMap with raw observations and annotations) and a GTSAM
  * factor graph. It fuses multiple odometry sources (wheels, LiDAR-odometry,
  * visual-odometry), IMU, and GNSS, and provides:
@@ -77,25 +77,25 @@ namespace mola::mapper_3d
  * graph estimates `T_map_to_odom_i` per source and `T_enu_to_map` for
  * geo-referencing.
  *
- * \ingroup mola_mapper_3d_grp
+ * \ingroup mola_mapper_grp
  */
-class Mapper3D : public mola::NavStateFilter,
-                 public mola::LocalizationSourceBase,
-                 public mola::MapSourceBase,
-                 public mola::DiagnosticsProvider,
-                 public mola::SharedKeyframeMap
+class Mapper : public mola::NavStateFilter,
+               public mola::LocalizationSourceBase,
+               public mola::MapSourceBase,
+               public mola::DiagnosticsProvider,
+               public mola::SharedKeyframeMap
 {
-  DEFINE_MRPT_OBJECT(Mapper3D, mola::mapper_3d)
+  DEFINE_MRPT_OBJECT(Mapper, mola::mapper)
 
 public:
-  Mapper3D();
-  ~Mapper3D() override;
+  Mapper();
+  ~Mapper() override;
 
   // Non-copyable / non-movable (owns GTSAM state).
-  Mapper3D(const Mapper3D &) = delete;
-  Mapper3D & operator=(const Mapper3D &) = delete;
-  Mapper3D(Mapper3D &&) = delete;
-  Mapper3D & operator=(Mapper3D &&) = delete;
+  Mapper(const Mapper &) = delete;
+  Mapper & operator=(const Mapper &) = delete;
+  Mapper(Mapper &&) = delete;
+  Mapper & operator=(Mapper &&) = delete;
 
   /** @name Main API
    * @{ */
@@ -491,4 +491,4 @@ private:
   [[nodiscard]] bool sensor_kf_creation_allowed() const;
 };
 
-}  // namespace mola::mapper_3d
+}  // namespace mola::mapper

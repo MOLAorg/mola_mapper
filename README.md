@@ -1,14 +1,14 @@
-[![CI Build colcon](https://github.com/MOLAorg/mola_mapper_3d/actions/workflows/build-ros.yml/badge.svg)](https://github.com/MOLAorg/mola_mapper_3d/actions/workflows/build-ros.yml)
-[![CI clang-format](https://github.com/MOLAorg/mola_mapper_3d/actions/workflows/check-clang-format.yml/badge.svg)](https://github.com/MOLAorg/mola_mapper_3d/actions/workflows/check-clang-format.yml)
-[![Docs](https://img.shields.io/badge/docs-latest-brightgreen.svg)](https://docs.mola-slam.org/latest/mola_mapper_3d.html)
-[![codecov](https://codecov.io/gh/MOLAorg/mola_mapper_3d/graph/badge.svg?token=C11VFFK0NW)](https://codecov.io/gh/MOLAorg/mola_mapper_3d)
+[![CI Build colcon](https://github.com/MOLAorg/mola_mapper/actions/workflows/build-ros.yml/badge.svg)](https://github.com/MOLAorg/mola_mapper/actions/workflows/build-ros.yml)
+[![CI clang-format](https://github.com/MOLAorg/mola_mapper/actions/workflows/check-clang-format.yml/badge.svg)](https://github.com/MOLAorg/mola_mapper/actions/workflows/check-clang-format.yml)
+[![Docs](https://img.shields.io/badge/docs-latest-brightgreen.svg)](https://docs.mola-slam.org/latest/mola_mapper.html)
+[![codecov](https://codecov.io/gh/MOLAorg/mola_mapper/graph/badge.svg?token=C11VFFK0NW)](https://codecov.io/gh/MOLAorg/mola_mapper)
 
-# mola_mapper_3d
+# mola_mapper
 
-Central 3D SLAM map for the [MOLA](https://github.com/MOLAorg/mola) framework,
+Central SLAM map for the [MOLA](https://github.com/MOLAorg/mola) framework,
 compatible with ROS 2.
 
-`mola_mapper_3d` holds **one global, optimized representation of the world**,
+`mola_mapper` holds **one global, optimized representation of the world**,
 fusing multiple odometry sources (wheels, LiDAR-odometry, visual-odometry),
 IMU and GNSS into a single keyframe-based map (a `mrpt::maps::CSimpleMap` backed
 by a GTSAM iSAM2 factor graph), with anytime loop closure, geo-referencing,
@@ -16,7 +16,7 @@ lifelong keyframe management, and relocalization.
 
 ## Contents
 
-This repository provides a C++ library `mola_mapper_3d` implementing the central
+This repository provides a C++ library `mola_mapper` implementing the central
 3D SLAM back-end.  It exposes the following `mola_kernel` interfaces:
 
 | Interface | Role |
@@ -36,23 +36,23 @@ Refer to: https://docs.mola-slam.org/latest/#installing
 
 ## Documentation and tutorials
 
-See: https://docs.mola-slam.org/latest/mola_mapper_3d.html
+See: https://docs.mola-slam.org/latest/mola_mapper.html
 
 ## ROS build farm status
 
 | Distro | Develop branch | Releases | Stable release |
 | ---    | ---            | ---      |  ---      |
-| ROS2 Humble  (u22.04) | [![Build Status](https://build.ros2.org/job/Hdev__mola_mapper_3d__ubuntu_jammy_amd64/badge/icon)](https://build.ros2.org/job/Hdev__mola_mapper_3d__ubuntu_jammy_amd64/) | amd64 [![Build Status](https://build.ros2.org/job/Hbin_uJ64__mola_mapper_3d__ubuntu_jammy_amd64__binary/badge/icon)](https://build.ros2.org/job/Hbin_uJ64__mola_mapper_3d__ubuntu_jammy_amd64__binary/) <br> arm64 [![Build Status](https://build.ros2.org/job/Hbin_ujv8_uJv8__mola_mapper_3d__ubuntu_jammy_arm64__binary/badge/icon)](https://build.ros2.org/job/Hbin_ujv8_uJv8__mola_mapper_3d__ubuntu_jammy_arm64__binary/) | [![Version](https://img.shields.io/ros/v/humble/mola_mapper_3d)](https://index.ros.org/?search_packages=true&pkgs=mola_mapper_3d) |
-| ROS 2 Jazzy @ u24.04 | [![Build Status](https://build.ros2.org/job/Jdev__mola_mapper_3d__ubuntu_noble_amd64/badge/icon)](https://build.ros2.org/job/Jdev__mola_mapper_3d__ubuntu_noble_amd64/) | amd64 [![Build Status](https://build.ros2.org/job/Jbin_uN64__mola_mapper_3d__ubuntu_noble_amd64__binary/badge/icon)](https://build.ros2.org/job/Jbin_uN64__mola_mapper_3d__ubuntu_noble_amd64__binary/) <br> arm64 [![Build Status](https://build.ros2.org/job/Jbin_unv8_uNv8__mola_mapper_3d__ubuntu_noble_arm64__binary/badge/icon)](https://build.ros2.org/job/Jbin_unv8_uNv8__mola_mapper_3d__ubuntu_noble_arm64__binary/) | [![Version](https://img.shields.io/ros/v/jazzy/mola_mapper_3d)](https://index.ros.org/?search_packages=true&pkgs=mola_mapper_3d) |
-| ROS 2 Kilted @ u24.04 | [![Build Status](https://build.ros2.org/job/Kdev__mola_mapper_3d__ubuntu_noble_amd64/badge/icon)](https://build.ros2.org/job/Kdev__mola_mapper_3d__ubuntu_noble_amd64/) | amd64 [![Build Status](https://build.ros2.org/job/Kbin_uN64__mola_mapper_3d__ubuntu_noble_amd64__binary/badge/icon)](https://build.ros2.org/job/Kbin_uN64__mola_mapper_3d__ubuntu_noble_amd64__binary/) <br> arm64 [![Build Status](https://build.ros2.org/job/Kbin_unv8_uNv8__mola_mapper_3d__ubuntu_noble_arm64__binary/badge/icon)](https://build.ros2.org/job/Kbin_unv8_uNv8__mola_mapper_3d__ubuntu_noble_arm64__binary/) | [![Version](https://img.shields.io/ros/v/kilted/mola_mapper_3d)](https://index.ros.org/?search_packages=true&pkgs=mola_mapper_3d) |
-| ROS 2 Lyrical (u26.04) | [![Build Status](https://build.ros2.org/job/Ldev__mola_mapper_3d__ubuntu_resolute_amd64/badge/icon)](https://build.ros2.org/job/Ldev__mola_mapper_3d__ubuntu_resolute_amd64/) | amd64 [![Build Status](https://build.ros2.org/job/Lbin_uR64__mola_mapper_3d__ubuntu_resolute_amd64__binary/badge/icon)](https://build.ros2.org/job/Lbin_uR64__mola_mapper_3d__ubuntu_resolute_amd64__binary/) <br> arm64 [![Build Status](https://build.ros2.org/job/Lbin_armv8_uRv8__mola_mapper_3d__ubuntu_resolute_arm64__binary/badge/icon)](https://build.ros2.org/job/Lbin_armv8_uRv8__mola_mapper_3d__ubuntu_resolute_arm64__binary/) | [![Version](https://img.shields.io/ros/v/lyrical/mola_mapper_3d)](https://index.ros.org/?search_packages=true&pkgs=mola_mapper_3d) |
-| ROS 2 Rolling (u26.04) | [![Build Status](https://build.ros2.org/job/Rdev__mola_mapper_3d__ubuntu_resolute_amd64/badge/icon)](https://build.ros2.org/job/Rdev__mola_mapper_3d__ubuntu_resolute_amd64/) | amd64 [![Build Status](https://build.ros2.org/job/Rbin_uR64__mola_mapper_3d__ubuntu_resolute_amd64__binary/badge/icon)](https://build.ros2.org/job/Rbin_uR64__mola_mapper_3d__ubuntu_resolute_amd64__binary/) <br> arm64 [![Build Status](https://build.ros2.org/job/Rbin_unv8_uRv8__mola_mapper_3d__ubuntu_resolute_arm64__binary/badge/icon)](https://build.ros2.org/job/Rbin_unv8_uRv8__mola_mapper_3d__ubuntu_resolute_arm64__binary/) | [![Version](https://img.shields.io/ros/v/rolling/mola_mapper_3d)](https://index.ros.org/?search_packages=true&pkgs=mola_mapper_3d) |
+| ROS2 Humble  (u22.04) | [![Build Status](https://build.ros2.org/job/Hdev__mola_mapper__ubuntu_jammy_amd64/badge/icon)](https://build.ros2.org/job/Hdev__mola_mapper__ubuntu_jammy_amd64/) | amd64 [![Build Status](https://build.ros2.org/job/Hbin_uJ64__mola_mapper__ubuntu_jammy_amd64__binary/badge/icon)](https://build.ros2.org/job/Hbin_uJ64__mola_mapper__ubuntu_jammy_amd64__binary/) <br> arm64 [![Build Status](https://build.ros2.org/job/Hbin_ujv8_uJv8__mola_mapper__ubuntu_jammy_arm64__binary/badge/icon)](https://build.ros2.org/job/Hbin_ujv8_uJv8__mola_mapper__ubuntu_jammy_arm64__binary/) | [![Version](https://img.shields.io/ros/v/humble/mola_mapper)](https://index.ros.org/?search_packages=true&pkgs=mola_mapper) |
+| ROS 2 Jazzy @ u24.04 | [![Build Status](https://build.ros2.org/job/Jdev__mola_mapper__ubuntu_noble_amd64/badge/icon)](https://build.ros2.org/job/Jdev__mola_mapper__ubuntu_noble_amd64/) | amd64 [![Build Status](https://build.ros2.org/job/Jbin_uN64__mola_mapper__ubuntu_noble_amd64__binary/badge/icon)](https://build.ros2.org/job/Jbin_uN64__mola_mapper__ubuntu_noble_amd64__binary/) <br> arm64 [![Build Status](https://build.ros2.org/job/Jbin_unv8_uNv8__mola_mapper__ubuntu_noble_arm64__binary/badge/icon)](https://build.ros2.org/job/Jbin_unv8_uNv8__mola_mapper__ubuntu_noble_arm64__binary/) | [![Version](https://img.shields.io/ros/v/jazzy/mola_mapper)](https://index.ros.org/?search_packages=true&pkgs=mola_mapper) |
+| ROS 2 Kilted @ u24.04 | [![Build Status](https://build.ros2.org/job/Kdev__mola_mapper__ubuntu_noble_amd64/badge/icon)](https://build.ros2.org/job/Kdev__mola_mapper__ubuntu_noble_amd64/) | amd64 [![Build Status](https://build.ros2.org/job/Kbin_uN64__mola_mapper__ubuntu_noble_amd64__binary/badge/icon)](https://build.ros2.org/job/Kbin_uN64__mola_mapper__ubuntu_noble_amd64__binary/) <br> arm64 [![Build Status](https://build.ros2.org/job/Kbin_unv8_uNv8__mola_mapper__ubuntu_noble_arm64__binary/badge/icon)](https://build.ros2.org/job/Kbin_unv8_uNv8__mola_mapper__ubuntu_noble_arm64__binary/) | [![Version](https://img.shields.io/ros/v/kilted/mola_mapper)](https://index.ros.org/?search_packages=true&pkgs=mola_mapper) |
+| ROS 2 Lyrical (u26.04) | [![Build Status](https://build.ros2.org/job/Ldev__mola_mapper__ubuntu_resolute_amd64/badge/icon)](https://build.ros2.org/job/Ldev__mola_mapper__ubuntu_resolute_amd64/) | amd64 [![Build Status](https://build.ros2.org/job/Lbin_uR64__mola_mapper__ubuntu_resolute_amd64__binary/badge/icon)](https://build.ros2.org/job/Lbin_uR64__mola_mapper__ubuntu_resolute_amd64__binary/) <br> arm64 [![Build Status](https://build.ros2.org/job/Lbin_armv8_uRv8__mola_mapper__ubuntu_resolute_arm64__binary/badge/icon)](https://build.ros2.org/job/Lbin_armv8_uRv8__mola_mapper__ubuntu_resolute_arm64__binary/) | [![Version](https://img.shields.io/ros/v/lyrical/mola_mapper)](https://index.ros.org/?search_packages=true&pkgs=mola_mapper) |
+| ROS 2 Rolling (u26.04) | [![Build Status](https://build.ros2.org/job/Rdev__mola_mapper__ubuntu_resolute_amd64/badge/icon)](https://build.ros2.org/job/Rdev__mola_mapper__ubuntu_resolute_amd64/) | amd64 [![Build Status](https://build.ros2.org/job/Rbin_uR64__mola_mapper__ubuntu_resolute_amd64__binary/badge/icon)](https://build.ros2.org/job/Rbin_uR64__mola_mapper__ubuntu_resolute_amd64__binary/) <br> arm64 [![Build Status](https://build.ros2.org/job/Rbin_unv8_uRv8__mola_mapper__ubuntu_resolute_arm64__binary/badge/icon)](https://build.ros2.org/job/Rbin_unv8_uRv8__mola_mapper__ubuntu_resolute_arm64__binary/) | [![Version](https://img.shields.io/ros/v/rolling/mola_mapper)](https://index.ros.org/?search_packages=true&pkgs=mola_mapper) |
 
 
 ## Repository layout
 
 ```
-module/include/mola_mapper_3d/   Public headers (Mapper3D, Parameters, WorldModelState)
+module/include/mola_mapper/   Public headers (Mapper, Parameters, WorldModelState)
 module/src/                      Implementation (split by concern)
 apps/                            mola-mapper-3d-cli (offline front-end)
 params/                          Default YAML configuration

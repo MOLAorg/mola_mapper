@@ -1,17 +1,17 @@
-.. _mola_mapper_3d:
+.. _mola_mapper:
 
 ================================
-3D central SLAM map (Mapper3D)
+3D central SLAM map (Mapper)
 ================================
 
-:octicon:`mark-github` `mola_mapper_3d <https://github.com/MOLAorg/mola_mapper_3d/>`_ is the
+:octicon:`mark-github` `mola_mapper <https://github.com/MOLAorg/mola_mapper/>`_ is the
 **central 3D SLAM back-end** for the MOLA framework.
 It holds **one global, optimized representation of the world** by fusing multiple
 odometry sources (wheel encoders, LiDAR-odometry, visual-odometry), IMU and GNSS
 into a single keyframe-based factor graph (GTSAM iSAM2), with online loop closure,
 geo-referencing, and lifelong keyframe management.
 
-Mapper3D acts as the **single source of truth** for pose prediction queried by any
+Mapper acts as the **single source of truth** for pose prediction queried by any
 number of LIO/VIO front-ends running concurrently, replacing the lighter-weight
 :ref:`state estimators <mola_sta_est_index>` in full SLAM use cases.
 
@@ -32,7 +32,7 @@ number of LIO/VIO front-ends running concurrently, replacing the lighter-weight
 Role within the MOLA ecosystem
 ----------------------------------
 
-At a conceptual level, Mapper3D is the **global back-end** that:
+At a conceptual level, Mapper is the **global back-end** that:
 
 1. Receives **short-term pose estimates** from one or more front-ends
    (e.g. :ref:`mola_lidar_odometry <mola_lidar_odometry>`) via the
@@ -42,15 +42,15 @@ At a conceptual level, Mapper3D is the **global back-end** that:
    including past ones affected by loop closures.
 4. Publishes the **fused localization** back to front-ends and to ROS 2.
 
-The relationship between front-ends and Mapper3D is symmetric: the front-end drives
-short-term motion estimation, while Mapper3D provides the globally-consistent anchor
+The relationship between front-ends and Mapper is symmetric: the front-end drives
+short-term motion estimation, while Mapper provides the globally-consistent anchor
 and corrects for drift over time.
 
 .. figure:: imgs/mapper3d_system_scheme.png
    :width: 640
-   :alt: Mapper3D system block diagram
+   :alt: Mapper system block diagram
 
-   Mapper3D receives pose streams from LIO/VIO front-ends and fuses them with IMU
+   Mapper receives pose streams from LIO/VIO front-ends and fuses them with IMU
    and GNSS into one optimized world model.
 
 |
@@ -60,7 +60,7 @@ and corrects for drift over time.
 Provided interfaces
 -----------------------
 
-Mapper3D implements the following ``mola_kernel`` interfaces:
+Mapper implements the following ``mola_kernel`` interfaces:
 
 .. list-table::
    :widths: 30 70
@@ -92,12 +92,12 @@ Mapper3D implements the following ``mola_kernel`` interfaces:
 Reference frame conventions
 -------------------------------
 
-Mapper3D manages three categories of frames:
+Mapper manages three categories of frames:
 
 * **{map}** (configurable via ``reference_frame_name``, default ``map``): the
   global optimization frame.  All keyframe poses are expressed in this frame.
 * **{odom_i}** (one per odometry source, e.g. ``odom``, ``odom_lidar``): the
-  short-term prediction frame served to each front-end. Mapper3D estimates
+  short-term prediction frame served to each front-end. Mapper estimates
   ``T_map_to_odom_i`` for each source and corrects it after each iSAM2 solve.
 * **{enu}** (``enu_frame_name``, default ``enu``): the ENU geo-reference frame,
   estimated or fixed.  ``T_enu_to_map`` is a variable in the factor graph when
@@ -233,7 +233,7 @@ All of them can be overridden via environment variables (listed in parentheses).
 GUI sub-window
 -----------------
 
-When a ``mola_viz`` or ``mola_viz_imgui`` visualizer module is loaded, Mapper3D
+When a ``mola_viz`` or ``mola_viz_imgui`` visualizer module is loaded, Mapper
 creates a floating sub-window with four tabs:
 
 * **Status** — live counts of keyframes, graph edges, odometry frames, IMU

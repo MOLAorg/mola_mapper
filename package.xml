@@ -4,15 +4,15 @@
      side-by-side to ROS packages in a catkin/ament environment.
 -->
 <package format="3">
-  <name>mola_mapper_3d</name>
+  <name>mola_mapper</name>
   <version>0.1.0</version>
-  <description>Central 3D SLAM map: online fusion of LIO/VIO/IMU/GNSS/wheels with loop closure and geo-referencing, based on MOLA and MRPT components</description>
+  <description>Central SLAM package: online fusion of LIO/VIO/IMU/GNSS/wheels with loop closure and geo-referencing, based on MOLA and MRPT components</description>
 
   <maintainer email="joseluisblancoc@gmail.com">Jose-Luis Blanco-Claraco</maintainer>
   <license>GPLv3</license>
 
   <url type="website">https://docs.mola-slam.org/</url>
-  <url type="repository">https://github.com/MOLAorg/mola_mapper_3d/</url>
+  <url type="repository">https://github.com/MOLAorg/mola_mapper/</url>
 
   <!-- core dependencies -->
   <depend>mola_common</depend>

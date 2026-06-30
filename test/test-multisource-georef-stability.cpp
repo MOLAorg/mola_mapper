@@ -45,7 +45,7 @@
  *      the estimate level).
  */
 
-#include <mola_mapper_3d/Mapper3D.h>
+#include <mola_mapper/Mapper.h>
 #include <mrpt/core/exceptions.h>
 #include <mrpt/core/get_env.h>
 #include <mrpt/math/CQuaternion.h>
@@ -319,7 +319,7 @@ RunResult run_combo(const Combo & c)
   auto & rng = mrpt::random::getRandomGenerator();
   rng.randomize(20260629);
 
-  mola::mapper_3d::Mapper3D nav;
+  mola::mapper::Mapper nav;
   if (VERBOSE) {
     nav.setMinLoggingLevel(mrpt::system::LVL_DEBUG);
   }

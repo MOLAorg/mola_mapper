@@ -1,4 +1,4 @@
-# Mapper3D — Internal Call Graph
+# Mapper — Internal Call Graph
 
 Traces the public API down to the key internal helpers. Update this whenever
 methods are added, renamed, or the call structure changes (see agents.md).

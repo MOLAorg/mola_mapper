@@ -1,10 +1,10 @@
 # ============================================================================
-# Standalone configuration for mola::mapper_3d::Mapper3D
+# Standalone configuration for mola::mapper::Mapper
 # ============================================================================
 # This is the whole-module config form, referenced from a launch file as:
 #
 #   - name: mapper3d
-#     type: mola::mapper_3d::Mapper3D
+#     type: mola::mapper::Mapper
 #     params: "../params/mapper-3d.yaml"
 #
 # It just `$import`s the shared parameter fragment (single source of truth) and
@@ -14,7 +14,7 @@
 #
 # Refer to:
 # https://docs.mola-slam.org/latest/
-# https://github.com/MOLAorg/mola_mapper_3d
+# https://github.com/MOLAorg/mola_mapper
 # ============================================================================
 
 params:

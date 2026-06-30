@@ -19,7 +19,7 @@
  * @date   2026
  */
 
-#include <mola_mapper_3d/Mapper3D.h>
+#include <mola_mapper/Mapper.h>
 #include <mrpt/core/bits_math.h>
 #include <mrpt/core/exceptions.h>
 #include <mrpt/poses/CPose3D.h>
@@ -54,7 +54,7 @@ mrpt::poses::CPose3DPDFGaussian make_pdf(double x)
 
 void test_lifecycle_and_frames()
 {
-  mola::mapper_3d::Mapper3D m;
+  mola::mapper::Mapper m;
   m.initialize(mrpt::containers::yaml::FromText(kParams));
 
   ASSERT_(m.known_odometry_frame_ids().empty());
@@ -73,7 +73,7 @@ void test_lifecycle_and_frames()
 
 void test_keyframe_creation_and_reuse()
 {
-  mola::mapper_3d::Mapper3D m;
+  mola::mapper::Mapper m;
   m.initialize(mrpt::containers::yaml::FromText(kParams));
 
   // Two well-separated timestamps -> two keyframes.
@@ -88,7 +88,7 @@ void test_keyframe_creation_and_reuse()
 
 void test_out_of_order_guard()
 {
-  mola::mapper_3d::Mapper3D m;
+  mola::mapper::Mapper m;
   m.initialize(mrpt::containers::yaml::FromText(kParams));
 
   m.fuse_pose(mrpt::Clock::fromDouble(0.0), make_pdf(0.0), "odom");

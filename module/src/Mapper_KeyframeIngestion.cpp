@@ -38,7 +38,7 @@
  */
 
 #include <gtsam/slam/BetweenFactor.h>
-#include <mola_mapper_3d/Mapper3D.h>
+#include <mola_mapper/Mapper.h>
 #include <mrpt/core/lock_helper.h>
 #include <mrpt/math/gtsam_wrappers.h>
 #include <mrpt/obs/CActionRobotMovement2D.h>
@@ -47,10 +47,10 @@
 #include "GtsamData.h"
 #include "factor_builders.h"
 
-namespace mola::mapper_3d
+namespace mola::mapper
 {
 
-std::optional<SharedKeyframeMap::KeyFrameID> Mapper3D::requestInsertKeyframe(
+std::optional<SharedKeyframeMap::KeyFrameID> Mapper::requestInsertKeyframe(
   const SharedKeyframeMap::KeyframeInsertRequest & req)
 {
   const ProfilerEntry tle(profiler_, "requestInsertKeyframe");
@@ -63,7 +63,7 @@ std::optional<SharedKeyframeMap::KeyFrameID> Mapper3D::requestInsertKeyframe(
   return kfId;
 }
 
-KeyFrameID Mapper3D::request_insert_keyframe_locked(
+KeyFrameID Mapper::request_insert_keyframe_locked(
   const SharedKeyframeMap::KeyframeInsertRequest & req)
 {
   ASSERTMSG_(!req.source_frame_id.empty(), "KeyframeInsertRequest::source_frame_id is empty.");
@@ -88,7 +88,7 @@ KeyFrameID Mapper3D::request_insert_keyframe_locked(
   // SAME single consecutive relative-pose-edge chain the dense fuse_pose() path
   // uses, so both sources contribute to ONE consistent backbone (no per-source
   // chains that skip each other's keyframes and create conflicting loop edges).
-  // See Mapper3D::link_into_odometry_chain_locked(). The request covariance now
+  // See Mapper::link_into_odometry_chain_locked(). The request covariance now
   // shapes the edge noise (anisotropic, per mola_sm_loop_closure), so z/tilt
   // stay soft for IMU-gravity / GNSS leveling. Pathological front-end values
   // (e.g. a near-zero relocalization-seed covariance) are bounded by the
@@ -141,4 +141,4 @@ KeyFrameID Mapper3D::request_insert_keyframe_locked(
   return kfId;
 }
 
-}  // namespace mola::mapper_3d
+}  // namespace mola::mapper

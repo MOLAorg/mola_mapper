@@ -19,7 +19,7 @@
  * @date   2026
  */
 
-#include <mola_mapper_3d/ImuGravityFilter.h>
+#include <mola_mapper/ImuGravityFilter.h>
 #include <mrpt/core/bits_math.h>
 #include <mrpt/core/exceptions.h>
 #include <mrpt/core/get_env.h>
@@ -28,7 +28,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace mola::mapper_3d
+namespace mola::mapper
 {
 namespace
 {
@@ -198,4 +198,4 @@ void ImuGravityFilter::clear()
   window_start_.reset();
 }
 
-}  // namespace mola::mapper_3d
+}  // namespace mola::mapper

@@ -1,12 +1,12 @@
 # -----------------------------------------------------------------------------
 #                        SLAM system definition for MOLA
 # -----------------------------------------------------------------------------
-# Integration validation: mola_mapper_3d::Mapper3D acts as BOTH the
+# Integration validation: mola_mapper::Mapper acts as BOTH the
 # `NavStateFilter` that `LidarOdometry` queries for short-term prediction
 # (replacing mola_state_estimation_{simple,smoother}) AND the
 # `SharedKeyframeMap` sink it pushes sparse central-map keyframes to.
 #
-# Unlike the KITTI launcher (lidar_odometry_mapper3d_from_kitti.yaml), the
+# Unlike the KITTI launcher (lidar_odometry_mapper_from_kitti.yaml), the
 # MulRan dataset also provides IMU (with absolute orientation quaternion +
 # magnetometer) and GNSS (NMEA GGA), both labeled "imu"/"gps". This file wires
 # `mapper3d` directly to `raw_data_source: dataset_input` so it receives
@@ -38,7 +38,7 @@
 # Usage:
 #   export MULRAN_BASE_DIR=/path/to/MulRan      # contains "<sequence>/sensor_data/..."
 #   export MULRAN_SEQ=KAIST01                   # or DCC01, Riverside01, Sejong01, ...
-#   mola-cli $(ros2 pkg prefix mola_mapper_3d)/share/mola_mapper_3d/mola-cli-launchs/lidar_odometry_mapper3d_from_mulran.yaml
+#   mola-cli $(ros2 pkg prefix mola_mapper)/share/mola_mapper/mola-cli-launchs/lidar_odometry_mapper_from_mulran.yaml
 # -----------------------------------------------------------------------------
 
 modules:
@@ -92,10 +92,10 @@ modules:
         show_ground_grid: false
 
   # =====================
-  # mola_mapper_3d (NavStateFilter + SharedKeyframeMap sink + direct IMU/GNSS)
+  # mola_mapper (NavStateFilter + SharedKeyframeMap sink + direct IMU/GNSS)
   # =====================
   - name: mapper3d
-    type: mola::mapper_3d::Mapper3D
+    type: mola::mapper::Mapper
     verbosity_level: "${MOLA_VERBOSITY_MAPPER3D|INFO}"
     # Subscribe directly to the dataset's IMU ("imu") and GNSS ("gps")
     # observations (lidar_odom's keyframes arrive separately, via the

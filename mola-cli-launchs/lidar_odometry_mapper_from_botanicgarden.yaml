@@ -1,7 +1,7 @@
 # -----------------------------------------------------------------------------
 #                        SLAM system definition for MOLA
 # -----------------------------------------------------------------------------
-# Integration validation: mola_mapper_3d::Mapper3D acts as BOTH the
+# Integration validation: mola_mapper::Mapper acts as BOTH the
 # `NavStateFilter` that `LidarOdometry` queries for short-term prediction
 # (replacing mola_state_estimation_{simple,smoother}) AND the
 # `SharedKeyframeMap` sink it pushes sparse central-map keyframes to.
@@ -50,7 +50,7 @@
 #
 # Usage (works out of the box, no magic env vars needed):
 #   export BOTANICGARDEN_LIO_BAG=$HOME/datasets/botanic/1018_00_LIO.bag
-#   mola-cli $(ros2 pkg prefix mola_mapper_3d)/share/mola_mapper_3d/mola-cli-launchs/lidar_odometry_mapper3d_from_botanicgarden.yaml
+#   mola-cli $(ros2 pkg prefix mola_mapper)/share/mola_mapper/mola-cli-launchs/lidar_odometry_mapper_from_botanicgarden.yaml
 #
 # Optional: export BOTANICGARDEN_GT_BAG=$HOME/datasets/botanic/gt_1018_00_qnew.bag
 #   to also replay /gt_poses (not consumed by mapper3d; for manual comparison
@@ -124,10 +124,10 @@ modules:
     params: "${MOLA_ODOMETRY_PIPELINE_YAML|$(ros2 pkg prefix mola_lidar_odometry)/share/mola_lidar_odometry/pipelines/lidar3d-default.yaml}"
 
   # =====================
-  # mola_mapper_3d (NavStateFilter + SharedKeyframeMap sink + direct IMU/wheels)
+  # mola_mapper (NavStateFilter + SharedKeyframeMap sink + direct IMU/wheels)
   # =====================
   - name: mapper3d
-    type: mola::mapper_3d::Mapper3D
+    type: mola::mapper::Mapper
     verbosity_level: "${MOLA_VERBOSITY_MAPPER3D|INFO}"
     # Subscribe directly to the dataset's IMU ("imu") and wheel-odometry
     # ("odom_wheels") observations (lidar_odom's keyframes arrive separately,

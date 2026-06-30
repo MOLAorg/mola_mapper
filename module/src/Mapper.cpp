@@ -13,13 +13,13 @@
 */
 
 /**
- * @file   Mapper3D.cpp
- * @brief  Mapper3D lifecycle: initialize, spinOnce, reset, diagnostics.
+ * @file   Mapper.cpp
+ * @brief  Mapper lifecycle: initialize, spinOnce, reset, diagnostics.
  * @author Jose Luis Blanco Claraco
  * @date   2026
  */
 
-#include <mola_mapper_3d/Mapper3D.h>
+#include <mola_mapper/Mapper.h>
 #include <mrpt/core/bits_math.h>
 #include <mrpt/core/format.h>
 #include <mrpt/core/lock_helper.h>
@@ -33,25 +33,25 @@
 #include <string>
 
 // arguments: class_name, parent_class, class namespace
-IMPLEMENTS_MRPT_OBJECT(Mapper3D, mola::ExecutableBase, mola::mapper_3d)
+IMPLEMENTS_MRPT_OBJECT(Mapper, mola::ExecutableBase, mola::mapper)
 
-namespace mola::mapper_3d
+namespace mola::mapper
 {
 
-Mapper3D::Mapper3D()
+Mapper::Mapper()
 {
-  this->setLoggerName("Mapper3D");
-  profiler_.setName("Mapper3D");
-  ExecutableBase::setModuleInstanceName("Mapper3D");
+  this->setLoggerName("Mapper");
+  profiler_.setName("Mapper");
+  ExecutableBase::setModuleInstanceName("Mapper");
 }
 
-Mapper3D::~Mapper3D()
+Mapper::~Mapper()
 {
   stop_optimizer_thread();
   saveEstimatedTrajectoryToFile();
 }
 
-void Mapper3D::initialize(const mrpt::containers::yaml & cfg)
+void Mapper::initialize(const mrpt::containers::yaml & cfg)
 {
   MRPT_START
 
@@ -121,18 +121,18 @@ void Mapper3D::initialize(const mrpt::containers::yaml & cfg)
   // Start the background optimizer thread (if enabled) AFTER state is ready.
   if (params_.enable_optimizer_thread) {
     optimizer_should_exit_.store(false);
-    optimizer_thread_ = std::thread(&Mapper3D::optimizer_thread_loop, this);
+    optimizer_thread_ = std::thread(&Mapper::optimizer_thread_loop, this);
   }
 
   MRPT_LOG_INFO_STREAM(
-    "Initialized Mapper3D with reference_frame='"
+    "Initialized Mapper with reference_frame='"
     << params_.reference_frame_name << "', vehicle_frame='" << params_.vehicle_frame_name
     << "', optimizer_thread=" << (params_.enable_optimizer_thread ? "on" : "off"));
 
   MRPT_END
 }
 
-void Mapper3D::optimizer_thread_loop()
+void Mapper::optimizer_thread_loop()
 {
   while (!optimizer_should_exit_.load()) {
     {
@@ -155,7 +155,7 @@ void Mapper3D::optimizer_thread_loop()
   }
 }
 
-void Mapper3D::notify_optimizer()
+void Mapper::notify_optimizer()
 {
   if (!params_.enable_optimizer_thread) {
     return;
@@ -167,7 +167,7 @@ void Mapper3D::notify_optimizer()
   optimizer_wakeup_cv_.notify_one();
 }
 
-void Mapper3D::stop_optimizer_thread()
+void Mapper::stop_optimizer_thread()
 {
   optimizer_should_exit_.store(true);
   optimizer_wakeup_cv_.notify_all();
@@ -177,7 +177,7 @@ void Mapper3D::stop_optimizer_thread()
   optimizer_should_exit_.store(false);
 }
 
-void Mapper3D::saveEstimatedTrajectoryToFile()
+void Mapper::saveEstimatedTrajectoryToFile()
 {
   if (!params_loaded_ || params_.save_trajectory_to_file.empty()) {
     return;
@@ -219,7 +219,7 @@ void Mapper3D::saveEstimatedTrajectoryToFile()
   MRPT_LOG_INFO("Estimated trajectory saved.");
 }
 
-void Mapper3D::reset()
+void Mapper::reset()
 {
   auto lck = mrpt::lockHelper(stateMutex_);
   // A reset() request (e.g. a front end re-localizing, like LidarOdometry's
@@ -227,7 +227,7 @@ void Mapper3D::reset()
   // integration state", NOT "wipe the central world model". The keyframes,
   // factor graph and geo-referencing are the persistent, shared map: they MUST
   // survive a single front end's relocalization, otherwise LIO's startup reset
-  // would erase the IMU/GNSS keyframes + tentative geo-reference Mapper3D
+  // would erase the IMU/GNSS keyframes + tentative geo-reference Mapper
   // accumulated during LIO's warmup (and geo-ref would converge, get wiped, then
   // re-converge). So only the per-source high-rate integration anchors and the
   // keyframe-ingestion chains are reset, so each source re-anchors cleanly; the
@@ -235,7 +235,7 @@ void Mapper3D::reset()
   reset_sensor_anchors_locked();
 }
 
-void Mapper3D::reset_sensor_anchors_locked()
+void Mapper::reset_sensor_anchors_locked()
 {
   last_wheels_odometry_.reset();
   last_wheels_odometry_name_.reset();
@@ -257,7 +257,7 @@ void Mapper3D::reset_sensor_anchors_locked()
   last_publish_wallclock_.reset();
 }
 
-void Mapper3D::spinOnce()
+void Mapper::spinOnce()
 {
   MRPT_START
   const ProfilerEntry tle(profiler_, "spinOnce");
@@ -271,7 +271,7 @@ void Mapper3D::spinOnce()
   MRPT_END
 }
 
-void Mapper3D::publish_high_rate_pose()
+void Mapper::publish_high_rate_pose()
 {
   if (params_.high_rate_pose_publish_rate_hz <= 0) {
     return;
@@ -322,7 +322,7 @@ void Mapper3D::publish_high_rate_pose()
   advertiseUpdatedLocalization(lu);
 }
 
-bool Mapper3D::has_converged_localization(mrpt::poses::CPose3DPDFGaussian & pose_in_map) const
+bool Mapper::has_converged_localization(mrpt::poses::CPose3DPDFGaussian & pose_in_map) const
 {
   auto lck = mrpt::lockHelper(stateMutex_);
 
@@ -341,12 +341,12 @@ bool Mapper3D::has_converged_localization(mrpt::poses::CPose3DPDFGaussian & pose
   return converged;
 }
 
-void Mapper3D::getDiagnostics(std::vector<mola::DiagnosticStatusMsg> & status)
+void Mapper::getDiagnostics(std::vector<mola::DiagnosticStatusMsg> & status)
 {
   auto lck = mrpt::lockHelper(stateMutex_);
 
   mola::DiagnosticStatusMsg msg;
-  msg.name = "Mapper3D";
+  msg.name = "Mapper";
   msg.level = mola::DiagnosticLevel::OK;
   msg.message = "running";
   msg.values.push_back({"keyframes", std::to_string(state_.time_to_kf_id.size())});
@@ -385,7 +385,7 @@ void Mapper3D::getDiagnostics(std::vector<mola::DiagnosticStatusMsg> & status)
   status.push_back(std::move(msg));
 }
 
-std::set<std::string> Mapper3D::known_odometry_frame_ids() const
+std::set<std::string> Mapper::known_odometry_frame_ids() const
 {
   auto lck = mrpt::lockHelper(stateMutex_);
   std::set<std::string> ret;
@@ -396,10 +396,10 @@ std::set<std::string> Mapper3D::known_odometry_frame_ids() const
   return ret;
 }
 
-std::size_t Mapper3D::keyframe_count() const
+std::size_t Mapper::keyframe_count() const
 {
   auto lck = mrpt::lockHelper(stateMutex_);
   return state_.time_to_kf_id.size();
 }
 
-}  // namespace mola::mapper_3d
+}  // namespace mola::mapper

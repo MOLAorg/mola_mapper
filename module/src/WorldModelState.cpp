@@ -19,12 +19,12 @@
  * @date   2026
  */
 
-#include <mola_mapper_3d/WorldModelState.h>
+#include <mola_mapper/WorldModelState.h>
 #include <mrpt/poses/CPose3DPDFGaussian.h>
 
 #include "GtsamData.h"
 
-namespace mola::mapper_3d
+namespace mola::mapper
 {
 
 WorldModelState::WorldModelState() : gtsam(mrpt::make_impl<GtsamData>()) {}
@@ -117,4 +117,4 @@ void WorldModelState::clear()
   gtsam->estimate.clear();
 }
 
-}  // namespace mola::mapper_3d
+}  // namespace mola::mapper

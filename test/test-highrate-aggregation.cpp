@@ -26,7 +26,7 @@
  *  - aggregation OFF produces FAR more keyframes for the same input.
  */
 
-#include <mola_mapper_3d/Mapper3D.h>
+#include <mola_mapper/Mapper.h>
 #include <mrpt/core/exceptions.h>
 #include <mrpt/obs/CObservationIMU.h>
 #include <mrpt/obs/CObservationOdometry.h>
@@ -64,7 +64,7 @@ params:
 
 // Feed a straight-line trajectory at `v` m/s along +x for `duration` s, both
 // wheel odometry and a level IMU, at `rate` Hz. Returns the number of samples.
-int feed_imu_and_wheels(mola::mapper_3d::Mapper3D & nav, double v, double duration, double rate)
+int feed_imu_and_wheels(mola::mapper::Mapper & nav, double v, double duration, double rate)
 {
   const double dt = 1.0 / rate;
   int n = 0;
@@ -92,10 +92,10 @@ int feed_imu_and_wheels(mola::mapper_3d::Mapper3D & nav, double v, double durati
 // Aggregation bounds the keyframe count and recovers the trajectory.
 void test_aggregation_bounds_keyframes_and_tracks()
 {
-  mola::mapper_3d::Mapper3D nav;
+  mola::mapper::Mapper nav;
   nav.initialize(mrpt::containers::yaml::FromText(params_yaml(true)));
 
-  const double v = 1.5;        // m/s
+  const double v = 1.5;         // m/s
   const double duration = 4.0;  // s
   const double rate = 50.0;     // Hz
   const int nSamples = feed_imu_and_wheels(nav, v, duration, rate);
@@ -127,14 +127,14 @@ void test_aggregation_bounds_keyframes_and_tracks()
 // sample), confirming aggregation is what bounds the growth.
 void test_no_aggregation_explodes()
 {
-  mola::mapper_3d::Mapper3D navOff;
+  mola::mapper::Mapper navOff;
   navOff.initialize(mrpt::containers::yaml::FromText(params_yaml(false)));
   const int nSamples = feed_imu_and_wheels(navOff, 1.5, 4.0, 50.0);
   // Force a solve so the keyframes are materialized:
   (void)navOff.estimated_navstate(mrpt::Clock::fromDouble(3.95), "map");
   const std::size_t kfOff = navOff.keyframe_count();
 
-  mola::mapper_3d::Mapper3D navOn;
+  mola::mapper::Mapper navOn;
   navOn.initialize(mrpt::containers::yaml::FromText(params_yaml(true)));
   feed_imu_and_wheels(navOn, 1.5, 4.0, 50.0);
   const std::size_t kfOn = navOn.keyframe_count();

@@ -21,12 +21,12 @@
  *
  * Ported from mola_state_estimation_smoother's
  * test-navstate-odom-gnss-fusion.cpp (the "70-case" sweep), adapted to
- * Mapper3D's API (no sliding window; full ISAM2; needs
+ * Mapper's API (no sliding window; full ISAM2; needs
  * link_first_pose_to_reference_origin_sigma to fix the gauge for this
  * pure-odometry scenario).
  */
 
-#include <mola_mapper_3d/Mapper3D.h>
+#include <mola_mapper/Mapper.h>
 #include <mrpt/core/exceptions.h>
 #include <mrpt/core/get_env.h>
 #include <mrpt/obs/CObservationGPS.h>
@@ -51,15 +51,15 @@ namespace
 {
 constexpr double GNSS_NOISE_XY_M = 0.05;
 constexpr double GNSS_NOISE_Z_M = 0.05;
-constexpr double MOTION_LIN_VX = 1.0;   // m/s
-constexpr double MOTION_ANG_WZ = 0.5;   // rad/s
+constexpr double MOTION_LIN_VX = 1.0;  // m/s
+constexpr double MOTION_ANG_WZ = 0.5;  // rad/s
 constexpr double ODOMETRY_NOISE_XY = 0.01;
 constexpr double ODOMETRY_NOISE_PHI = 0.1_deg;
 
 // The consecutive-keyframe odometry edges derive their per-DOF noise from the
 // PROPAGATED relative covariance of the source pose PDFs (faithful port of
 // mola_sm_loop_closure::add_odometry_edges; see
-// Mapper3D::add_odom_chain_edge_locked). For this synthetic sweep the 2D motion
+// Mapper::add_odom_chain_edge_locked). For this synthetic sweep the 2D motion
 // model reports a small yaw noise (ODOMETRY_NOISE_PHI), so the odom yaw edges
 // are tighter than the legacy fixed sigma and the constant-velocity kinematic
 // factor smooths the noisy odometry slightly less, leaving a touch more SE(3)
@@ -70,7 +70,7 @@ constexpr double MAXIMUM_SE3_FINAL_ERROR = 0.55;
 // from the SHAPE of the GNSS+odometry trajectory; GNSS gives position only).
 // Since the odometry backbone is fused as a chain of CONSECUTIVE relative-pose
 // edges (the model required for metric correctness on real, drifting odometry;
-// see Mapper3D::link_into_odometry_chain_locked), the absolute orientation of
+// see Mapper::link_into_odometry_chain_locked), the absolute orientation of
 // later keyframes carries chain-accumulated uncertainty rather than being
 // pinned per-keyframe to a single rigid odometry frame, so this weakly-observed
 // yaw converges a touch slower on the shorter / Tricycle sweep cases (~5-6 deg
@@ -86,7 +86,7 @@ constexpr size_t numPoses = 80;
 constexpr double T = 0.1;  // sensors period
 
 using Pose = mrpt::poses::CPose3D;
-using Kinematic = mola::mapper_3d::KinematicModel;
+using Kinematic = mola::mapper::KinematicModel;
 
 struct TestCase
 {
@@ -130,7 +130,7 @@ void run_test(const TestCase & testCase)
 {
   const auto actualInitialPoseWrtMap = testCase.pose;
 
-  mola::mapper_3d::Mapper3D nav;
+  mola::mapper::Mapper nav;
   if (VERBOSE) {
     nav.setMinLoggingLevel(mrpt::system::LVL_DEBUG);
   }
@@ -139,7 +139,7 @@ void run_test(const TestCase & testCase)
   cfgYaml["params"]["kinematic_model"] = mrpt::typemeta::enum2str(testCase.model);
   nav.initialize(cfgYaml);
 
-  mrpt::poses::CPose3D actualVehiclePose = actualInitialPoseWrtMap;  // wrt "map" frame
+  mrpt::poses::CPose3D actualVehiclePose = actualInitialPoseWrtMap;      // wrt "map" frame
   mrpt::poses::CPose2D odometryPose = mrpt::poses::CPose2D::Identity();  // wrt "odom" frame
 
   mrpt::topography::TGeodeticCoords actualVehicleInitialGeoCoords;
@@ -189,7 +189,8 @@ void run_test(const TestCase & testCase)
       constexpr double gnss_noise_deg = GNSS_NOISE_XY_M * mrpt::RAD2DEG(1.0 / 6300e3);
 
       mrpt::obs::gnss::Message_NMEA_GGA gga_msg;
-      gga_msg.fields.latitude_degrees = currentGeoCoords.lat + rng.drawGaussian1D(0, gnss_noise_deg);
+      gga_msg.fields.latitude_degrees =
+        currentGeoCoords.lat + rng.drawGaussian1D(0, gnss_noise_deg);
       gga_msg.fields.longitude_degrees =
         currentGeoCoords.lon + rng.drawGaussian1D(0, gnss_noise_deg);
       gga_msg.fields.altitude_meters =
@@ -224,13 +225,14 @@ void run_test(const TestCase & testCase)
 
   // Recover pose, in the reference frame:
   {
-    const auto stateOpt =
-      nav.estimated_navstate(mrpt::Clock::fromDouble(last_t), nav.parameters().reference_frame_name);
+    const auto stateOpt = nav.estimated_navstate(
+      mrpt::Clock::fromDouble(last_t), nav.parameters().reference_frame_name);
     ASSERT_(stateOpt.has_value());
 
     const auto estimatedPoseWrtMap = stateOpt->pose.mean;
     const double final_se3_error =
-      mrpt::poses::Lie::SE<3>::log(estimatedPoseWrtMap - (actualVehiclePose - actualInitialPoseWrtMap))
+      mrpt::poses::Lie::SE<3>::log(
+        estimatedPoseWrtMap - (actualVehiclePose - actualInitialPoseWrtMap))
         .norm();
     if (VERBOSE) {
       std::cout << "  (map frame) final_se3_error=" << final_se3_error << "\n";
@@ -245,7 +247,8 @@ void run_test(const TestCase & testCase)
     ASSERT_(stateOpt.has_value());
 
     const double final_se3_error =
-      mrpt::poses::Lie::SE<3>::log(stateOpt->pose.mean - (actualVehiclePose - actualInitialPoseWrtMap))
+      mrpt::poses::Lie::SE<3>::log(
+        stateOpt->pose.mean - (actualVehiclePose - actualInitialPoseWrtMap))
         .norm();
     if (VERBOSE) {
       std::cout << "  (odom frame) final_se3_error=" << final_se3_error << "\n";
@@ -320,9 +323,10 @@ void test_georef_convergence_sweep()
           numSuccess++;
         } catch (const std::exception & e) {
           numErrors++;
-          std::cerr << "  [FAIL] pose=" << tc.pose << " kinematic="
-                    << mrpt::typemeta::enum2str(kinModel) << " has_gnss=" << tc.has_gnss
-                    << " rep=" << rep << "\n    " << mrpt::exception_to_str(e) << "\n";
+          std::cerr << "  [FAIL] pose=" << tc.pose
+                    << " kinematic=" << mrpt::typemeta::enum2str(kinModel)
+                    << " has_gnss=" << tc.has_gnss << " rep=" << rep << "\n    "
+                    << mrpt::exception_to_str(e) << "\n";
         }
       }
     }

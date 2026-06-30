@@ -19,15 +19,15 @@
  * @date   2026
  */
 
-#include <mola_mapper_3d/Mapper3D.h>
+#include <mola_mapper/Mapper.h>
 #include <mrpt/obs/CObservationGPS.h>
 #include <mrpt/obs/CObservationIMU.h>
 #include <mrpt/obs/CObservationOdometry.h>
 
-namespace mola::mapper_3d
+namespace mola::mapper
 {
 
-void Mapper3D::onNewObservation(const CObservation::ConstPtr & o)
+void Mapper::onNewObservation(const CObservation::ConstPtr & o)
 {
   MRPT_START
   const ProfilerEntry tle(profiler_, "onNewObservation");
@@ -59,9 +59,9 @@ void Mapper3D::onNewObservation(const CObservation::ConstPtr & o)
     return;
   }
 
-  // Other observation classes are ignored by Mapper3D (LiDAR/visual front ends
+  // Other observation classes are ignored by Mapper (LiDAR/visual front ends
   // feed it via fuse_pose() and, in later phases, the keyframe-insertion API).
   MRPT_END
 }
 
-}  // namespace mola::mapper_3d
+}  // namespace mola::mapper

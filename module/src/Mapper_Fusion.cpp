@@ -31,7 +31,7 @@
 #include <mola_gtsam_factors/FactorGnssMapEnu.h>
 #include <mola_gtsam_factors/MeasuredGravityFactor.h>
 #include <mola_gtsam_factors/Pose3RotationFactor.h>
-#include <mola_mapper_3d/Mapper3D.h>
+#include <mola_mapper/Mapper.h>
 #include <mrpt/core/format.h>
 #include <mrpt/core/get_env.h>
 #include <mrpt/core/lock_helper.h>
@@ -51,7 +51,7 @@
 #include "GtsamData.h"
 #include "factor_builders.h"
 
-namespace mola::mapper_3d
+namespace mola::mapper
 {
 namespace
 {
@@ -139,7 +139,7 @@ std::pair<double, double> max_pos_and_orientation_sigma(const mrpt::math::CMatri
 // ---------------------------------------------------------------------------
 // GTSAM (re)initialization
 // ---------------------------------------------------------------------------
-void Mapper3D::reinitialize_gtsam_locked()
+void Mapper::reinitialize_gtsam_locked()
 {
   gtsam::ISAM2Params isam2Params;
   isam2Params.relinearizeThreshold = 0.1;
@@ -198,7 +198,7 @@ void Mapper3D::reinitialize_gtsam_locked()
 // ---------------------------------------------------------------------------
 // Odometry frame registry (creates the F(k) variable + weak prior)
 // ---------------------------------------------------------------------------
-OdometryFrameID Mapper3D::add_or_get_odom_frame_id_locked(const std::string & frame_id_name)
+OdometryFrameID Mapper::add_or_get_odom_frame_id_locked(const std::string & frame_id_name)
 {
   // F(0) is special: the reference frame ("map"), not a floating odometry frame.
   if (frame_id_name == params_.reference_frame_name) {
@@ -229,7 +229,7 @@ OdometryFrameID Mapper3D::add_or_get_odom_frame_id_locked(const std::string & fr
 // ---------------------------------------------------------------------------
 // Keyframe creation (with the out-of-order guard) + variable/factor seeding
 // ---------------------------------------------------------------------------
-KeyFrameID Mapper3D::create_or_get_keyframe_by_timestamp_locked(
+KeyFrameID Mapper::create_or_get_keyframe_by_timestamp_locked(
   const mrpt::Clock::time_point & t, const std::optional<double> & overrideCloseEnough)
 {
   const double threshold =
@@ -313,7 +313,7 @@ KeyFrameID Mapper3D::create_or_get_keyframe_by_timestamp_locked(
   return newId;
 }
 
-void Mapper3D::initialize_new_frame(
+void Mapper::initialize_new_frame(
   KeyFrameID id, const pair_nearby_frame_iterators_t & closestFrames)
 {
   const auto stamp = state_.time_to_kf_id.inverse(id);
@@ -364,7 +364,7 @@ void Mapper3D::initialize_new_frame(
   }
 }
 
-void Mapper3D::add_kinematic_factor_between(KeyFrameID from, KeyFrameID to)
+void Mapper::add_kinematic_factor_between(KeyFrameID from, KeyFrameID to)
 {
   ASSERT_NOT_EQUAL_(from, to);
 
@@ -397,7 +397,7 @@ void Mapper3D::add_kinematic_factor_between(KeyFrameID from, KeyFrameID to)
 // ---------------------------------------------------------------------------
 // Sensor fusion entry points
 // ---------------------------------------------------------------------------
-void Mapper3D::fuse_pose(
+void Mapper::fuse_pose(
   const mrpt::Clock::time_point & timestamp, const mrpt::poses::CPose3DPDFGaussian & pose,
   const std::string & frame_id)
 {
@@ -409,7 +409,7 @@ void Mapper3D::fuse_pose(
   notify_optimizer();
 }
 
-void Mapper3D::fuse_pose_locked(
+void Mapper::fuse_pose_locked(
   const mrpt::Clock::time_point & timestamp, const mrpt::poses::CPose3DPDFGaussian & pose,
   const std::string & frame_id)
 {
@@ -493,7 +493,7 @@ void Mapper3D::fuse_pose_locked(
   link_into_odometry_chain_locked(this_kf_id, poseSanitized, frame_id_idx);
 }
 
-void Mapper3D::link_into_odometry_chain_locked(
+void Mapper::link_into_odometry_chain_locked(
   KeyFrameID kf, const mrpt::poses::CPose3DPDFGaussian & absOdomPosePdf, OdometryFrameID frameIdx)
 {
   const mrpt::poses::CPose3D & absOdomPose = absOdomPosePdf.mean;
@@ -588,7 +588,7 @@ void Mapper3D::link_into_odometry_chain_locked(
   }
 }
 
-void Mapper3D::add_odom_chain_edge_locked(KeyFrameID a, KeyFrameID b)
+void Mapper::add_odom_chain_edge_locked(KeyFrameID a, KeyFrameID b)
 {
   if (a == b) {
     return;
@@ -649,7 +649,7 @@ void Mapper3D::add_odom_chain_edge_locked(KeyFrameID a, KeyFrameID b)
   state_.add_kf_connectivity(from, to);
 }
 
-void Mapper3D::fuse_odometry(
+void Mapper::fuse_odometry(
   const mrpt::obs::CObservationOdometry & odom, const std::string & odomName)
 {
   const ProfilerEntry tle(profiler_, "fuse_odometry");
@@ -758,7 +758,7 @@ void Mapper3D::fuse_odometry(
   notify_optimizer();
 }
 
-void Mapper3D::fuse_twist(
+void Mapper::fuse_twist(
   const mrpt::Clock::time_point & timestamp, const mrpt::math::TTwist3D & twist,
   const mrpt::math::CMatrixDouble66 & twistCov)
 {
@@ -775,7 +775,7 @@ void Mapper3D::fuse_twist(
   notify_optimizer();
 }
 
-void Mapper3D::fuse_imu(const mrpt::obs::CObservationIMU & imu)
+void Mapper::fuse_imu(const mrpt::obs::CObservationIMU & imu)
 {
   const ProfilerEntry tle(profiler_, "fuse_imu");
   auto lck = mrpt::lockHelper(stateMutex_);
@@ -789,7 +789,7 @@ void Mapper3D::fuse_imu(const mrpt::obs::CObservationIMU & imu)
   ingest_imu_sample_locked(imu);
 }
 
-void Mapper3D::ingest_imu_sample_locked(const mrpt::obs::CObservationIMU & imu)
+void Mapper::ingest_imu_sample_locked(const mrpt::obs::CObservationIMU & imu)
 {
   // Move the raw reading to the vehicle "base_link" frame with a per-sensor,
   // STATEFUL ImuTransformer (rotation + rigid lever-arm/centripetal correction
@@ -803,8 +803,9 @@ void Mapper3D::ingest_imu_sample_locked(const mrpt::obs::CObservationIMU & imu)
   // pose and the orientation we store is the VEHICLE attitude in the world.
   const mola::imu::TimeStamp t = mrpt::Clock::toDouble(bodyImu.timestamp);
 
-  if (imu.has(mrpt::obs::IMU_X_ACC) && imu.has(mrpt::obs::IMU_Y_ACC) &&
-      imu.has(mrpt::obs::IMU_Z_ACC)) {
+  if (
+    imu.has(mrpt::obs::IMU_X_ACC) && imu.has(mrpt::obs::IMU_Y_ACC) &&
+    imu.has(mrpt::obs::IMU_Z_ACC)) {
     // ROTATION-ONLY accel for the gravity buffer (NOT the lever-arm-corrected
     // bodyImu accel). Gravity DIRECTION is invariant to a rigid sensor offset,
     // and the ImuTransformer's lever-arm term (-alpha x t - w x (w x t)) turns
@@ -814,8 +815,7 @@ void Mapper3D::ingest_imu_sample_locked(const mrpt::obs::CObservationIMU & imu)
     // gates + spread gate already reject genuine motion accel, so the lever-arm
     // correction is not needed here and is actively harmful.
     const auto aSensor = mrpt::math::TVector3D(
-      imu.get(mrpt::obs::IMU_X_ACC), imu.get(mrpt::obs::IMU_Y_ACC),
-      imu.get(mrpt::obs::IMU_Z_ACC));
+      imu.get(mrpt::obs::IMU_X_ACC), imu.get(mrpt::obs::IMU_Y_ACC), imu.get(mrpt::obs::IMU_Z_ACC));
     const auto aBodyRot = imu.sensorPose.rotateVector(aSensor);
     imu_buffer_.add_linear_acceleration(t, aBodyRot);
   }
@@ -873,7 +873,7 @@ void Mapper3D::ingest_imu_sample_locked(const mrpt::obs::CObservationIMU & imu)
   maybe_emit_gravity_factor_locked(t);
 }
 
-void Mapper3D::maybe_emit_gravity_factor_locked(mola::imu::TimeStamp tNow)
+void Mapper::maybe_emit_gravity_factor_locked(mola::imu::TimeStamp tNow)
 {
   // No keyframe yet -> nothing to attach a gravity factor to.
   if (state_.empty()) {
@@ -922,8 +922,7 @@ void Mapper3D::maybe_emit_gravity_factor_locked(mola::imu::TimeStamp tNow)
   // factor takes an identity sensor pose. The latest keyframe's orientation
   // matches the (stationary) vehicle attitude this gravity was measured at.
   const gtsam::Vector3 g = {
-    est->gravity_body_normalized.x, est->gravity_body_normalized.y,
-    est->gravity_body_normalized.z};
+    est->gravity_body_normalized.x, est->gravity_body_normalized.y, est->gravity_body_normalized.z};
   auto accNoise = gtsam::noiseModel::Isotropic::Sigma(3, mrpt::DEG2RAD(est->sigma_deg));
   state_.gtsam->newFactors.emplace_shared<mola::factors::MeasuredGravityFactor>(
     symbol_T_enu_to_map, T(latestKf), gtsam::Pose3::Identity(), g, accNoise);
@@ -951,7 +950,7 @@ void Mapper3D::maybe_emit_gravity_factor_locked(mola::imu::TimeStamp tNow)
   }
 }
 
-void Mapper3D::emit_imu_factors_for_keyframe_locked(KeyFrameID newKf)
+void Mapper::emit_imu_factors_for_keyframe_locked(KeyFrameID newKf)
 {
   // First IMU keyframe: nothing accumulated behind it yet. Anchor and return.
   if (!last_imu_kf_.has_value()) {
@@ -1020,7 +1019,7 @@ void Mapper3D::emit_imu_factors_for_keyframe_locked(KeyFrameID newKf)
     geo_ref_counters_.imu_attitude, geo_ref_counters_.imu_omega);
 }
 
-void Mapper3D::trace_imu_factors_locked(const gtsam::Values & estimate)
+void Mapper::trace_imu_factors_locked(const gtsam::Values & estimate)
 {
   thread_local const bool traceImu = mrpt::get_env<bool>("MOLA_MAPPER3D_TRACE_IMU", false);
   if (!traceImu || !state_.gtsam->isam2.has_value()) {
@@ -1073,7 +1072,7 @@ void Mapper3D::trace_imu_factors_locked(const gtsam::Values & estimate)
   }
 }
 
-void Mapper3D::trace_keyframe_geometry_locked(const gtsam::Values & estimate)
+void Mapper::trace_keyframe_geometry_locked(const gtsam::Values & estimate)
 {
   thread_local const bool traceGeom = mrpt::get_env<bool>("MOLA_MAPPER3D_TRACE_GEOM", false);
   if (!traceGeom) {
@@ -1181,7 +1180,7 @@ void Mapper3D::trace_keyframe_geometry_locked(const gtsam::Values & estimate)
   }
 }
 
-void Mapper3D::fuse_gnss(const mrpt::obs::CObservationGPS & gps)
+void Mapper::fuse_gnss(const mrpt::obs::CObservationGPS & gps)
 {
   const ProfilerEntry tle(profiler_, "fuse_gnss");
   auto lck = mrpt::lockHelper(stateMutex_);
@@ -1314,7 +1313,7 @@ void Mapper3D::fuse_gnss(const mrpt::obs::CObservationGPS & gps)
 //       marginals into local temporaries. Only this code path touches iSAM2.
 //   (C) brief stateMutex_: commit the refreshed poses/twists/covariances,
 //       frame transforms and (convergence-gated) geo-reference into the caches.
-void Mapper3D::optimize_and_refresh()
+void Mapper::optimize_and_refresh()
 {
   const ProfilerEntry tle(profiler_, "optimize_and_refresh");
   std::scoped_lock solveLock(solve_mutex_);
@@ -1614,7 +1613,7 @@ void Mapper3D::optimize_and_refresh()
   }
 }
 
-NavState Mapper3D::get_latest_state_and_covariance(KeyFrameID idx) const
+NavState Mapper::get_latest_state_and_covariance(KeyFrameID idx) const
 {
   const auto & frame = state_.last_estimated_states.at(idx);
 
@@ -1658,7 +1657,7 @@ NavState Mapper3D::get_latest_state_and_covariance(KeyFrameID idx) const
   return ns;
 }
 
-std::optional<NavState> Mapper3D::estimated_navstate(
+std::optional<NavState> Mapper::estimated_navstate(
   const mrpt::Clock::time_point & timestamp, const std::string & frame_id)
 {
   const ProfilerEntry tle(profiler_, "estimated_navstate");
@@ -1891,7 +1890,7 @@ std::optional<NavState> Mapper3D::estimated_navstate(
   return ret;
 }
 
-std::optional<mrpt::poses::CPose3DPDFGaussian> Mapper3D::estimated_T_map_to_odometry_frame(
+std::optional<mrpt::poses::CPose3DPDFGaussian> Mapper::estimated_T_map_to_odometry_frame(
   const std::string & frame_id) const
 {
   auto lck = mrpt::lockHelper(stateMutex_);
@@ -1908,7 +1907,7 @@ std::optional<mrpt::poses::CPose3DPDFGaussian> Mapper3D::estimated_T_map_to_odom
   return {itFrame->second};
 }
 
-std::optional<mrpt::poses::CPose3DPDFGaussian> Mapper3D::estimated_T_enu_to_map() const
+std::optional<mrpt::poses::CPose3DPDFGaussian> Mapper::estimated_T_enu_to_map() const
 {
   auto lck = mrpt::lockHelper(stateMutex_);
   const auto it = state_.last_estimated_frames.find(REFERENCE_FRAME_ID);
@@ -1918,7 +1917,7 @@ std::optional<mrpt::poses::CPose3DPDFGaussian> Mapper3D::estimated_T_enu_to_map(
   return {it->second};
 }
 
-std::optional<mola::Georeferencing> Mapper3D::current_georeferencing() const
+std::optional<mola::Georeferencing> Mapper::current_georeferencing() const
 {
   auto lck = mrpt::lockHelper(stateMutex_);
   return state_.geo_reference;
@@ -1927,7 +1926,7 @@ std::optional<mola::Georeferencing> Mapper3D::current_georeferencing() const
 // ---------------------------------------------------------------------------
 // Keyframe-neighbor helpers
 // ---------------------------------------------------------------------------
-Mapper3D::pair_nearby_frame_iterators_t Mapper3D::find_before_after(
+Mapper::pair_nearby_frame_iterators_t Mapper::find_before_after(
   const mrpt::Clock::time_point & t, bool allow_exact_match) const
 {
   const auto & m = state_.time_to_kf_id.getDirectMap();
@@ -1954,7 +1953,7 @@ Mapper3D::pair_nearby_frame_iterators_t Mapper3D::find_before_after(
   return {before, after};
 }
 
-std::optional<KeyFrameID> Mapper3D::pick_closest(
+std::optional<KeyFrameID> Mapper::pick_closest(
   const pair_nearby_frame_iterators_t & closestFrames, const mrpt::Clock::time_point & stamp) const
 {
   const auto & m = state_.time_to_kf_id.getDirectMap();
@@ -1974,12 +1973,12 @@ std::optional<KeyFrameID> Mapper3D::pick_closest(
   return (dtBefore < dtAfter) ? before->second : after->second;
 }
 
-std::optional<KeyFrameID> Mapper3D::find_nearest_kf_locked(const mrpt::Clock::time_point & t) const
+std::optional<KeyFrameID> Mapper::find_nearest_kf_locked(const mrpt::Clock::time_point & t) const
 {
   return pick_closest(find_before_after(t, true), t);
 }
 
-bool Mapper3D::sensor_kf_creation_allowed() const
+bool Mapper::sensor_kf_creation_allowed() const
 {
   switch (params_.keyframe_creation_source) {
     case KeyframeCreationSource::SharedMapOnly:
@@ -1995,4 +1994,4 @@ bool Mapper3D::sensor_kf_creation_allowed() const
   }
 }
 
-}  // namespace mola::mapper_3d
+}  // namespace mola::mapper

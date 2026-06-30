@@ -14,14 +14,14 @@
 
 /**
  * @file   Parameters.cpp
- * @brief  Parameters for the Mapper3D central 3D SLAM module.
+ * @brief  Parameters for the Mapper central 3D SLAM module.
  * @author Jose Luis Blanco Claraco
  * @date   2026
  */
 
-#include <mola_mapper_3d/Parameters.h>
+#include <mola_mapper/Parameters.h>
 
-namespace mola::mapper_3d
+namespace mola::mapper
 {
 
 void Parameters::loadFrom(const mrpt::containers::yaml & cfg)
@@ -164,4 +164,4 @@ void Parameters::loadFrom(const mrpt::containers::yaml & cfg)
   MCP_LOAD_OPT(cfg, save_trajectory_to_file);
 }
 
-}  // namespace mola::mapper_3d
+}  // namespace mola::mapper

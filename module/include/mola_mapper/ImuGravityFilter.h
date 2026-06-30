@@ -27,7 +27,7 @@
 #include <optional>
 #include <vector>
 
-namespace mola::mapper_3d
+namespace mola::mapper
 {
 /** Accumulates a short window of raw IMU samples and extracts ONE filtered,
  *  low-dynamics gravity-direction estimate per window.
@@ -52,10 +52,10 @@ namespace mola::mapper_3d
  *     it. With a 100 Hz IMU and a ~1 s window that is ~100 samples, shrinking the
  *     ~2 deg per-sample noise to a few tenths of a degree.
  *
- *  Thread-safety: none; the caller serializes access (Mapper3D holds it under
+ *  Thread-safety: none; the caller serializes access (Mapper holds it under
  *  stateMutex_).
  *
- *  \ingroup mola_mapper_3d_grp
+ *  \ingroup mola_mapper_grp
  */
 class ImuGravityFilter
 {
@@ -141,4 +141,4 @@ private:
   std::optional<mrpt::Clock::time_point> window_start_;
 };
 
-}  // namespace mola::mapper_3d
+}  // namespace mola::mapper

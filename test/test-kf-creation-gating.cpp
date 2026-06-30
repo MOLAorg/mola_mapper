@@ -30,7 +30,7 @@
  */
 
 #include <mola_kernel/interfaces/SharedKeyframeMap.h>
-#include <mola_mapper_3d/Mapper3D.h>
+#include <mola_mapper/Mapper.h>
 #include <mrpt/core/exceptions.h>
 #include <mrpt/obs/CObservationOdometry.h>
 #include <mrpt/poses/CPose3D.h>
@@ -38,7 +38,7 @@
 #include <iostream>
 #include <string>
 
-using namespace mola::mapper_3d;
+using namespace mola::mapper;
 
 namespace
 {
@@ -82,7 +82,7 @@ mrpt::poses::CPose3DPDFGaussian pose_at(double x, double sigma = 0.02)
 // (A) auto mode before any requestInsertKeyframe(): legacy KF creation
 bool test_auto_mode_legacy_creation()
 {
-  Mapper3D nav;
+  Mapper nav;
   nav.initialize(mrpt::containers::yaml::FromText(kParamsAuto));
 
   // Feed 5 poses separated by >0.01 s: all should create KFs.
@@ -103,7 +103,7 @@ bool test_auto_mode_legacy_creation()
 // (B) auto mode: after requestInsertKeyframe(), fuse_pose() stops creating KFs
 bool test_auto_mode_switches_on_shared_kf()
 {
-  Mapper3D nav;
+  Mapper nav;
   nav.initialize(mrpt::containers::yaml::FromText(kParamsAuto));
 
   // Prime with one sparse requestInsertKeyframe() call -> activates shared_map_only.
@@ -139,8 +139,8 @@ bool test_auto_mode_switches_on_shared_kf()
     return false;
   }
   if (kfFinal != kfAfterFirst + 1) {
-    std::cerr << "[B] FAIL: second requestInsertKeyframe() should add exactly 1 KF, got "
-              << kfFinal << " (was " << kfAfterFirst << ")\n";
+    std::cerr << "[B] FAIL: second requestInsertKeyframe() should add exactly 1 KF, got " << kfFinal
+              << " (was " << kfAfterFirst << ")\n";
     return false;
   }
   std::cout << "[B] PASS: auto mode: 20 dense fuse_pose() calls did not grow KF count ("
@@ -151,7 +151,7 @@ bool test_auto_mode_switches_on_shared_kf()
 // (C) shared_map_only mode: fuse_pose() NEVER creates KFs
 bool test_shared_map_only_no_creation()
 {
-  Mapper3D nav;
+  Mapper nav;
   nav.initialize(mrpt::containers::yaml::FromText(kParamsSharedMapOnly));
 
   // Feed 10 dense fuse_pose() calls.
@@ -188,7 +188,7 @@ bool test_shared_map_only_no_creation()
 // (D) estimated_navstate() works in shared_map_only after requestInsertKeyframe()
 bool test_navstate_after_kf_gating()
 {
-  Mapper3D nav;
+  Mapper nav;
   nav.initialize(mrpt::containers::yaml::FromText(kParamsSharedMapOnly));
 
   // Insert a sparse KF via requestInsertKeyframe().
@@ -228,7 +228,7 @@ bool test_navstate_after_kf_gating()
 // (E) Phase B.1: wheel relative-pose edge emitted between consecutive sparse KFs
 bool test_wheel_edge_between_sparse_kfs()
 {
-  Mapper3D nav;
+  Mapper nav;
   nav.initialize(mrpt::containers::yaml::FromText(kParamsSharedMapOnly));
 
   // Helper: build a 2D odometry observation at absolute position x.
@@ -297,7 +297,7 @@ params:
   high_rate_use_latest_sensors: true
 )###";
 
-  Mapper3D nav;
+  Mapper nav;
   nav.initialize(mrpt::containers::yaml::FromText(kParams));
 
   // First, insert a sparse KF at t=0.0 via requestInsertKeyframe("odom_lidar_kf").

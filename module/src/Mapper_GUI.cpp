@@ -20,7 +20,7 @@
  * @date   2026
  */
 
-#include <mola_mapper_3d/Mapper3D.h>
+#include <mola_mapper/Mapper.h>
 #include <mrpt/core/lock_helper.h>
 #include <mrpt/opengl/CGridPlaneXY.h>
 #include <mrpt/opengl/CSetOfLines.h>
@@ -34,10 +34,10 @@
 #include <set>
 #include <utility>
 
-namespace mola::mapper_3d
+namespace mola::mapper
 {
 
-void Mapper3D::updateVisualization()
+void Mapper::updateVisualization()
 {
   if (!visualizer_) {
     return;
@@ -348,7 +348,7 @@ void Mapper3D::updateVisualization()
   }
 }
 
-void Mapper3D::internalBuildGUI()
+void Mapper::internalBuildGUI()
 {
   using namespace mola::gui;
 
@@ -364,7 +364,7 @@ void Mapper3D::internalBuildGUI()
   gui_.lbImu = std::make_shared<LiveString>(" ");
 
   WindowDescription desc;
-  desc.title = "mola_mapper_3d";
+  desc.title = "mola_mapper";
   desc.position = {5, 700};
   desc.size = {320, 0};
 
@@ -441,4 +441,4 @@ void Mapper3D::internalBuildGUI()
   visualizer_->create_subwindow_from_description(desc).get();
 }
 
-}  // namespace mola::mapper_3d
+}  // namespace mola::mapper

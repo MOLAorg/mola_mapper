@@ -40,7 +40,7 @@
 #include <set>
 #include <string>
 
-namespace mola::mapper_3d
+namespace mola::mapper
 {
 /// Stable, monotonic keyframe identifier.
 using KeyFrameID = mrpt::graphs::TNodeID;
@@ -60,13 +60,13 @@ using KeyFrameConnectivityDijkstra = mrpt::graphs::CDijkstra<KeyFrameConnectivit
  *  the keyframe raw observations (as a CSimpleMap-like store), the odometry
  *  frame registry, keyframe connectivity, and the latest optimized poses.
  *
- *  GTSAM types are hidden behind a pimpl so the public Mapper3D header does not
+ *  GTSAM types are hidden behind a pimpl so the public Mapper header does not
  *  pull in GTSAM (faster builds, smaller include surface).
  *
  *  Thread-safety: this class is NOT internally synchronized; the owning
- *  Mapper3D guards all access with its own mutex.
+ *  Mapper guards all access with its own mutex.
  *
- * \ingroup mola_mapper_3d_grp
+ * \ingroup mola_mapper_grp
  */
 class WorldModelState
 {
@@ -75,7 +75,7 @@ public:
   ~WorldModelState();
 
   // The graph state (GTSAM + ISAM2) is move-only; this whole container is a
-  // single owned member of Mapper3D, so disable copying and moving.
+  // single owned member of Mapper, so disable copying and moving.
   WorldModelState(const WorldModelState &) = delete;
   WorldModelState & operator=(const WorldModelState &) = delete;
   WorldModelState(WorldModelState &&) = delete;
@@ -194,4 +194,4 @@ public:
   void clear();
 };
 
-}  // namespace mola::mapper_3d
+}  // namespace mola::mapper

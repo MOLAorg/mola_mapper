@@ -126,3 +126,17 @@ modules:
       # yaw stays pinned (no absolute yaw reference without GNSS). Validated on
       # DCC01 (gravity-factor chi2 ~16700 -> ~24, residual 2.2 -> 0.6 deg).
       odometry_edge_min_sigma_rollpitch_deg: ${MOLA_MAPPER3D_ODOM_RP_SIGMA|3.0}
+
+      # MulRan's Xsens reports orientation already ENU-referenced (yaw measured
+      # from East, Z-up), but emit_imu_factors_for_keyframe_locked() applies a
+      # hardcoded Rz(90 deg) "azimuth wrt North" correction. For this Xsens that
+      # over-rotates the absolute-attitude factor by 90 deg, so its implied
+      # geo-ref yaw lands ~186 deg vs the GNSS-true ~102 deg (GT 98.4 deg). The
+      # resulting ~84 deg conflict makes iSAM2 diverge (BayesTree errors,
+      # trajectory blows up) whenever the attitude factor is on -- this is why a
+      # default (or stiffer) MOLA_IMU_ATTITUDE_SIGMA "ruined" the result. Setting
+      # -90 cancels the hardcoded +90. With it, the absolute-attitude factor both
+      # levels the map (z-span 34 -> ~9 m) AND improves XY (APE-a 8.3 -> 6.7 m)
+      # vs attitude-off, with geo-ref yaw 95 deg and zero solver errors on DCC01.
+      # See ~/plans/lio-mulran-benchmarking.md (P11, 2026-07-01).
+      imu_attitude_azimuth_offset_deg: ${MOLA_IMU_ATTITUDE_AZIMUTH_OFFSET|-90.0}

@@ -45,10 +45,31 @@ namespace
 // ---------------------------------------------------------------------------
 // IMU gravity leveling: a tilted LiDAR-odometry frame is leveled by the IMU
 // accelerometer (robot is physically flat).
+//
+// Parametrized by the IMU mount pose on the vehicle (`imuMountPose`,
+// = T_vehicle_sensor). The robot is physically flat, so gravity in the VEHICLE
+// frame is always straight down; the accelerometer however measures in its own
+// (possibly rotated) sensor frame, and the observation carries that mount pose
+// in `sensorPose`. The backend (ImuTransformer) must rotate the reading back to
+// the vehicle frame, so the leveled map must come out flat REGARDLESS of the
+// mount rotation. With a 90 deg mount roll/pitch, failing to apply `sensorPose`
+// makes the gravity factor believe "up" is sideways and tips the whole map
+// ~90 deg (the real floor becomes a wall) -- the bug this exercises.
 // ---------------------------------------------------------------------------
-void test_imu_leveling()
+// How the synthetic IMU reports its absolute orientation, if at all.
+enum class OrientationMode
 {
-  const char * params =
+  None,          // no orientation quaternion (accel/gyro only)
+  TrueWorld,     // a correct R_world_sensor quaternion
+  FakeIdentity,  // a bogus identity quaternion (some Hesai drivers do this,
+                 // tagging orientation_covariance[0]=0, i.e. "valid")
+};
+
+void run_imu_leveling(
+  const mrpt::poses::CPose3D & imuMountPose, OrientationMode oriMode = OrientationMode::None,
+  double attitudeSigmaDeg = 2.0)
+{
+  std::string params =
     R"###(
 params:
   vehicle_frame_name: "base_link"
@@ -66,6 +87,7 @@ params:
   imu_gravity_min_samples: 1
   link_first_pose_to_reference_origin_sigma: 0.01
 )###";
+  params += "  imu_attitude_sigma_deg: " + std::to_string(attitudeSigmaDeg) + "\n";
 
   mola::mapper_3d::Mapper3D nav;
   nav.initialize(mrpt::containers::yaml::FromText(params));
@@ -95,10 +117,29 @@ params:
     mrpt::obs::CObservationIMU obsImu;
     obsImu.timestamp = time;
     obsImu.sensorLabel = "imu";
-    // Robot is physically flat: gravity ~ straight down in sensor frame.
-    obsImu.set(mrpt::obs::IMU_X_ACC, rng.drawGaussian1D(0.0, 0.1));
-    obsImu.set(mrpt::obs::IMU_Y_ACC, rng.drawGaussian1D(0.0, 0.1));
-    obsImu.set(mrpt::obs::IMU_Z_ACC, 9.81 + rng.drawGaussian1D(0.0, 0.1));
+    obsImu.sensorPose = imuMountPose;
+    // Robot is physically flat: gravity is straight down in the VEHICLE frame.
+    // The sensor MEASURES it in its own (rotated) frame: a_sensor = R^T * a_body.
+    const auto aVehicle = mrpt::math::TVector3D(
+      rng.drawGaussian1D(0.0, 0.1), rng.drawGaussian1D(0.0, 0.1),
+      9.81 + rng.drawGaussian1D(0.0, 0.1));
+    const auto aSensor = imuMountPose.inverseRotateVector(aVehicle);
+    obsImu.set(mrpt::obs::IMU_X_ACC, aSensor.x);
+    obsImu.set(mrpt::obs::IMU_Y_ACC, aSensor.y);
+    obsImu.set(mrpt::obs::IMU_Z_ACC, aSensor.z);
+
+    if (oriMode != OrientationMode::None) {
+      mrpt::math::CQuaternionDouble q;  // default = identity
+      if (oriMode == OrientationMode::TrueWorld) {
+        // The vehicle is flat (R_world_vehicle = I), so the sensor's true world
+        // attitude is R_world_sensor = R_world_vehicle * R_vehicle_sensor.
+        imuMountPose.getAsQuaternion(q);
+      }
+      obsImu.set(mrpt::obs::IMU_ORI_QUAT_W, q.w());
+      obsImu.set(mrpt::obs::IMU_ORI_QUAT_X, q.x());
+      obsImu.set(mrpt::obs::IMU_ORI_QUAT_Y, q.y());
+      obsImu.set(mrpt::obs::IMU_ORI_QUAT_Z, q.z());
+    }
 
     // IMU is streamed in BEFORE the keyframe-creating fuse_pose, so the sample
     // is already buffered when the keyframe closes and drains its interval.
@@ -118,6 +159,60 @@ params:
 
   ASSERT_NEAR_(p, 0.0, mrpt::DEG2RAD(4.0));
   ASSERT_NEAR_(r, 0.0, mrpt::DEG2RAD(4.0));
+}
+
+void test_imu_leveling()
+{
+  // (1) Baseline: IMU aligned with the vehicle (identity mount).
+  std::cout << "  -- mount: identity --\n";
+  run_imu_leveling(mrpt::poses::CPose3D::Identity());
+
+  // (2) IMU rotated 90 deg about X (roll): the case that makes the real floor
+  //     look like a wall on the Hesai "_90deg" bag if `sensorPose` is ignored.
+  std::cout << "  -- mount: +90 deg roll --\n";
+  run_imu_leveling(mrpt::poses::CPose3D::FromXYZYawPitchRoll(0, 0, 0, 0.0_deg, 0.0_deg, 90.0_deg));
+
+  // (3) IMU rotated 90 deg about Y (pitch).
+  std::cout << "  -- mount: +90 deg pitch --\n";
+  run_imu_leveling(mrpt::poses::CPose3D::FromXYZYawPitchRoll(0, 0, 0, 0.0_deg, 90.0_deg, 0.0_deg));
+
+  // (4) A generic non-axis-aligned mount, with a lever-arm translation too.
+  std::cout << "  -- mount: generic 90/-30/45 + lever arm --\n";
+  run_imu_leveling(
+    mrpt::poses::CPose3D::FromXYZYawPitchRoll(0.3, -0.1, 0.5, 90.0_deg, -30.0_deg, 45.0_deg));
+}
+
+// ---------------------------------------------------------------------------
+// Rotated IMU mount WITH an absolute-orientation quaternion: the floor-becomes-
+// wall regression on the Hesai "_90deg" bag.
+//
+// The Hesai built-in IMU (frame rotated ~90 deg about X wrt base_link) ships a
+// PLACEHOLDER identity orientation quaternion tagged orientation_covariance[0]=0
+// (i.e. "valid" per REP-145), even though it does NOT estimate attitude. When
+// the backend trusts that quaternion it computes the vehicle world-attitude as
+//   R_world_vehicle = R_world_sensor * R_vehicle_sensor^T = I * R_sensor_vehicle
+// = a ~90 deg rotation, and the absolute-attitude factor rolls the whole map
+// ~90 deg (the real floor turns into a wall) as the keyframes accumulate.
+//
+// The robot is physically flat the whole time, so the leveled map MUST stay
+// flat regardless of the mount rotation and of any placeholder orientation.
+// ---------------------------------------------------------------------------
+void test_imu_rotated_mount_orientation()
+{
+  // The Hesai-style mount: 90 deg yaw then 90 deg roll (matches the bag's
+  // base_link -> hesai_frame TF chain).
+  const auto hesaiMount =
+    mrpt::poses::CPose3D::FromXYZYawPitchRoll(0, 0, 0, 90.0_deg, 0.0_deg, 90.0_deg);
+
+  // (a) A CORRECT world-attitude quaternion must still level the map: this
+  //     exercises that the orientation is properly brought to the vehicle frame.
+  std::cout << "  -- Hesai mount, TRUE world orientation --\n";
+  run_imu_leveling(hesaiMount, OrientationMode::TrueWorld);
+
+  // (b) The real failure: a placeholder identity orientation must NOT roll the
+  //     map. This reproduces the floor-becomes-wall bug.
+  std::cout << "  -- Hesai mount, FAKE identity orientation --\n";
+  run_imu_leveling(hesaiMount, OrientationMode::FakeIdentity);
 }
 
 // ---------------------------------------------------------------------------
@@ -310,6 +405,7 @@ int main(int argc, char ** argv)
 {
   const std::map<std::string, std::function<void()>> tests = {
     {"test_imu_leveling", test_imu_leveling},
+    {"test_imu_rotated_mount_orientation", test_imu_rotated_mount_orientation},
     {"test_static_gnss_imu", test_static_gnss_imu},
     {"test_twist_fusion", test_twist_fusion},
   };

@@ -282,9 +282,22 @@ test/                            Unit tests (plain main() + MRPT ASSERT_ macros,
   just gated. `imu_gravity_min_samples` (default 10) gates a window; on dense
   synthetic keyframes (~1 sample/interval) lower it to 1.
   (2) the absolute-attitude `Pose3RotationFactor` is now added ALWAYS when the
-  IMU reports an orientation quaternion, REGARDLESS of geo-ref. The absolute
+  IMU reports a REAL orientation quaternion, REGARDLESS of geo-ref. The absolute
   attitude IS an azimuth reference, so feeding it lets iSAM2 AUTO-ESTIMATE the
-  geo-reference yaw even with GNSS off. To make that land on `T_enu_to_map`
+  geo-reference yaw even with GNSS off. **A PLACEHOLDER (bit-exact identity)
+  quaternion is rejected** (`ingest_imu_sample_locked`): some drivers (the Hesai
+  built-in IMU) do not estimate attitude yet ship an identity quaternion tagged
+  `orientation_covariance[0]=0`, which the ROS bridge forwards as "valid".
+  Brought to the vehicle frame through a ROTATED mount
+  (`R_world_vehicle = I * R_vehicle_sensor^T`) that identity becomes a bogus tilt
+  and the attitude factor rolls the whole map (the real floor turns into a wall
+  on the `HQ_outdoor_hesai_90deg` bag; the `hesai_frame` TF carries a 90 deg
+  roll). A real attitude-capable IMU on a rotated mount reports a NON-identity
+  world quaternion even when level, so identity is an unambiguous placeholder
+  signature. The accelerometer gravity path still levels normally (it applies
+  `sensorPose` via `ImuTransformer`, validated by
+  `test-imu-gnss-fusion.cpp::test_imu_rotated_mount_orientation`). Per-dataset
+  alternative if needed: `MOLA_IMU_ATTITUDE_SIGMA=0` disables the factor. To make that land on `T_enu_to_map`
   (azimuth) instead of fighting the leveled {map}, the F0 prior is now
   ANISOTROPIC: tight on roll/pitch (so gravity / GNSS still level the KEYFRAMES,
   not F0) but WEAK on yaw (so IMU azimuth drives F0.yaw). Translation is tight

@@ -819,9 +819,25 @@ void Mapper3D::ingest_imu_sample_locked(const mrpt::obs::CObservationIMU & imu)
     q.x(imu.get(mrpt::obs::IMU_ORI_QUAT_X));
     q.y(imu.get(mrpt::obs::IMU_ORI_QUAT_Y));
     q.z(imu.get(mrpt::obs::IMU_ORI_QUAT_Z));
+    // Reject a PLACEHOLDER orientation. Some drivers (e.g. the Hesai built-in
+    // IMU) do NOT estimate attitude yet still ship a bit-exact identity
+    // quaternion tagged orientation_covariance[0]=0, which the ROS bridge
+    // forwards as a "valid" orientation. Trusting it is actively harmful: it is
+    // NOT the vehicle attitude, so once brought to the vehicle frame through a
+    // rotated mount (R_world_vehicle = I * R_vehicle_sensor^T) it becomes a
+    // bogus tilt, and the absolute-attitude factor rolls the whole map (the
+    // real floor turns into a wall on the Hesai "_90deg" bag). A genuine
+    // attitude estimate is essentially never bit-exact identity, and a real
+    // attitude-capable IMU on a rotated mount reports a NON-identity world
+    // quaternion even when the vehicle is level, so a (near) identity reading
+    // is an unambiguous placeholder signature. See test-imu-gnss-fusion.cpp
+    // (test_imu_rotated_mount_orientation).
+    const bool isPlaceholderIdentity = std::abs(q.x()) < 1e-6 && std::abs(q.y()) < 1e-6 &&
+                                       std::abs(q.z()) < 1e-6 &&
+                                       std::abs(std::abs(q.w()) - 1.0) < 1e-6;
     if (
       !std::isnan(q.w()) && !std::isnan(q.x()) && !std::isnan(q.y()) && !std::isnan(q.z()) &&
-      std::abs(q.norm() - 1.0) <= 0.02) {
+      std::abs(q.norm() - 1.0) <= 0.02 && !isPlaceholderIdentity) {
       // Sensor's measured world attitude R_world_sensor, brought to the vehicle
       // frame: R_world_vehicle = R_world_sensor * R_vehicle_sensor^T. This keeps
       // all sensor-mount handling at ingest time, mirroring ImuTransformer.
@@ -831,6 +847,11 @@ void Mapper3D::ingest_imu_sample_locked(const mrpt::obs::CObservationIMU & imu)
       mola::imu::SO3 R_world_vehicle;
       R_world_vehicle.asEigen() = R_world_sensor.asEigen() * R_vehicle_sensor.asEigen().transpose();
       imu_buffer_.add_orientation(t, R_world_vehicle);
+    } else if (isPlaceholderIdentity) {
+      MRPT_LOG_THROTTLE_WARN(
+        5.0,
+        "Ignoring placeholder identity IMU orientation quaternion (sensor reports "
+        "no real attitude); using accelerometer gravity for leveling only.");
     } else {
       MRPT_LOG_THROTTLE_WARN(5.0, "Ignoring invalid/NaN IMU orientation quaternion");
     }

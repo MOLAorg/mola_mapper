@@ -1,0 +1,140 @@
+# -----------------------------------------------------------------------------
+#                        SLAM system definition for MOLA
+# -----------------------------------------------------------------------------
+# Integration: mola_mapper::Mapper acts as BOTH the `NavStateFilter` that
+# `LidarOdometry` queries for short-term prediction (replacing
+# mola_state_estimation_{simple,smoother}) AND the `SharedKeyframeMap` sink it
+# pushes sparse central-map keyframes to.
+#
+# Unlike the other launchers in this directory (KITTI, MulRan, BotanicGarden,
+# Oxford Spires), this one is NOT tied to a specific dataset: it reads an
+# arbitrary ROS 2 bag via mola::Rosbag2Dataset, with the lidar/imu/gps/wheel-
+# odometry topics all set via environment variables. Every sensor entry below
+# is `is_optional: true` with an empty-topic default, so any subset of them
+# (including none) can be left unset without the dataset source failing to
+# initialize; a LiDAR topic is normally needed for LidarOdometry to produce
+# keyframes, the rest are extra fusion sources consumed directly by mapper3d.
+#
+# Sensor extrinsics: each sensor (except wheel odometry) accepts an optional
+# `fixed_sensor_pose`, only applied if its `use_fixed_sensor_pose` env var is
+# `true`; otherwise the pose is looked up from the bag's /tf at play time.
+#
+# Usage:
+#   export MOLA_INPUT_ROSBAG2=/path/to/bag         # mandatory
+#   export MOLA_LIDAR_TOPIC=/ouster/points          # optional
+#   export MOLA_IMU_TOPIC=/imu/data                 # optional
+#   export MOLA_GNSS_TOPIC=/gps/fix                 # optional
+#   export MOLA_ODOMETRY_TOPIC=/odom                # optional
+#   mola-cli $(ros2 pkg prefix mola_mapper)/share/mola_mapper/mola-cli-launchs/lidar_odometry_mapper_from_rosbag2.yaml
+#
+# May need to also set:
+# - MOLA_TF_BASE_LINK=os_sensor                        # If frame "base_link" does not exist
+# - MOLA_DESKEW_METHOD=MotionCompensationMethod::IMU   # To use LIO (vs LO)
+#
+# A pure-odometry run (no GNSS, no fixed geo-ref) needs
+# MOLA_LINK_FIRST_POSE_SIGMA=1e-6, or the whole graph stays gauge-free and
+# LidarOdometry discards its motion model (see agents.md). Set
+# MOLA_ESTIMATE_GEO_REF=true once a GNSS topic is fed in and you want mapper3d
+# to estimate T_enu_to_map live.
+# -----------------------------------------------------------------------------
+
+modules:
+  # =====================
+  # MolaViz / MolaVizImGui
+  # =====================
+  - name: viz
+    type: ${MOLA_GUI_MODULE|mola::MolaVizImGui}
+    enabled: ${MOLA_WITH_GUI|true}
+    verbosity_level: "${MOLA_VERBOSITY_MOLA_VIZ|INFO}"
+    params:
+      imgui_app_name: mapper3d_rosbag2
+
+  # =====================
+  # Rosbag2Dataset (generic)
+  # =====================
+  - name: dataset_input
+    type: mola::Rosbag2Dataset
+    verbosity_level: "${MOLA_VERBOSITY_ROSBAG2|INFO}"
+    export_to_rawlog: ${MOLA_ROS2BAG_EXPORT_TO_RAWLOG_FILE|''}
+
+    # Maximum rate (Hz) of publishing topics from the bag file. Messages with
+    # an actually higher rate are still sent out with correct timestamps, just
+    # physically in bursts.
+    execution_rate: 50 # Hz
+    quit_mola_app_on_dataset_end: ${MOLA_QUIT_ON_DATASET_END|false}
+
+    gui_preview_sensors:
+      - raw_sensor_label: "${MOLA_LIDAR_NAME|lidar}"
+        enabled: ${MOLA_WITH_GUI|true}
+        decimation: 1
+        win_pos: 5 5 400 400
+
+    params:
+      # We use an environment variable to force the user to specify a bag file:
+      rosbag_filename: ${MOLA_INPUT_ROSBAG2}
+      time_warp_scale: ${MOLA_TIME_WARP|1.0}
+      start_paused: ${MOLA_DATASET_START_PAUSED|false}
+
+      base_link_frame_id: "${MOLA_TF_BASE_LINK|base_link}"
+
+      # /tf topic names in the bag. Override for namespaced bags,
+      # e.g. MOLA_TF_TOPIC=/robot1/tf MOLA_TF_STATIC_TOPIC=/robot1/tf_static
+      tf_topic: "${MOLA_TF_TOPIC|/tf}"
+      tf_static_topic: "${MOLA_TF_STATIC_TOPIC|/tf_static}"
+
+      # 'sensors' maps output sensorLabels to their bag topic/type. Each entry
+      # is 'is_optional: true' with an empty-topic default, so leaving an env
+      # var unset silently disables that sensor instead of failing to start:
+      sensors:
+        - topic: "${MOLA_LIDAR_TOPIC|}"
+          type: CObservationPointCloud
+          sensorLabel: "${MOLA_LIDAR_NAME|lidar}"
+          is_optional: true
+          # If present, this overrides whatever /tf says about the sensor pose:
+          fixed_sensor_pose: "${LIDAR_POSE_X|0} ${LIDAR_POSE_Y|0} ${LIDAR_POSE_Z|0} ${LIDAR_POSE_YAW|0} ${LIDAR_POSE_PITCH|0} ${LIDAR_POSE_ROLL|0}" # 'x y z yaw_deg pitch_deg roll_deg'
+          use_fixed_sensor_pose: ${MOLA_USE_FIXED_LIDAR_POSE|false}
+
+        - topic: "${MOLA_IMU_TOPIC|}"
+          type: CObservationIMU
+          sensorLabel: "imu"
+          is_optional: true
+          fixed_sensor_pose: "${IMU_POSE_X|0} ${IMU_POSE_Y|0} ${IMU_POSE_Z|0} ${IMU_POSE_YAW|0} ${IMU_POSE_PITCH|0} ${IMU_POSE_ROLL|0}" # 'x y z yaw_deg pitch_deg roll_deg'
+          use_fixed_sensor_pose: ${MOLA_USE_FIXED_IMU_POSE|false}
+
+        # GPS messages of type 'sensor_msgs/NavSatFix' or 'gps_msgs/GpsFix'.
+        # 'type' is left unset so Rosbag2Dataset auto-detects which one it is:
+        - topic: "${MOLA_GNSS_TOPIC|}"
+          sensorLabel: "gps"
+          is_optional: true
+          fixed_sensor_pose: "${GNSS_POSE_X|0} ${GNSS_POSE_Y|0} ${GNSS_POSE_Z|0} ${GNSS_POSE_YAW|0} ${GNSS_POSE_PITCH|0} ${GNSS_POSE_ROLL|0}" # 'x y z yaw_deg pitch_deg roll_deg'
+          use_fixed_sensor_pose: ${MOLA_USE_FIXED_GNSS_POSE|false}
+
+        # Wheel odometry (2D or 3D):
+        - topic: "${MOLA_ODOMETRY_TOPIC|}"
+          type: CObservationOdometry
+          sensorLabel: "${MOLA_ODOM_SENSOR_LABEL|odom_wheels}"
+          is_optional: true
+
+  # =====================
+  # LidarOdometry
+  # =====================
+  - name: lidar_odom
+    type: mola::LidarOdometry
+    verbosity_level: "${MOLA_VERBOSITY_MOLA_LO|INFO}"
+    raw_data_source: "dataset_input"
+    # This includes here a whole block "params: (...)"
+    # with the LIDAR-Odometry pipeline configuration:
+    params: "${MOLA_ODOMETRY_PIPELINE_YAML|$(ros2 pkg prefix mola_lidar_odometry)/share/mola_lidar_odometry/pipelines/lidar3d-default.yaml}"
+
+  # =====================
+  # mola_mapper (NavStateFilter + SharedKeyframeMap sink + direct IMU/GNSS/odom)
+  # =====================
+  - name: mapper3d
+    type: mola::mapper::Mapper
+    verbosity_level: "${MOLA_VERBOSITY_MAPPER3D|INFO}"
+    # Subscribe directly to the dataset's IMU/GNSS/wheel-odometry observations
+    # (lidar_odom's keyframes arrive separately, via the SharedKeyframeMap sink):
+    raw_data_source: "dataset_input"
+
+    # This includes here a whole block "params: (...)":
+    params: "${MOLA_MAPPER3D_YAML|../params/mapper-3d.yaml}"

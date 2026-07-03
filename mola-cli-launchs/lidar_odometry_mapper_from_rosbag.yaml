@@ -8,7 +8,7 @@
 #
 # Unlike the other launchers in this directory (KITTI, MulRan, BotanicGarden,
 # Oxford Spires), this one is NOT tied to a specific dataset: it reads an
-# arbitrary ROS 2 bag via mola::Rosbag2Dataset, with the lidar/imu/gps/wheel-
+# arbitrary ROS1/ROS2 bag via mola::Rosbag{1,2}Dataset, with the lidar/imu/gps/wheel-
 # odometry topics all set via environment variables. Every sensor entry below
 # is `is_optional: true` with an empty-topic default, so any subset of them
 # (including none) can be left unset without the dataset source failing to
@@ -20,12 +20,13 @@
 # `true`; otherwise the pose is looked up from the bag's /tf at play time.
 #
 # Usage:
-#   export MOLA_INPUT_ROSBAG2=/path/to/bag         # mandatory
+#   export MOLA_ROSBAG_VERSION=2                    # mandatory (can be "1" or "2")
+#   export MOLA_INPUT_ROSBAG=/path/to/bag           # mandatory (can be ROS1 or ROS2 bag)
 #   export MOLA_LIDAR_TOPIC=/ouster/points          # optional
 #   export MOLA_IMU_TOPIC=/imu/data                 # optional
 #   export MOLA_GNSS_TOPIC=/gps/fix                 # optional
 #   export MOLA_ODOMETRY_TOPIC=/odom                # optional
-#   mola-cli $(ros2 pkg prefix mola_mapper)/share/mola_mapper/mola-cli-launchs/lidar_odometry_mapper_from_rosbag2.yaml
+#   mola-cli $(ros2 pkg prefix mola_mapper)/share/mola_mapper/mola-cli-launchs/lidar_odometry_mapper_from_rosbag.yaml
 #
 # May need to also set:
 # - MOLA_TF_BASE_LINK=os_sensor                        # If frame "base_link" does not exist
@@ -49,11 +50,11 @@ modules:
     params:
       imgui_app_name: mapper3d_rosbag2
 
-  # =====================
-  # Rosbag2Dataset (generic)
-  # =====================
+  # ==========================================
+  # Rosbag1Dataset or Rosbag2Dataset
+  # =================================
   - name: dataset_input
-    type: mola::Rosbag2Dataset
+    type: mola::Rosbag${MOLA_ROSBAG_VERSION}Dataset
     verbosity_level: "${MOLA_VERBOSITY_ROSBAG2|INFO}"
     export_to_rawlog: ${MOLA_ROS2BAG_EXPORT_TO_RAWLOG_FILE|''}
 
@@ -71,7 +72,7 @@ modules:
 
     params:
       # We use an environment variable to force the user to specify a bag file:
-      rosbag_filename: ${MOLA_INPUT_ROSBAG2}
+      rosbag_filename: ${MOLA_INPUT_ROSBAG}
       time_warp_scale: ${MOLA_TIME_WARP|1.0}
       start_paused: ${MOLA_DATASET_START_PAUSED|false}
 

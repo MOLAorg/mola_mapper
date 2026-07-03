@@ -177,8 +177,8 @@ download, so the LiDAR/IMU `fixed_sensor_pose` only encodes the rotation the
 paper documents (180 deg yaw between the two mounting frames); translation
 defaults to zero pending the real calibration file.
 
-`lidar_odometry_mapper_from_rosbag2.yaml` is the generic entry point for any
-ROS 2 bag: lidar/imu/gps/wheel-odometry topics are all optional, set via
+`lidar_odometry_mapper_from_rosbag.yaml` is the generic entry point for any
+ROS 1 or ROS 2 bag: lidar/imu/gps/wheel-odometry topics are all optional, set via
 `MOLA_LIDAR_TOPIC`/`MOLA_IMU_TOPIC`/`MOLA_GNSS_TOPIC`/`MOLA_ODOMETRY_TOPIC`
 (unset = that sensor is skipped, no crash).
 

@@ -133,10 +133,11 @@ loop_closure_enabled: ${MOLA_MAPPER3D_LOOP_CLOSURE|false}
 
 # The loop-closure engine's own pipeline YAML (ICP + candidate selection), from
 # the mola_sm_loop_closure package. Env-substituted; required when enabled.
-# NOTE: the central-map keyframes are already-accumulated local point clouds
-# (no per-point timestamps), so the LC pipeline MUST run without scan deskew,
-# e.g. export MOLA_DESKEW_METHOD=MotionCompensationMethod::None (or use a
-# deskew-free pipeline); otherwise every scan throws on the missing timestamps.
+# NOTE: each central-map keyframe carries the original raw lidar scan plus a
+# "metadata" comment observation with the per-keyframe velocity window, so the
+# LC pipeline may deskew scans that provide per-point timestamps. For sensors
+# without per-point timestamps (e.g. KITTI), use a deskew-free pipeline or
+# export MOLA_DESKEW_METHOD=MotionCompensationMethod::None.
 loop_closure_pipeline_file: "${MOLA_MAPPER3D_LC_PIPELINE|}"
 
 # How often the LC thread wakes to consider a new scan [s], and the minimum

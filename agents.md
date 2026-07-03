@@ -132,9 +132,11 @@ docs/call-graph.md               Mermaid diagram tracing every public-API method
   (`loop_closure_enabled`, off by default). The thread snapshots the central
   map, runs the detector-only `analyze()` OFF the state lock (streaming +
   abortable), and merges accepted edges as robust (Huber) `BetweenFactor`s,
-  then wakes the optimizer. The LC pipeline must run deskew-free (keyframes are
-  accumulated clouds with no per-point timestamps). GNC-in-parallel and the
-  LC-event notification to front ends are still open.
+  then wakes the optimizer. Keyframes carry the raw lidar scan plus a "metadata"
+  comment observation with the per-keyframe velocity window, so the LC pipeline
+  can deskew when the sensor provides per-point timestamps (use a deskew-free
+  pipeline for sensors that don't). GNC-in-parallel and the LC-event
+  notification to front ends are still open.
 
 See `~/plans/900_mola_mapper.md` for the rationale behind each of these (the
 real-data failure modes that drove each design choice), the GNC-bootstrap

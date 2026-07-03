@@ -39,6 +39,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <vector>
 
 namespace mola::mapper
 {
@@ -163,7 +164,11 @@ public:
     KeyFrameID id, size_t max_topological_distance = 0) const;
 
   /// Builds a CSimpleMap snapshot from the current keyframes and poses.
-  [[nodiscard]] mrpt::maps::CSimpleMap as_simple_map() const;
+  /// If `out_frame_ids` is non-null, it is filled so that `out_frame_ids[i]` is
+  /// the KeyFrameID of the i-th frame in the returned map (keyframes without
+  /// observations are skipped in both, so the map index is NOT the KeyFrameID).
+  [[nodiscard]] mrpt::maps::CSimpleMap as_simple_map(
+    std::vector<KeyFrameID> * out_frame_ids = nullptr) const;
 
   /** @} */
 

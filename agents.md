@@ -41,6 +41,9 @@ module/src/
   Mapper3D_GUI.cpp               MolaViz/MolaVizImGui viz: KF tree, graph edges, per-source movable
                                   {odom_i} frames, {enu} geo-ref marker, status/geo-ref/view panel
   Mapper3D_SensorCallbacks.cpp   onNewObservation dispatch -> fuse_*()
+  Mapper_LoopClosure.cpp         Background LC thread: snapshots the map, runs the
+                                  mola_sm_loop_closure detector (analyze()) off-lock,
+                                  merges accepted edges as robust BetweenFactors
   ImuGravityFilter.cpp           Robust low-dynamics gravity-direction reducer (pure/testable):
                                   given a window of lever-arm-corrected accel/gyro samples,
                                   rejects motion-contaminated ones, robustly averages the
@@ -124,11 +127,20 @@ docs/call-graph.md               Mermaid diagram tracing every public-API method
   counters — the central map is shared, persistent state and must survive one
   front end relocalizing.
 
+- Loop closure is a LIBRARY, not a running module: the `mola_sm_loop_closure`
+  F2F engine is linked and driven from a mapper-owned background thread
+  (`loop_closure_enabled`, off by default). The thread snapshots the central
+  map, runs the detector-only `analyze()` OFF the state lock (streaming +
+  abortable), and merges accepted edges as robust (Huber) `BetweenFactor`s,
+  then wakes the optimizer. The LC pipeline must run deskew-free (keyframes are
+  accumulated clouds with no per-point timestamps). GNC-in-parallel and the
+  LC-event notification to front ends are still open.
+
 See `~/plans/900_mola_mapper.md` for the rationale behind each of these (the
 real-data failure modes that drove each design choice), the GNC-bootstrap
-geo-ref rewire, IMU preintegration, loop closure, save/load, relocalization
-and spatial-paging designs that are not yet implemented, and the full task
-checklist.
+geo-ref rewire, IMU preintegration, remaining loop-closure work (GNC, LC
+event), save/load, relocalization and spatial-paging designs that are not yet
+implemented, and the full task checklist.
 
 ## Build / test
 

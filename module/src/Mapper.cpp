@@ -47,6 +47,9 @@ Mapper::Mapper()
 
 Mapper::~Mapper()
 {
+  // Stop the LC thread first: it feeds the optimizer, so it must not enqueue
+  // more work once the optimizer is gone.
+  stop_loop_closure_thread();
   stop_optimizer_thread();
   saveEstimatedTrajectoryToFile();
 }
@@ -61,8 +64,10 @@ void Mapper::initialize(const mrpt::containers::yaml & cfg)
   ASSERTMSG_(
     cfg.has("params"), "YAML configuration must have a `params` entry with the module options.");
 
-  // Stop any previously-running optimizer thread BEFORE touching state (must be
-  // done with no lock held: the thread itself takes stateMutex_).
+  // Stop any previously-running background threads BEFORE touching state (must
+  // be done with no lock held: they take stateMutex_). LC first (it feeds the
+  // optimizer).
+  stop_loop_closure_thread();
   stop_optimizer_thread();
 
   {
@@ -124,10 +129,15 @@ void Mapper::initialize(const mrpt::containers::yaml & cfg)
     optimizer_thread_ = std::thread(&Mapper::optimizer_thread_loop, this);
   }
 
+  // Start the background loop-closure thread (if enabled) AFTER the optimizer,
+  // so the edges it merges have somewhere to be solved.
+  start_loop_closure_thread();
+
   MRPT_LOG_INFO_STREAM(
     "Initialized Mapper with reference_frame='"
     << params_.reference_frame_name << "', vehicle_frame='" << params_.vehicle_frame_name
-    << "', optimizer_thread=" << (params_.enable_optimizer_thread ? "on" : "off"));
+    << "', optimizer_thread=" << (params_.enable_optimizer_thread ? "on" : "off")
+    << ", loop_closure=" << (params_.loop_closure_enabled ? "on" : "off"));
 
   MRPT_END
 }

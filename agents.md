@@ -52,7 +52,7 @@ module/src/
 apps/mola-mapper-3d-cli.cpp      Offline front end (skeleton)
 params/mapper-3d.yaml            Default config (no fixed geo-ref; pure-odometry-safe defaults)
 mola-cli-launchs/                Live system YAMLs (KITTI, MulRan, BotanicGarden, Oxford Spires,
-                                  generic ROS 2 bag)
+                                  ConSLAM, generic ROS 2 bag)
 test/                            Unit tests (plain main() + MRPT ASSERT_ macros, run by mola_add_test)
 docs/call-graph.md               Mermaid diagram tracing every public-API method to its internals
 ```
@@ -164,6 +164,18 @@ Reads a ROS 1 `.bag` directly via `mola::Rosbag1Dataset` (`mola_input_rosbag1`,
 no ROS 1 install needed); use that package's `rosbag1-info <bag>` CLI to
 confirm a dataset's sensor inventory before wiring a new launcher (don't trust
 a dataset's own README blindly).
+
+```bash
+export CONSLAM_BAG=$HOME/datasets/ConSLAM/sequence2.bag
+mola-cli mola-cli-launchs/lidar_odometry_mapper_from_conslam.yaml
+```
+Hand-held-scanner construction dataset (Velodyne VLP-16 + Xsens MTi-610 IMU,
+no GNSS): another pure LiDAR+IMU `Rosbag1Dataset` case. The dataset's own
+extrinsic calibration files (`calib_lidar2imu.txt` etc.) ship in a separate
+`data_calib.zip`, not in the software repo or a plain sequence `.bag`
+download, so the LiDAR/IMU `fixed_sensor_pose` only encodes the rotation the
+paper documents (180 deg yaw between the two mounting frames); translation
+defaults to zero pending the real calibration file.
 
 `lidar_odometry_mapper_from_rosbag2.yaml` is the generic entry point for any
 ROS 2 bag: lidar/imu/gps/wheel-odometry topics are all optional, set via

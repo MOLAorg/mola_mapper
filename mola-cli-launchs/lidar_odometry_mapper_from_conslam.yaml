@@ -1,0 +1,147 @@
+# -----------------------------------------------------------------------------
+#                        SLAM system definition for MOLA
+# -----------------------------------------------------------------------------
+# Integration validation: mola_mapper::Mapper acts as BOTH the
+# `NavStateFilter` that `LidarOdometry` queries for short-term prediction
+# (replacing mola_state_estimation_{simple,smoother}) AND the
+# `SharedKeyframeMap` sink it pushes sparse central-map keyframes to.
+#
+# Dataset: ConSLAM (https://github.com/mac137/ConSLAM), a hand-held-scanner
+# construction-site dataset (Trzeciak et al., ECCV 2022 Workshops / JCCE
+# 2023). Read directly from its ROS 1 ".bag" file via mola::Rosbag1Dataset
+# (no ROS 1 install required). Sensor inventory confirmed with
+# `rosbag1-info <bag>` (see mola_input_rosbag1/apps/rosbag1-info.cpp):
+#   /imu/data               sensor_msgs/Imu          Xsens MTi-610, ~400 Hz
+#   /pp_points/synced2rgb   sensor_msgs/PointCloud2  Velodyne VLP-16, ~10 Hz
+#                                                     (time-synced with RGB)
+#   /pp_rgb/synced2points   sensor_msgs/Image        Alvium U-319c RGB, ~10 Hz
+#   /pp_rgb/camera_info     sensor_msgs/CameraInfo
+#   /pp_nir/synced2points   sensor_msgs/Image        Alvium 1800 U-501 NIR
+#   /pp_nir/camera_info     sensor_msgs/CameraInfo
+# There is no raw /velodyne_points topic (only the RGB-synced stream is
+# recorded) and no /tf or /tf_static. NO GNSS/GPS topic exists either, so
+# this launcher fuses LiDAR + IMU only (as in
+# lidar_odometry_mapper_from_oxford_spires.yaml). mapper3d's
+# `estimate_geo_reference` stays at its default `false`. The RGB/NIR image
+# streams are present in the bag but are not wired here, matching every
+# other launcher in this directory: neither LidarOdometry nor mapper3d
+# consumes camera observations.
+#
+# Sensor extrinsics: the dataset's own extrinsic-calibration files
+# (calib_lidar2imu.txt, calib_lidar2rgb.txt, calib_lidar2nir.txt) ship inside
+# data_calib.zip, a separate download from the dataset link in ConSLAM's
+# README -- they are NOT part of this software git repo nor of a plain
+# sequence*.bag download, so their numeric values are not available here.
+# What IS documented, in the paper's Section 3.3 and Figure 1(a), is each
+# sensor's mounting-frame axis convention when the scanner is held upright:
+#   LiDAR: X front, Z up (=> Y left)
+#   IMU:   X back,  Z up (=> Y right)
+# Both share the same "up" axis, so IMU-relative-to-LiDAR is a pure 180 deg
+# yaw about that shared vertical axis -- this is the only extrinsic value
+# used below (as base_link == imu, lidar is yawed 180 deg from it). The
+# translation between the two mounting points on the aluminium frame is not
+# given in the paper (only relative axis directions are), so it defaults to
+# zero; override CONSLAM_LIDAR_POSE_{X,Y,Z} below once you have the real
+# calib_lidar2imu.txt (convert its rotation matrix to yaw/pitch/roll degrees
+# and its translation to metres).
+#
+# Usage:
+#   export CONSLAM_BAG=$HOME/datasets/ConSLAM/sequence2.bag
+#   mola-cli $(ros2 pkg prefix mola_mapper)/share/mola_mapper/mola-cli-launchs/lidar_odometry_mapper_from_conslam.yaml
+#
+# Optional: MOLA_WITH_GUI=false for headless runs, MOLA_TIME_WARP=N to
+# speed up/slow down playback, MOLA_QUIT_ON_DATASET_END=true to auto-exit.
+# -----------------------------------------------------------------------------
+
+modules:
+  # =====================
+  # MolaViz / MolaVizImGui
+  # =====================
+  - name: viz
+    type: ${MOLA_GUI_MODULE|mola::MolaVizImGui}
+    enabled: ${MOLA_WITH_GUI|true}
+    verbosity_level: "${MOLA_VERBOSITY_MOLA_VIZ|INFO}"
+    params:
+      imgui_app_name: mapper3d_conslam
+
+  # =====================
+  # Rosbag1Dataset (ConSLAM)
+  # =====================
+  - name: dataset_input
+    type: mola::Rosbag1Dataset
+    execution_rate: 50 # Hz
+    quit_mola_app_on_dataset_end: ${MOLA_QUIT_ON_DATASET_END|true}
+
+    gui_preview_sensors:
+      - raw_sensor_label: lidar
+        decimation: 1
+        enabled: ${MOLA_WITH_GUI|true}
+        win_pos: 5 5 400 400
+
+    params:
+      rosbag_filename:
+        - ${CONSLAM_BAG}
+
+      base_link_frame_id: imu
+      time_warp_scale: ${MOLA_TIME_WARP|1.0}
+      start_paused: ${MOLA_DATASET_START_PAUSED|false}
+
+      sensors:
+        - topic: /imu/data # Xsens MTi-610, ~400 Hz: this IS base_link
+          type: CObservationIMU
+          sensorLabel: imu
+          fixed_sensor_pose: "0 0 0 0 0 0"
+          use_fixed_sensor_pose: true
+
+        - topic: /pp_points/synced2rgb # Velodyne VLP-16, ~10 Hz (RGB-synced)
+          type: CObservationPointCloud
+          sensorLabel: lidar
+          # See header: rotation is the paper-documented 180 deg yaw between
+          # the IMU's and LiDAR's mounting-frame axes; translation is an
+          # unmeasured placeholder (real calib_lidar2imu.txt not available
+          # in this repo) -- override via the env vars below once known.
+          fixed_sensor_pose: "${CONSLAM_LIDAR_POSE_X|0} ${CONSLAM_LIDAR_POSE_Y|0} ${CONSLAM_LIDAR_POSE_Z|0} ${CONSLAM_LIDAR_POSE_YAW|180} ${CONSLAM_LIDAR_POSE_PITCH|0} ${CONSLAM_LIDAR_POSE_ROLL|0}" # 'x y z yaw_deg pitch_deg roll_deg'
+          use_fixed_sensor_pose: true
+
+  # =====================
+  # LidarOdometry
+  # =====================
+  - name: lidar_odom
+    type: mola::LidarOdometry
+    verbosity_level: "${MOLA_VERBOSITY_MOLA_LO|INFO}"
+    raw_data_source: "dataset_input"
+
+    $import: "${MOLA_ODOMETRY_PIPELINE_YAML|$(ros2 pkg prefix mola_lidar_odometry)/share/mola_lidar_odometry/pipelines/lidar3d-default.yaml}"
+    params:
+      # Hand-held scanner (not a vehicle): larger/faster rotations than a
+      # car, so lean on the Xsens IMU for deskewing and initial pitch/roll,
+      # as in the Oxford Spires launcher:
+      initial_localization:
+        method: "${MOLA_LO_INITIAL_LOCALIZATION_METHOD|InitLocalization::PitchAndRollFromIMU}"
+      observation_layers_deskew:
+        method: "${MOLA_DESKEW_METHOD|MotionCompensationMethod::IMU}"
+      visualization:
+        show_ground_grid: false
+
+  # =====================
+  # mola_mapper (NavStateFilter + SharedKeyframeMap sink + direct IMU)
+  # =====================
+  - name: mapper3d
+    type: mola::mapper::Mapper
+    verbosity_level: "${MOLA_VERBOSITY_MAPPER3D|INFO}"
+    # Subscribe directly to the dataset's IMU observations. LidarOdometry
+    # keyframes arrive separately via the SharedKeyframeMap sink:
+    raw_data_source: "dataset_input"
+
+    params:
+      $import: ../params/mapper-3d-common.yaml
+
+      # MANDATORY gauge anchor: pure-odometry run (no GNSS). Without this the
+      # graph floats and iSAM2 throws IndeterminantLinearSystemException.
+      # estimate_geo_reference stays false (the common default).
+      link_first_pose_to_reference_origin_sigma: ${MOLA_LINK_FIRST_POSE_SIGMA|1e-6}
+
+      # ~400 Hz IMU: buffer all readings in LocalVelocityBuffer and emit one
+      # gravity/attitude/gyro factor set per keyframe (no per-sample factors).
+      # aggregate_high_rate_into_edges is not needed here (no wheel odometry).
+      high_rate_pose_publish_rate_hz: ${MOLA_MAPPER3D_PUBLISH_RATE_HZ|20.0}

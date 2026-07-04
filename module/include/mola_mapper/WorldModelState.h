@@ -165,8 +165,9 @@ public:
 
   /// Builds a CSimpleMap snapshot from the current keyframes and poses.
   /// If `out_frame_ids` is non-null, it is filled so that `out_frame_ids[i]` is
-  /// the KeyFrameID of the i-th frame in the returned map (keyframes without
-  /// observations are skipped in both, so the map index is NOT the KeyFrameID).
+  /// the KeyFrameID of the i-th frame in the returned map. KeyFrameIDs are not a
+  /// contiguous 0-based range, so the map index is NOT the KeyFrameID; use this
+  /// mapping to recover it.
   [[nodiscard]] mrpt::maps::CSimpleMap as_simple_map(
     std::vector<KeyFrameID> * out_frame_ids = nullptr) const;
 

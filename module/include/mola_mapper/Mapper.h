@@ -202,16 +202,26 @@ private:
   std::mutex lc_wakeup_mutex_;
   std::condition_variable lc_wakeup_cv_;
   std::atomic_bool lc_should_exit_{false};
-  // Keyframe count present at the last scan (min-new-keyframes gate) and the
-  // snapshot size then (the detector's incremental first_new_keyframe hint).
-  std::size_t lc_kf_count_at_last_scan_ = 0;
-  std::size_t lc_snapshot_size_at_last_scan_ = 0;
-  // Incremental scans run since the last forced full scan.
-  uint32_t lc_incremental_scans_since_full_ = 0;
-  // Keyframe pairs already merged as loop-closure edges (normalized min<max), so
-  // a periodic full scan re-proposing an existing loop does not add a duplicate
-  // BetweenFactor that over-weights the constraint and bloats the graph.
-  std::set<std::pair<KeyFrameID, KeyFrameID>> lc_merged_pairs_;
+
+  // Progress state carried between scans by the LC thread. Reset when the thread
+  // (re)starts on a fresh map.
+  struct LoopClosureScanState
+  {
+    // Keyframe count present at the last scan (min-new-keyframes gate) and the
+    // snapshot size then (the detector's incremental first_new_keyframe hint).
+    std::size_t kf_count_at_last_scan = 0;
+    std::size_t snapshot_size_at_last_scan = 0;
+    // Incremental scans run since the last forced full scan.
+    uint32_t incremental_scans_since_full = 0;
+    // Keyframe pairs already merged as loop-closure edges (normalized min<max),
+    // so a periodic full scan re-proposing an existing loop does not add a
+    // duplicate BetweenFactor that over-weights the constraint and bloats the
+    // graph.
+    std::set<std::pair<KeyFrameID, KeyFrameID>> merged_pairs;
+
+    void reset() { *this = LoopClosureScanState{}; }
+  };
+  LoopClosureScanState lc_scan_;
 
   // --- Keyframe-creation gating (plan 4.13 Phase A) ---
   // Set to true the first time requestInsertKeyframe() is called. In Auto mode

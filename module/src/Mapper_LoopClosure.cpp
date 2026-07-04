@@ -55,10 +55,7 @@ void Mapper::start_loop_closure_thread()
   engine->initialize(cfg);
   lc_engine_ = engine;
 
-  lc_kf_count_at_last_scan_ = 0;
-  lc_snapshot_size_at_last_scan_ = 0;
-  lc_incremental_scans_since_full_ = 0;
-  lc_merged_pairs_.clear();
+  lc_scan_.reset();
 
   lc_should_exit_.store(false);
   lc_thread_ = std::thread(&Mapper::loop_closure_thread_loop, this);
@@ -116,11 +113,11 @@ std::size_t Mapper::run_loop_closure_scan()
   {
     auto lck = mrpt::lockHelper(stateMutex_);
     const std::size_t kfCount = state_.time_to_kf_id.size();
-    if (kfCount < lc_kf_count_at_last_scan_ + params_.loop_closure_min_new_keyframes) {
+    if (kfCount < lc_scan_.kf_count_at_last_scan + params_.loop_closure_min_new_keyframes) {
       return 0;  // not enough new keyframes yet
     }
     snapshot = state_.as_simple_map(&frameIds);
-    lc_kf_count_at_last_scan_ = kfCount;
+    lc_scan_.kf_count_at_last_scan = kfCount;
   }
   if (snapshot.size() < 2) {
     return 0;
@@ -130,16 +127,16 @@ std::size_t Mapper::run_loop_closure_scan()
   bool fullScan = !params_.loop_closure_incremental;
   if (
     params_.loop_closure_incremental && params_.loop_closure_full_scan_every_n > 0 &&
-    lc_incremental_scans_since_full_ >= params_.loop_closure_full_scan_every_n) {
+    lc_scan_.incremental_scans_since_full >= params_.loop_closure_full_scan_every_n) {
     fullScan = true;
   }
 
   mola::LoopClosureAnalyzeOptions opts;
   if (fullScan) {
-    lc_incremental_scans_since_full_ = 0;
+    lc_scan_.incremental_scans_since_full = 0;
   } else {
-    opts.first_new_keyframe = static_cast<uint32_t>(lc_snapshot_size_at_last_scan_);
-    lc_incremental_scans_since_full_++;
+    opts.first_new_keyframe = static_cast<uint32_t>(lc_scan_.snapshot_size_at_last_scan);
+    lc_scan_.incremental_scans_since_full++;
   }
 
   // Abort promptly on shutdown.
@@ -164,7 +161,7 @@ std::size_t Mapper::run_loop_closure_scan()
 
   lc_engine_->analyze(snapshot, opts);
 
-  lc_snapshot_size_at_last_scan_ = snapshot.size();
+  lc_scan_.snapshot_size_at_last_scan = snapshot.size();
 
   if (merged > 0) {
     // Hand the new edges to the optimizer (background thread, or the next
@@ -190,7 +187,7 @@ void Mapper::merge_loop_closure_edge_locked(
   // re-proposes existing loops, and adding a second BetweenFactor for the same
   // pair would over-weight the constraint and grow the graph without bound.
   const std::pair<KeyFrameID, KeyFrameID> pairKey = std::minmax(from, to);
-  if (!lc_merged_pairs_.insert(pairKey).second) {
+  if (!lc_scan_.merged_pairs.insert(pairKey).second) {
     return;
   }
 

@@ -194,25 +194,25 @@ void Mapper::merge_loop_closure_edge_locked(
     return;
   }
 
-  // Per-DOF sigmas from the proposed relative-pose covariance. MRPT covariance
-  // order is [x, y, z, yaw, pitch, roll]; GTSAM Pose3 tangent order is
-  // (roll, pitch, yaw, x, y, z). A small floor keeps the noise model
-  // non-degenerate for a near-perfect ICP.
-  const gtsam::Vector6 sigXYZYPR =
-    relPose.cov.asEigen().diagonal().cwiseMax(0.0).array().sqrt().eval();
+  // Convert the proposed relative pose + covariance to the GTSAM Pose3 tangent
+  // (full 6x6, Jacobian-transformed and reordered) via the shared wrapper. A
+  // small diagonal floor keeps the noise model non-degenerate for a near-perfect
+  // ICP.
+  mrpt::poses::CPose3DPDFGaussian pdf = relPose;
+  pdf.cov.asEigen().diagonal().array() += 1e-8;
 
-  gtsam::Vector6 sigmas;
-  sigmas << sigXYZYPR[5], sigXYZYPR[4], sigXYZYPR[3], sigXYZYPR[0], sigXYZYPR[1], sigXYZYPR[2];
-  sigmas = sigmas.cwiseMax(1e-4);
+  gtsam::Pose3 relMean;
+  gtsam::Matrix6 relCov;
+  mrpt::gtsam_wrappers::to_gtsam_se3_cov6(pdf, relMean, relCov);
 
   // Robust kernel so a single spurious loop cannot deform the map (the plan's
   // GNC-in-parallel is a later refinement; a Huber M-estimator is the v1 guard).
-  auto base = gtsam::noiseModel::Diagonal::Sigmas(sigmas);
+  auto base = gtsam::noiseModel::Gaussian::Covariance(relCov);
   auto robust = gtsam::noiseModel::Robust::Create(
     gtsam::noiseModel::mEstimator::Huber::Create(params_.loop_closure_edge_robust_param), base);
 
   state_.gtsam->newFactors.emplace_shared<gtsam::BetweenFactor<gtsam::Pose3>>(
-    T(from), T(to), mrpt::gtsam_wrappers::toPose3(relPose.mean), robust);
+    T(from), T(to), relMean, robust);
 
   state_.add_kf_connectivity(from, to);
 }

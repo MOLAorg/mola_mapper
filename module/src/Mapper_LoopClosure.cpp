@@ -31,6 +31,7 @@
 
 #include <chrono>
 #include <exception>
+#include <utility>
 #include <vector>
 
 #include "GtsamData.h"
@@ -57,6 +58,7 @@ void Mapper::start_loop_closure_thread()
   lc_kf_count_at_last_scan_ = 0;
   lc_snapshot_size_at_last_scan_ = 0;
   lc_incremental_scans_since_full_ = 0;
+  lc_merged_pairs_.clear();
 
   lc_should_exit_.store(false);
   lc_thread_ = std::thread(&Mapper::loop_closure_thread_loop, this);
@@ -181,6 +183,14 @@ void Mapper::merge_loop_closure_edge_locked(
   KeyFrameID from, KeyFrameID to, const mrpt::poses::CPose3DPDFGaussian & relPose)
 {
   if (from == to) {
+    return;
+  }
+
+  // Skip pairs already closed in a previous scan: a periodic full scan
+  // re-proposes existing loops, and adding a second BetweenFactor for the same
+  // pair would over-weight the constraint and grow the graph without bound.
+  const std::pair<KeyFrameID, KeyFrameID> pairKey = std::minmax(from, to);
+  if (!lc_merged_pairs_.insert(pairKey).second) {
     return;
   }
 

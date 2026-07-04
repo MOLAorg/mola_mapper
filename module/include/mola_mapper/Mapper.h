@@ -208,6 +208,10 @@ private:
   std::size_t lc_snapshot_size_at_last_scan_ = 0;
   // Incremental scans run since the last forced full scan.
   uint32_t lc_incremental_scans_since_full_ = 0;
+  // Keyframe pairs already merged as loop-closure edges (normalized min<max), so
+  // a periodic full scan re-proposing an existing loop does not add a duplicate
+  // BetweenFactor that over-weights the constraint and bloats the graph.
+  std::set<std::pair<KeyFrameID, KeyFrameID>> lc_merged_pairs_;
 
   // --- Keyframe-creation gating (plan 4.13 Phase A) ---
   // Set to true the first time requestInsertKeyframe() is called. In Auto mode

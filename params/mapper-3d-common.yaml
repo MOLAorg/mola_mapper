@@ -123,6 +123,38 @@ additional_isam2_update_steps: 3
 enable_optimizer_thread: ${MOLA_MAPPER3D_OPTIMIZER_THREAD|true}
 
 # --------------------------------------------------------------------------
+# Loop closure
+# --------------------------------------------------------------------------
+# A background thread periodically runs the mola_sm_loop_closure detector on a
+# snapshot of the central map and merges accepted edges (robust kernel) into the
+# live graph. The detector runs OFF the query/solve path; only the edge merge
+# touches the graph, feeding the same background optimizer.
+loop_closure_enabled: ${MOLA_MAPPER3D_LOOP_CLOSURE|false}
+
+# The loop-closure engine's own pipeline YAML (ICP + candidate selection), from
+# the mola_sm_loop_closure package. Env-substituted; required when enabled.
+# NOTE: each central-map keyframe carries the original raw lidar scan plus a
+# "metadata" comment observation with the per-keyframe velocity window, so the
+# LC pipeline may deskew scans that provide per-point timestamps. For sensors
+# without per-point timestamps (e.g. KITTI), use a deskew-free pipeline or
+# export MOLA_DESKEW_METHOD=MotionCompensationMethod::None.
+loop_closure_pipeline_file: "${MOLA_MAPPER3D_LC_PIPELINE|}"
+
+# How often the LC thread wakes to consider a new scan [s], and the minimum
+# number of new keyframes since the last scan before one actually runs.
+loop_closure_check_period_sec: ${MOLA_MAPPER3D_LC_PERIOD|5.0}
+loop_closure_min_new_keyframes: ${MOLA_MAPPER3D_LC_MIN_NEW_KFS|10}
+
+# Incremental scans only test candidate pairs that involve a new keyframe; a
+# full scan is forced every N incremental scans to recover loops that only
+# become plausible after re-optimization (0 = never force a full scan).
+loop_closure_incremental: true
+loop_closure_full_scan_every_n: 10
+
+# Huber robust-kernel threshold [sigmas] applied to merged LC edges.
+loop_closure_edge_robust_param: 1.5
+
+# --------------------------------------------------------------------------
 # High-rate pose publisher
 # --------------------------------------------------------------------------
 high_rate_pose_publish_rate_hz: ${MOLA_MAPPER3D_PUBLISH_RATE_HZ|0.0}

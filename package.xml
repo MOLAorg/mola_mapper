@@ -25,6 +25,7 @@
   <depend>mola_gtsam_factors</depend>
   <depend>mola_imu_preintegration</depend>
   <depend>mola_georeferencing</depend>
+  <depend>mola_sm_loop_closure</depend>
 
   <depend>mrpt_libtclap</depend>
   <depend>mrpt_libmaps</depend>

@@ -142,6 +142,16 @@ void Parameters::loadFrom(const mrpt::containers::yaml & cfg)
   MCP_LOAD_OPT(cfg, additional_isam2_update_steps);
   MCP_LOAD_OPT(cfg, enable_optimizer_thread);
 
+  // Loop closure
+  // -----------------------------------------------------
+  MCP_LOAD_OPT(cfg, loop_closure_enabled);
+  MCP_LOAD_OPT(cfg, loop_closure_pipeline_file);
+  MCP_LOAD_OPT(cfg, loop_closure_check_period_sec);
+  MCP_LOAD_OPT(cfg, loop_closure_min_new_keyframes);
+  MCP_LOAD_OPT(cfg, loop_closure_incremental);
+  MCP_LOAD_OPT(cfg, loop_closure_full_scan_every_n);
+  MCP_LOAD_OPT(cfg, loop_closure_edge_robust_param);
+
   // High-rate pose publisher
   // -----------------------------------------------------
   MCP_LOAD_OPT(cfg, high_rate_pose_publish_rate_hz);

@@ -271,6 +271,43 @@ public:
 
   /** @} */
 
+  /** @name Loop closure
+   * @{ */
+
+  /// Master switch: when true, a background thread periodically runs the
+  /// loop-closure detector (mola_sm_loop_closure) on a snapshot of the central
+  /// map and merges the accepted edges into the live graph.
+  bool loop_closure_enabled = false;
+
+  /// Path to the loop-closure engine's own YAML (the mola_sm_loop_closure F2F
+  /// pipeline: ICP + candidate selection). Env-var substitution is applied.
+  /// Required when loop_closure_enabled is true.
+  std::string loop_closure_pipeline_file;
+
+  /// The loop-closure thread wakes at most this often to consider a new scan.
+  double loop_closure_check_period_sec = 5.0;  // [s]
+
+  /// A new scan only runs once at least this many keyframes were added since
+  /// the previous scan (avoids re-scanning on tiny map growth).
+  uint32_t loop_closure_min_new_keyframes = 10;
+
+  /// If true, pass the count of keyframes present at the previous scan as the
+  /// detector's `first_new_keyframe` hint, so it only tests pairs involving a
+  /// new keyframe. A periodic full scan is still run every
+  /// loop_closure_full_scan_every_n incremental scans to recover loops that
+  /// only become geometrically plausible after re-optimization.
+  bool loop_closure_incremental = true;
+
+  /// Every N incremental scans, run one full (non-incremental) scan. 0 disables
+  /// full scans (pure incremental). Ignored when loop_closure_incremental=false.
+  uint32_t loop_closure_full_scan_every_n = 10;
+
+  /// Huber robust-kernel threshold applied to merged loop-closure edges, so a
+  /// single bad edge cannot deform the map. In whitened (sigma) units.
+  double loop_closure_edge_robust_param = 1.5;
+
+  /** @} */
+
   /** @name High-rate pose publisher
    * @{ */
 

@@ -32,12 +32,14 @@ find_package(GTSAM REQUIRED)
 find_package(gtsam2mrpt_serial REQUIRED)
 find_package(mola_gtsam_factors REQUIRED)
 find_package(mola_imu_preintegration REQUIRED)
+find_package(mola_sm_loop_closure REQUIRED)
 
 # -----------------------
 # define lib:
 set(LIB_SOURCES
   module/src/Mapper.cpp
   module/src/Mapper_Fusion.cpp
+  module/src/Mapper_LoopClosure.cpp
   module/src/ImuGravityFilter.cpp
   module/src/Mapper_GUI.cpp
   module/src/Mapper_KeyframeIngestion.cpp
@@ -67,6 +69,7 @@ mola_add_library(
     mola::gtsam2mrpt_serial
     mola::mola_gtsam_factors
     mola::mola_imu_preintegration
+    mola::mola_sm_loop_closure
   CMAKE_DEPENDENCIES
     mola_kernel
     mola_yaml
@@ -77,6 +80,7 @@ mola_add_library(
     gtsam2mrpt_serial
     mola_gtsam_factors
     mola_imu_preintegration
+    mola_sm_loop_closure
 )
 
 # mola_add_library() expects headers under "ROOT/include", so do this manually here:

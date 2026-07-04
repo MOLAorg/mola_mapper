@@ -44,6 +44,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <regex>
@@ -57,6 +58,11 @@ namespace gtsam
 {
 class Values;
 }  // namespace gtsam
+
+namespace mola
+{
+class LoopClosureInterface;
+}  // namespace mola
 
 namespace mola::mapper
 {
@@ -184,6 +190,38 @@ private:
   std::mutex solve_mutex_;
   // Throttle anchor for the high-rate publisher (wall-clock).
   std::optional<mrpt::Clock::time_point> last_publish_wallclock_;
+
+  // --- Background loop-closure thread (loop_closure_enabled) ---
+  // The LC detector (mola_sm_loop_closure) runs OFF the query/solve path: the
+  // thread periodically snapshots the central map, runs the detector on the
+  // snapshot (no lock held), and merges accepted edges into the graph as robust
+  // BetweenFactors, then wakes the optimizer. Only the merge and snapshot touch
+  // state_ (under stateMutex_); the heavy ICP runs lock-free on the snapshot.
+  std::shared_ptr<mola::LoopClosureInterface> lc_engine_;
+  std::thread lc_thread_;
+  std::mutex lc_wakeup_mutex_;
+  std::condition_variable lc_wakeup_cv_;
+  std::atomic_bool lc_should_exit_{false};
+
+  // Progress state carried between scans by the LC thread. Reset when the thread
+  // (re)starts on a fresh map.
+  struct LoopClosureScanState
+  {
+    // Keyframe count present at the last scan (min-new-keyframes gate) and the
+    // snapshot size then (the detector's incremental first_new_keyframe hint).
+    std::size_t kf_count_at_last_scan = 0;
+    std::size_t snapshot_size_at_last_scan = 0;
+    // Incremental scans run since the last forced full scan.
+    uint32_t incremental_scans_since_full = 0;
+    // Keyframe pairs already merged as loop-closure edges (normalized min<max),
+    // so a periodic full scan re-proposing an existing loop does not add a
+    // duplicate BetweenFactor that over-weights the constraint and bloats the
+    // graph.
+    std::set<std::pair<KeyFrameID, KeyFrameID>> merged_pairs;
+
+    void reset() { *this = LoopClosureScanState{}; }
+  };
+  LoopClosureScanState lc_scan_;
 
   // --- Keyframe-creation gating (plan 4.13 Phase A) ---
   // Set to true the first time requestInsertKeyframe() is called. In Auto mode
@@ -458,6 +496,29 @@ private:
   /// Stops and joins the optimizer thread if running. Must be called with NO
   /// lock held (it joins a thread that itself takes stateMutex_).
   void stop_optimizer_thread();
+
+  /// Creates the loop-closure engine from loop_closure_pipeline_file and starts
+  /// the background LC thread. No-op when loop_closure_enabled is false.
+  /// (Mapper_LoopClosure.cpp)
+  void start_loop_closure_thread();
+
+  /// Background loop-closure thread body: waits for the check period, then runs
+  /// one scan. Only started when loop_closure_enabled.
+  void loop_closure_thread_loop();
+
+  /// Stops and joins the loop-closure thread if running (no lock held).
+  void stop_loop_closure_thread();
+
+  /// Runs one loop-closure scan: snapshots the map under stateMutex_, runs the
+  /// detector off-lock (streaming + abortable), merges accepted edges, and wakes
+  /// the optimizer. Returns the number of edges merged.
+  std::size_t run_loop_closure_scan();
+
+  /// Adds one accepted loop-closure edge as a robust BetweenFactor(T(from),
+  /// T(to)) built from the proposed relative pose + covariance. Caller holds
+  /// stateMutex_.
+  void merge_loop_closure_edge_locked(
+    KeyFrameID from, KeyFrameID to, const mrpt::poses::CPose3DPDFGaussian & relPose);
 
   /// Writes the current estimated trajectory (all keyframe poses in
   /// {reference_frame}) to params_.save_trajectory_to_file in TUM format.

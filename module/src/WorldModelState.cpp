@@ -78,9 +78,12 @@ std::set<KeyFrameID> WorldModelState::get_keyframes_in_topological_radius(
   return result;
 }
 
-mrpt::maps::CSimpleMap WorldModelState::as_simple_map() const
+mrpt::maps::CSimpleMap WorldModelState::as_simple_map(std::vector<KeyFrameID> * out_frame_ids) const
 {
   mrpt::maps::CSimpleMap sm;
+  if (out_frame_ids != nullptr) {
+    out_frame_ids->clear();
+  }
   for (const auto & [stamp, kfId] : time_to_kf_id) {
     const auto itObs = keyframe_observations.find(kfId);
     if (itObs == keyframe_observations.end()) {
@@ -94,6 +97,9 @@ mrpt::maps::CSimpleMap WorldModelState::as_simple_map() const
     auto posePdf = mrpt::poses::CPose3DPDFGaussian::Create(pose);
     auto sf = std::make_shared<mrpt::obs::CSensoryFrame>(itObs->second);
     sm.insert(posePdf, sf);
+    if (out_frame_ids != nullptr) {
+      out_frame_ids->push_back(kfId);
+    }
   }
   return sm;
 }

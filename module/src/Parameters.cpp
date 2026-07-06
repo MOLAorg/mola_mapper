@@ -161,6 +161,7 @@ void Parameters::loadFrom(const mrpt::containers::yaml & cfg)
   // -----------------------------------------------------
   MCP_LOAD_OPT(cfg, load_simplemap_file);
   MCP_LOAD_OPT(cfg, save_simplemap_file);
+  MCP_LOAD_OPT(cfg, generate_lazy_load_scan_files);
   MCP_LOAD_OPT(cfg, externalize_after_seconds);
 
   // Sensor input names (regex)

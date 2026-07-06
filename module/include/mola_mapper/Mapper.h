@@ -525,6 +525,11 @@ private:
   /// No-op when that string is empty.
   void saveEstimatedTrajectoryToFile();
 
+  /// Writes the current keyframes (raw observations + optimized poses) as a
+  /// CSimpleMap to params_.save_simplemap_file. No-op when that string is
+  /// empty.
+  void saveSimpleMapToFile();
+
   /// Publishes the latest extrapolated reference-frame pose via
   /// advertiseUpdatedLocalization, throttled to high_rate_pose_publish_rate_hz.
   void publish_high_rate_pose();

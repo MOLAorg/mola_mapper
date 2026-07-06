@@ -52,6 +52,7 @@ Mapper::~Mapper()
   stop_loop_closure_thread();
   stop_optimizer_thread();
   saveEstimatedTrajectoryToFile();
+  saveSimpleMapToFile();
 }
 
 void Mapper::initialize(const mrpt::containers::yaml & cfg)
@@ -227,6 +228,29 @@ void Mapper::saveEstimatedTrajectoryToFile()
       << " " << q.z() << " " << q.r() << "\n";
   }
   MRPT_LOG_INFO("Estimated trajectory saved.");
+}
+
+void Mapper::saveSimpleMapToFile()
+{
+  if (!params_loaded_ || params_.save_simplemap_file.empty()) {
+    return;
+  }
+
+  mrpt::maps::CSimpleMap sm;
+  {
+    auto lck = mrpt::lockHelper(stateMutex_);
+    sm = state_.as_simple_map();
+  }
+
+  const auto & fil = params_.save_simplemap_file;
+  MRPT_LOG_INFO_STREAM(
+    "Saving simplemap with " << sm.size() << " keyframes to '" << fil << "'...");
+
+  if (!sm.saveToFile(fil)) {
+    MRPT_LOG_ERROR_STREAM("Error saving simplemap to: " << fil);
+    return;
+  }
+  MRPT_LOG_INFO("Simplemap saved.");
 }
 
 void Mapper::reset()

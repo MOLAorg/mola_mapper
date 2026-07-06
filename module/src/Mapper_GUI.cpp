@@ -425,7 +425,7 @@ void Mapper::internalBuildGUI()
     Tab tab;
     tab.title = "Output";
     auto lbOutputHint =
-      std::make_shared<LiveString>("Trajectory saved at exit or when button clicked");
+      std::make_shared<LiveString>("Trajectory/simplemap saved at exit or when button clicked");
     tab.widgets.emplace_back(Label{lbOutputHint});
     tab.widgets.emplace_back(
       TextBox{"TUM file:", params_.save_trajectory_to_file, 13, [this](std::string f) -> bool {
@@ -435,6 +435,14 @@ void Mapper::internalBuildGUI()
               }});
     tab.widgets.emplace_back(
       Button{"Save trajectory now", 0, "", 0, [this]() { this->saveEstimatedTrajectoryToFile(); }});
+    tab.widgets.emplace_back(
+      TextBox{".simplemap file:", params_.save_simplemap_file, 13, [this](std::string f) -> bool {
+                auto lck = mrpt::lockHelper(stateMutex_);
+                params_.save_simplemap_file = std::move(f);
+                return true;
+              }});
+    tab.widgets.emplace_back(
+      Button{"Save simplemap now", 0, "", 0, [this]() { this->saveSimpleMapToFile(); }});
     desc.tabs.emplace_back(std::move(tab));
   }
 

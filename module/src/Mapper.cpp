@@ -23,12 +23,16 @@
 #include <mrpt/core/bits_math.h>
 #include <mrpt/core/format.h>
 #include <mrpt/core/lock_helper.h>
+#include <mrpt/io/lazy_load_path.h>
+#include <mrpt/obs/CObservationPointCloud.h>
 #include <mrpt/system/datetime.h>
+#include <mrpt/system/filesystem.h>
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <fstream>
+#include <future>
 #include <iomanip>
 #include <string>
 
@@ -246,7 +250,74 @@ void Mapper::saveSimpleMapToFile()
   MRPT_LOG_INFO_STREAM(
     "Saving simplemap with " << sm.size() << " keyframes to '" << fil << "'...");
 
-  if (!sm.saveToFile(fil)) {
+  std::vector<std::future<void>> pendingDiskIO;
+
+  if (params_.generate_lazy_load_scan_files) {
+    // Create the default "_Images" directory alongside the output file and
+    // externally serialize each keyframe's point clouds there, mirroring
+    // mola::LidarOdometry's generate_lazy_load_scan_files feature so the
+    // saved simplemap stays small and loads/processes fast downstream.
+    const std::string out_basedir = mrpt::system::pathJoin(
+      {mrpt::system::extractFileDirectory(fil), mrpt::system::extractFileName(fil) + "_Images"});
+
+    if (!mrpt::system::directoryExists(out_basedir)) {
+      const bool dirCreatedOk = mrpt::system::createDirectory(out_basedir);
+      ASSERTMSG_(
+        dirCreatedOk, mrpt::format(
+                        "Error creating lazy-load directory for output simplemap: '%s'",
+                        out_basedir.c_str()));
+      MRPT_LOG_INFO_STREAM("Creating lazy-load directory for output .simplemap: " << out_basedir);
+    }
+
+    mrpt::io::setLazyLoadPathBase(out_basedir);
+
+    // The actual disk write (unload()) runs on a background worker thread so
+    // this method does not block its caller (destructor or GUI thread) on
+    // potentially GBs of point cloud I/O. Only the (cheap) externalization
+    // flag/filename are set here, synchronously; sm.saveToFile() below only
+    // reads those, never the raw point buffer, so it is safe to run
+    // concurrently with the pending unload() disk writes. We still wait for
+    // all of them below before returning, so the simplemap is fully
+    // persisted (bin files included) by the time this method returns.
+    for (auto & kf : sm) {
+      if (!kf.sf) {
+        continue;
+      }
+      for (auto & obs : *kf.sf) {
+        auto oPts = std::dynamic_pointer_cast<mrpt::obs::CObservationPointCloud>(obs);
+        if (!oPts || oPts->isExternallyStored()) {
+          continue;
+        }
+        ASSERT_(oPts->pointcloud);
+        const std::string pcFilename = mrpt::format(
+          "%s_%.09f.bin", mrpt::system::fileNameStripInvalidChars(oPts->sensorLabel).c_str(),
+          mrpt::Clock::toDouble(oPts->timestamp));
+
+        oPts->setAsExternalStorage(
+          pcFilename, mrpt::obs::CObservationPointCloud::ExternalStorageFormat::MRPT_Serialization);
+
+        pendingDiskIO.emplace_back(worker_disk_io_.enqueue([oPts]() {
+          try {
+            oPts->unload();
+          } catch (const std::exception & e) {
+            std::cerr << "[Mapper] saveSimpleMapToFile(): Error saving observation to disk: "
+                      << e.what() << "\n";
+          }
+        }));
+      }
+    }
+  }
+
+  const bool saveOk = sm.saveToFile(fil);
+
+  // Wait for all queued point cloud writes to finish, so the simplemap
+  // (with its externalized .bin files) is fully persisted to disk before
+  // this method returns.
+  for (auto & fut : pendingDiskIO) {
+    fut.wait();
+  }
+
+  if (!saveOk) {
     MRPT_LOG_ERROR_STREAM("Error saving simplemap to: " << fil);
     return;
   }

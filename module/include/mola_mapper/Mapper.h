@@ -34,6 +34,7 @@
 #include <mola_mapper/Parameters.h>
 #include <mola_mapper/WorldModelState.h>
 #include <mrpt/containers/yaml.h>
+#include <mrpt/core/WorkerThreadsPool.h>
 #include <mrpt/obs/CObservationGPS.h>
 #include <mrpt/obs/CObservationIMU.h>
 #include <mrpt/obs/CObservationOdometry.h>
@@ -222,6 +223,12 @@ private:
     void reset() { *this = LoopClosureScanState{}; }
   };
   LoopClosureScanState lc_scan_;
+
+  /// Background worker for lazy-load externalization of keyframe point clouds
+  /// in saveSimpleMapToFile(), so writing the (potentially large) point cloud
+  /// files to disk does not block the caller (destructor or GUI thread).
+  mutable mrpt::WorkerThreadsPool worker_disk_io_{
+    1 /*num threads*/, mrpt::WorkerThreadsPool::POLICY_FIFO, "worker_disk"};
 
   // --- Keyframe-creation gating (plan 4.13 Phase A) ---
   // Set to true the first time requestInsertKeyframe() is called. In Auto mode

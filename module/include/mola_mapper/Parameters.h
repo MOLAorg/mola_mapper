@@ -329,6 +329,11 @@ public:
   /// If non-empty, save the map here on shutdown.
   std::string save_simplemap_file;
 
+  /// If enabled, a directory will be created alongside save_simplemap_file
+  /// and keyframe point clouds will be externally serialized there, for much
+  /// faster loading and processing of the saved simplemap.
+  bool generate_lazy_load_scan_files = false;
+
   /// Seconds a keyframe's raw observations stay in RAM before being
   /// externalized (flushed to the sidecar directory). 0 = never externalize.
   double externalize_after_seconds = 30.0;  // [s]

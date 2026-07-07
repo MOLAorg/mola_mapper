@@ -165,6 +165,10 @@ high_rate_use_latest_sensors: true
 # --------------------------------------------------------------------------
 load_simplemap_file: "${MOLA_MAPPER3D_LOAD_SM|}"
 save_simplemap_file: "${MOLA_MAPPER3D_SAVE_SM|}"
+# If enabled, a directory will be created alongside save_simplemap_file and
+# keyframe point clouds will be externally serialized there (same env var
+# name as mola_lidar_odometry's equivalent option, for consistency).
+generate_lazy_load_scan_files: ${MOLA_SIMPLEMAP_GENERATE_LAZY_LOAD|false}
 externalize_after_seconds: 30.0
 
 # --------------------------------------------------------------------------

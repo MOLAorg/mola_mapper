@@ -43,7 +43,9 @@ module/src/
   Mapper3D_SensorCallbacks.cpp   onNewObservation dispatch -> fuse_*()
   Mapper_LoopClosure.cpp         Background LC thread: snapshots the map, runs the
                                   mola_sm_loop_closure detector (analyze()) off-lock,
-                                  merges accepted edges as robust BetweenFactors
+                                  merges accepted edges as robust BetweenFactors;
+                                  plus the end-of-run finalize pass (batch full
+                                  scans + re-optimization until no new loops)
   ImuGravityFilter.cpp           Robust low-dynamics gravity-direction reducer (pure/testable):
                                   given a window of lever-arm-corrected accel/gyro samples,
                                   rejects motion-contaminated ones, robustly averages the
@@ -137,6 +139,23 @@ docs/call-graph.md               Mermaid diagram tracing every public-API method
   can deskew when the sensor provides per-point timestamps (use a deskew-free
   pipeline for sensors that don't). GNC-in-parallel and the LC-event
   notification to front ends are still open.
+
+- LC pipeline config lives in `params/loop-closure-f2f-mapper.yaml`, which
+  `$import`s the package's f2f pipeline and overrides ONLY the ICP registration
+  core (point-to-point instead of cov2cov; wider initial pairing sigma), so
+  mola_sm_loop_closure keeps its own defaults. Both are needed for real loops to
+  pass acceptance at all. The KITTI and MulRan launchers enable LC by default and
+  point at it.
+
+- Online LC scans alone close few loops: a pair only closes once BOTH endpoints
+  exist AND drift is small enough, which for big revisits happens near the end of
+  the run. Hence `loop_closure_finalize_rounds` (default 8): at destruction,
+  repeat full scan + synchronous re-optimization until a round finds nothing new,
+  each round's correction bringing further candidates into ICP's basin. Rounds
+  pass the already-closed pairs via `LoopClosureAnalyzeOptions::exclude_pairs`,
+  without which a scan just re-proposes them and burns its candidate budget.
+  Validated on KITTI-00: 8 loops closed (4 online + 4 in finalize, then
+  converged), vs 0 loops and 8.95 m absolute pose error with LC off.
 
 See `~/plans/900_mola_mapper.md` for the rationale behind each of these (the
 real-data failure modes that drove each design choice), the GNC-bootstrap

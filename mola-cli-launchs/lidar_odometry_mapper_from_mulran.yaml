@@ -127,6 +127,19 @@ modules:
       # DCC01 (gravity-factor chi2 ~16700 -> ~24, residual 2.2 -> 0.6 deg).
       odometry_edge_min_sigma_rollpitch_deg: ${MOLA_MAPPER3D_ODOM_RP_SIGMA|3.0}
 
+      # Loop closure ON by default: MulRan urban sequences (DCC, KAIST,
+      # Riverside) revisit places, so the mapper's background loop-closure
+      # thread (mola_sm_loop_closure engine) cancels accumulated LiDAR-odometry
+      # drift. Disable with MOLA_MAPPER3D_LOOP_CLOSURE=false. The pipeline below
+      # is the mola_mapper wrapper (params/loop-closure-f2f-mapper.yaml) that
+      # $imports the shared frame-to-frame GICP pipeline and widens the ICP
+      # convergence basin; it uses the Ouster per-point timestamps to deskew each
+      # keyframe scan. NOTE: cov2cov (GICP) loop detection is weak on Ouster data
+      # (see ~/plans/lio-mulran-benchmarking.md), so on DCC01 few/no loops cross
+      # the acceptance threshold; global accuracy here comes mainly from GNSS.
+      loop_closure_enabled: ${MOLA_MAPPER3D_LOOP_CLOSURE|true}
+      loop_closure_pipeline_file: "${MOLA_MAPPER3D_LC_PIPELINE|$(ros2 pkg prefix mola_mapper)/share/mola_mapper/params/loop-closure-f2f-mapper.yaml}"
+
       # MulRan's Xsens reports orientation already ENU-referenced (yaw measured
       # from East, Z-up), but emit_imu_factors_for_keyframe_locked() applies a
       # hardcoded Rz(90 deg) "azimuth wrt North" correction. For this Xsens that

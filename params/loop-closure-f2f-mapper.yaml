@@ -1,0 +1,70 @@
+# ============================================================================
+# Loop-closure ICP configuration for mola_mapper's dataset launchers
+# ============================================================================
+# This imports the shared frame-to-frame GICP loop-closure pipeline from
+# mola_sm_loop_closure UNCHANGED and overrides only the ICP registration core,
+# so the package keeps its own defaults. Two changes, both kept HERE:
+#
+# 1) POINT-TO-POINT instead of cov2cov (GICP). The shipped f2f pipeline matches
+#    with Matcher_Cov2Cov on the per-keyframe KeyframePointCloudMap. On real
+#    loop-closure pairs that scores very low quality (most genuine KITTI/MulRan
+#    loops land <20-40%, below any sane acceptance), so the loops never close,
+#    drift is never cancelled, and the detect->optimize->detect-more cascade
+#    never starts. Plain point-to-point matching on the same decimated cloud
+#    (`points_to_register_points`, already produced by the imported
+#    observations_filter) scores genuine loops much higher, so many more close.
+#
+# 2) WIDER ICP convergence basin. A loop candidate links two keyframes with the
+#    accumulated odometry drift between them, so the initial guess is off by
+#    several meters; the package default `threshold_sigma_initial: 1.0` m cannot
+#    bridge that. Start at 5 m, annealed to the imported threshold_sigma_final.
+#
+# Everything else (candidate search, GNSS/IMU-gravity use, deskew, decimation,
+# solver iterations) comes from the imported base unchanged. All keys stay
+# env-overridable. (mola_yaml `$import`: imported file is the base; sibling maps
+# deep-merge over it, and sibling LISTS replace the imported list wholesale --
+# which is exactly what we want for the matchers/quality/solvers below.)
+# ============================================================================
+
+$import: $(ros2 pkg prefix mola_sm_loop_closure)/share/mola_sm_loop_closure/pipelines/loop-closure-f2f-lidar3d-gicp.yaml
+
+params:
+  # Global registration front-end (KISS-Matcher): gives each loop candidate a
+  # drift-INDEPENDENT initial guess, so pairs that are tens of meters apart in
+  # the drifted estimate can still close (plain ICP alone only bridges ~its
+  # basin, so far loops otherwise never close and the cascade never starts).
+  # Requires the kiss-matcher submodule to be populated + built into
+  # mola_sm_loop_closure (MOLA_HAS_KISS_MATCHER); if absent it is ignored.
+  use_kiss_matcher: "${USE_KISS_MATCHER|true}"
+  # Reject KISS-Matcher global-registration guesses backed by too few inliers:
+  # on repetitive LiDAR geometry its `valid` flag (1 inlier) lets through wildly
+  # wrong transforms (flipped/large-translation) that mislead ICP.
+  kiss_matcher_min_inliers: "${KISS_MATCHER_MIN_INLIERS|5}"
+  threshold_sigma_initial: "${LC_ICP_INITIAL_SIGMA|5.0}"
+  min_icp_goodness: "${MIN_ICP_QUALITY|0.55}"
+
+icp_settings:
+  solvers:
+    - class: mp2p_icp::Solver_GaussNewton
+      params:
+        maxIterations: 2
+        robustKernel: "${MOLA_LC_ROBUST_KERNEL|RobustKernel::GemanMcClure}"
+        # Point-to-point residuals are in METERS (not covariance-normalized as in
+        # GICP), so the kernel scale is annealed alongside the pairing threshold.
+        robustKernelParam: "0.5*max(SIGMA_FINAL, SIGMA_INIT-(SIGMA_INIT-SIGMA_FINAL)*ICP_ITERATION/100)"
+
+  matchers:
+    - class: mp2p_icp::Matcher_Points_DistanceThreshold
+      params:
+        threshold: "max(SIGMA_FINAL, SIGMA_INIT-(SIGMA_INIT-SIGMA_FINAL)*ICP_ITERATION/100)" # [m]
+        thresholdAngularDeg: 0
+        pairingsPerPoint: 1
+        allowMatchAlreadyMatchedGlobalPoints: true # faster
+        pointLayerMatches:
+          - { global: "points_to_register_points", local: "points_to_register_points", weight: 1.0 }
+
+  quality:
+    - class: mp2p_icp::QualityEvaluator_PairedRatio
+      params:
+        absolute_minimum_pairing_ratio: 0.10
+        reuse_icp_pairings: true

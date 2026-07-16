@@ -302,6 +302,12 @@ public:
   /// full scans (pure incremental). Ignored when loop_closure_incremental=false.
   uint32_t loop_closure_full_scan_every_n = 10;
 
+  /// After the dataset ends, run up to this many batch loop-closure rounds (full
+  /// scan + synchronous re-optimization each) until no new loops are found. This
+  /// recovers loops that online scans miss because both endpoints only exist
+  /// late in the run. 0 disables the finalize pass.
+  uint32_t loop_closure_finalize_rounds = 8;
+
   /// Huber robust-kernel threshold applied to merged loop-closure edges, so a
   /// single bad edge cannot deform the map. In whitened (sigma) units.
   double loop_closure_edge_robust_param = 1.5;

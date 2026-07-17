@@ -10,22 +10,25 @@
 # construction-site dataset (Trzeciak et al., ECCV 2022 Workshops / JCCE
 # 2023). Read directly from its ROS 1 ".bag" file via mola::Rosbag1Dataset
 # (no ROS 1 install required). Sensor inventory confirmed with
-# `rosbag1-info <bag>` (see mola_input_rosbag1/apps/rosbag1-info.cpp):
-#   /imu/data               sensor_msgs/Imu          Xsens MTi-610, ~400 Hz
-#   /pp_points/synced2rgb   sensor_msgs/PointCloud2  Velodyne VLP-16, ~10 Hz
-#                                                     (time-synced with RGB)
-#   /pp_rgb/synced2points   sensor_msgs/Image        Alvium U-319c RGB, ~10 Hz
-#   /pp_rgb/camera_info     sensor_msgs/CameraInfo
-#   /pp_nir/synced2points   sensor_msgs/Image        Alvium 1800 U-501 NIR
-#   /pp_nir/camera_info     sensor_msgs/CameraInfo
-# There is no raw /velodyne_points topic (only the RGB-synced stream is
+# `rosbag1-info <bag>` (see mola_input_rosbag1/apps/rosbag1-info.cpp). Note
+# these topic names have NO leading slash in this particular bag (unusual
+# for a ROS 1 bag, but confirmed by rosbag1-info) -- the `sensors` topics
+# below must match verbatim, or Rosbag1Dataset silently dispatches nothing:
+#   imu/data               sensor_msgs/Imu          Xsens MTi-610, ~400 Hz
+#   pp_points/synced2rgb   sensor_msgs/PointCloud2  Velodyne VLP-16, ~10 Hz
+#                                                    (time-synced with RGB)
+#   pp_rgb/synced2points   sensor_msgs/Image        Alvium U-319c RGB, ~10 Hz
+#   pp_rgb/camera_info     sensor_msgs/CameraInfo
+#   pp_nir/synced2points   sensor_msgs/Image        Alvium 1800 U-501 NIR
+#   pp_nir/camera_info     sensor_msgs/CameraInfo
+# There is no raw velodyne_points topic (only the RGB-synced stream is
 # recorded) and no /tf or /tf_static. NO GNSS/GPS topic exists either, so
 # this launcher fuses LiDAR + IMU only (as in
 # lidar_odometry_mapper_from_oxford_spires.yaml). mapper3d's
-# `estimate_geo_reference` stays at its default `false`. The RGB/NIR image
-# streams are present in the bag but are not wired here, matching every
-# other launcher in this directory: neither LidarOdometry nor mapper3d
-# consumes camera observations.
+# `estimate_geo_reference` stays at its default `false`. The RGB stream is
+# wired only for the GUI preview window (as in the standalone
+# lidar_odometry_from_rosbag1.yaml launch); neither LidarOdometry nor
+# mapper3d consumes camera observations. The NIR stream is not wired at all.
 #
 # Sensor extrinsics: the dataset's own extrinsic-calibration files
 # (calib_lidar2imu.txt, calib_lidar2rgb.txt, calib_lidar2nir.txt) ship inside
@@ -77,6 +80,10 @@ modules:
         decimation: 1
         enabled: ${MOLA_WITH_GUI|true}
         win_pos: 5 5 400 400
+      - raw_sensor_label: camera
+        decimation: 1
+        enabled: ${MOLA_WITH_GUI|true}
+        win_pos: 5 370 600 200
 
     params:
       rosbag_filename:
@@ -87,13 +94,17 @@ modules:
       start_paused: ${MOLA_DATASET_START_PAUSED|false}
 
       sensors:
-        - topic: /imu/data # Xsens MTi-610, ~400 Hz: this IS base_link
+        # Note: this bag's topics have NO leading slash (confirmed with
+        # `rosbag1-info`, unlike a typical ROS 1 bag), so the entries below
+        # must match that exactly or Rosbag1Dataset never dispatches a
+        # single message (rocket-quick "end of dataset" with no data sent).
+        - topic: imu/data # Xsens MTi-610, ~400 Hz: this IS base_link
           type: CObservationIMU
           sensorLabel: imu
           fixed_sensor_pose: "0 0 0 0 0 0"
           use_fixed_sensor_pose: true
 
-        - topic: /pp_points/synced2rgb # Velodyne VLP-16, ~10 Hz (RGB-synced)
+        - topic: pp_points/synced2rgb # Velodyne VLP-16, ~10 Hz (RGB-synced)
           type: CObservationPointCloud
           sensorLabel: lidar
           # See header: rotation is the paper-documented 180 deg yaw between
@@ -101,6 +112,15 @@ modules:
           # unmeasured placeholder (real calib_lidar2imu.txt not available
           # in this repo) -- override via the env vars below once known.
           fixed_sensor_pose: "${CONSLAM_LIDAR_POSE_X|0} ${CONSLAM_LIDAR_POSE_Y|0} ${CONSLAM_LIDAR_POSE_Z|0} ${CONSLAM_LIDAR_POSE_YAW|180} ${CONSLAM_LIDAR_POSE_PITCH|0} ${CONSLAM_LIDAR_POSE_ROLL|0}" # 'x y z yaw_deg pitch_deg roll_deg'
+          use_fixed_sensor_pose: true
+
+        # RGB camera, RGB-synced with the LiDAR: GUI preview only, not
+        # consumed by LidarOdometry or mapper3d (see header):
+        - topic: pp_rgb/synced2points
+          type: CObservationImage
+          sensorLabel: camera
+          is_optional: true
+          fixed_sensor_pose: "0 0 0 0 0 0"
           use_fixed_sensor_pose: true
 
   # =====================

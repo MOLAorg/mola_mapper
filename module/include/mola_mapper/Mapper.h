@@ -366,6 +366,15 @@ private:
   std::atomic_bool viz_camera_follows_vehicle_{false};
   std::atomic_bool viz_show_ground_grid_{true};
 
+  /// Keyframe XYZ-corner scale, in meters (0 = hidden). Defaults from
+  /// viz_params_ ("keyframe_corner_size"); tunable at runtime from the GUI
+  /// "View" tab combo box.
+  std::atomic<float> viz_keyframe_corner_scale_{0.5f};
+  /// Keyframe position marker (CSphere) radius, in meters (0 = hidden).
+  /// Defaults from viz_params_ ("keyframe_sphere_radius"); tunable at runtime
+  /// from the GUI "View" tab combo box.
+  std::atomic<float> viz_keyframe_sphere_radius_{0.2f};
+
   /// Which frame is the origin (0,0,0) of the 3D viz scene: 0 = {map},
   /// 1 = {enu}. Default {enu} so the map is rendered North-oriented via the
   /// (estimated or identity) T_enu_to_map. Selected via the GUI "View" tab.

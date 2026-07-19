@@ -25,17 +25,43 @@
 #include <mrpt/opengl/CGridPlaneXY.h>
 #include <mrpt/opengl/CSetOfLines.h>
 #include <mrpt/opengl/CSetOfObjects.h>
+#include <mrpt/opengl/CSphere.h>
 #include <mrpt/opengl/CText.h>
 #include <mrpt/opengl/stock_objects.h>
 #include <mrpt/system/datetime.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <set>
 #include <utility>
 
 namespace mola::mapper
 {
+
+namespace
+{
+// Preset values offered by the "Corner scale" / "Sphere radius" combo boxes in
+// the GUI "View" tab (index-aligned with their label lists below). 0 = hidden.
+constexpr std::array<float, 7> kKeyframeCornerScalePresets{0.0f, 0.1f, 0.2f, 0.3f,
+                                                           0.5f, 1.0f, 2.0f};
+constexpr std::array<float, 6> kKeyframeSphereRadiusPresets{0.0f, 0.1f, 0.2f, 0.3f, 0.5f, 1.0f};
+
+template <std::size_t N>
+int closestPresetIndex(const std::array<float, N> & presets, float value)
+{
+  int best = 0;
+  float bestDiff = std::abs(presets[0] - value);
+  for (std::size_t i = 1; i < N; i++) {
+    const float diff = std::abs(presets[i] - value);
+    if (diff < bestDiff) {
+      bestDiff = diff;
+      best = static_cast<int>(i);
+    }
+  }
+  return best;
+}
+}  // namespace
 
 void Mapper::updateVisualization()
 {
@@ -60,7 +86,8 @@ void Mapper::updateVisualization()
   }
   last_viz_update_wallclock_ = nowWall;
 
-  const float kfCornerSize = viz_params_.getOrDefault<float>("keyframe_corner_size", 0.5f);
+  const float kfCornerScale = viz_keyframe_corner_scale_.load();
+  const float kfSphereRadius = viz_keyframe_sphere_radius_.load();
 
   // Snapshot everything we need under the state lock, then release it before
   // talking to the visualizer (which only enqueues GUI-thread tasks anyway).
@@ -155,10 +182,16 @@ void Mapper::updateVisualization()
       mrpt::math::TPoint3D prev;
       for (const auto & [kfId, pose] : kfPoses) {
         (void)kfId;
-        if (kfCornerSize > 0) {
-          auto glCorner = mrpt::opengl::stock_objects::CornerXYZSimple(kfCornerSize);
+        if (kfCornerScale > 0) {
+          auto glCorner = mrpt::opengl::stock_objects::CornerXYZ(kfCornerScale);
           glCorner->setPose(pose);
           glKfs->insert(glCorner);
+        }
+        if (kfSphereRadius > 0) {
+          auto glSphere = mrpt::opengl::CSphere::Create(kfSphereRadius, 10 /*few polygons*/);
+          glSphere->setColor_u8(0xff, 0xa0, 0x00, 0xff);  // orange
+          glSphere->setLocation(pose.translation());
+          glKfs->insert(glSphere);
         }
         const auto pt = pose.translation();
         if (first) {
@@ -402,9 +435,25 @@ void Mapper::internalBuildGUI()
       "Viz reference frame", {"map", "enu"}, viz_reference_frame_.load(), [this](int index) {
         viz_reference_frame_.store(index);
       }});
-    tab.widgets.emplace_back(CheckBox{
-      "Show keyframes", viz_show_keyframes_.load(),
-      [this](bool checked) { viz_show_keyframes_.store(checked); }});
+    tab.widgets.emplace_back(Row{{
+      CheckBox{
+        "Show keyframes", viz_show_keyframes_.load(),
+        [this](bool checked) { viz_show_keyframes_.store(checked); }},
+      ComboBox{
+        "Corner scale",
+        {"Off", "0.1 m", "0.2 m", "0.3 m", "0.5 m", "1.0 m", "2.0 m"},
+        closestPresetIndex(kKeyframeCornerScalePresets, viz_keyframe_corner_scale_.load()),
+        [this](int index) {
+          viz_keyframe_corner_scale_.store(kKeyframeCornerScalePresets.at(index));
+        }},
+      ComboBox{
+        "Sphere radius",
+        {"Off", "0.1 m", "0.2 m", "0.3 m", "0.5 m", "1.0 m"},
+        closestPresetIndex(kKeyframeSphereRadiusPresets, viz_keyframe_sphere_radius_.load()),
+        [this](int index) {
+          viz_keyframe_sphere_radius_.store(kKeyframeSphereRadiusPresets.at(index));
+        }},
+    }});
     tab.widgets.emplace_back(CheckBox{
       "Show graph edges", viz_show_edges_.load(),
       [this](bool checked) { viz_show_edges_.store(checked); }});

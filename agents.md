@@ -195,6 +195,23 @@ colcon build --packages-select mola_mapper
 colcon test  --packages-select mola_mapper && colcon test-result --verbose
 ```
 
+## `$import` gotcha in `lidar_odom` module overrides
+
+When a launcher `$import`s `mola_lidar_odometry`'s pipeline YAML into the
+`lidar_odom` module and then overrides a setting via a sibling `params:` map
+(Oxford Spires, ConSLAM), the override must match the imported file's OWN
+nesting: `initial_localization` is a TOP-LEVEL key there (sibling of
+`params:`, not nested inside it), so an override nested under this launcher's
+`params:` silently lands in an unused `params.initial_localization` instead
+of the real block (`$import`'s deep-merge only reaches keys at the same
+nesting level as the imported ones) -- verified with `mola-yaml-parser` on
+the resulting merged config. `observations_deskew_pass` (the deskew method)
+is a YAML sequence, which deep-merge can only replace wholesale, not patch a
+single nested field in, so overriding its `method` requires duplicating that
+filter step verbatim with a different default, at the launcher's top level
+too. Both landed a launcher silently defaulting to `FixedPose` and linear
+deskew regardless of the (ineffective) override.
+
 ## Real-dataset runs
 
 ```bash

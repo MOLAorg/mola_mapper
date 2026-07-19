@@ -48,6 +48,26 @@
 #   MOLA_QUIT_ON_DATASET_END=true  to exit automatically when the bag ends
 #   MOLA_MAPPER3D_LOOP_CLOSURE=false  to disable loop closure
 #   MOLA_MAPPER3D_TUM_TRAJECTORY_OUTPUT=/path.tum  to dump the trajectory
+#
+# The defaults above target real-time operation: a good trajectory at low
+# compute (loop-closure candidates are restricted to nearby revisits, see
+# params/loop-closure-f2f-mapper-oxford-spires.yaml).
+#
+# OPTIONAL OFFLINE REFINEMENT MODE (slower, denser, more accurate):
+# loop closure can also be used as a map-refinement stage. It pays off only when
+# BOTH the keyframe graph is dense AND loop-closure candidate generation is
+# aggressive (either alone regresses). It is much heavier (thousands of ICP
+# evaluations, mostly in the end-of-run finalize pass), so it is OFF by default
+# and enabled by exporting this env-var bundle:
+#   # denser LidarOdometry keyframes (the constraint-graph nodes):
+#   MOLA_SIMPLEMAP_MIN_XYZ=1.5  MOLA_SIMPLEMAP_MIN_ROT=8
+#   # aggressive nearby-loop candidate generation:
+#   MIN_FRAMES_BETWEEN_LC=1  MAX_LC_CANDIDATES=400
+#   LC_SELECTION_METHOD=PROXIMITY_ONLY  MAX_LC_DISTANCE=20
+#   # more end-of-run refinement rounds:
+#   MOLA_MAPPER3D_LC_FINALIZE_ROUNDS=15  MAX_LC_OPTIMIZATION_ROUNDS=15
+# On observatory-quarter-01 this lifts the constraint graph to thousands of
+# loop-closure edges and the best measured accuracy of the dataset.
 # -----------------------------------------------------------------------------
 
 modules:

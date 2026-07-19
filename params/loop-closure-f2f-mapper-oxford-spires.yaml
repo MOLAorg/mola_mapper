@@ -25,3 +25,10 @@ $import: $(ros2 pkg prefix mola_mapper)/share/mola_mapper/params/loop-closure-f2
 
 params:
   threshold_sigma_final: "${LC_ICP_FINAL_SIGMA|0.3}"
+
+  # Restrict candidate generation to nearby revisits. On this dataset that gives
+  # the best accuracy/compute trade-off: single-scan ICP only bridges its own
+  # convergence basin, so far pairs mostly add cost and false candidates, while
+  # the finalize cascade brings genuine far loops back into range as drift
+  # shrinks. Env-overridable; raise for aggressive offline refinement.
+  max_distance_for_lc_candidate: "${MAX_LC_DISTANCE|15.0}"

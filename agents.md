@@ -161,7 +161,15 @@ docs/call-graph.md               Mermaid diagram tracing every public-API method
   vs 1.53 m with LC off. Note the real-time pipeline is non-deterministic (async
   optimizer + LC threads, scan drops under time-warp), so the absolute APE varies
   run-to-run (~0.25-0.5 m LC-on in good runs); LC helps in every fair
-  same-playback comparison.
+  same-playback comparison. Its default also restricts LC candidates to nearby
+  revisits (`max_distance_for_lc_candidate` 15 m) for a real-time accuracy/compute
+  balance; far pairs mostly add cost since single-scan ICP only bridges its basin.
+
+- LC can also serve as an offline map-refinement stage: a dense keyframe graph
+  plus aggressive nearby-candidate generation yields thousands of edges and the
+  best accuracy, but is much heavier (OFF by default, enabled via the env-var
+  bundle documented in the Oxford Spires launcher header). Denser keyframes or
+  denser candidates ALONE regress; both together win.
 
 - Online LC scans alone close few loops: a pair only closes once BOTH endpoints
   exist AND drift is small enough, which for big revisits happens near the end of

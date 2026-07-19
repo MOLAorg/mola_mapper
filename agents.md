@@ -144,8 +144,24 @@ docs/call-graph.md               Mermaid diagram tracing every public-API method
   `$import`s the package's f2f pipeline and overrides ONLY the ICP registration
   core (point-to-point instead of cov2cov; wider initial pairing sigma), so
   mola_sm_loop_closure keeps its own defaults. Both are needed for real loops to
-  pass acceptance at all. The KITTI and MulRan launchers enable LC by default and
-  point at it.
+  pass acceptance at all. The KITTI, MulRan and Oxford Spires launchers enable LC
+  by default and point at it.
+
+- Dense high-resolution LiDARs need a wider ICP FINAL pairing sigma too. The base
+  pipeline evaluates ICP quality as the paired-point ratio at the final annealed
+  threshold (`force_final_pairings_for_quality`, default 0.05 m). On the dense
+  Hesai clouds of Oxford Spires, even a correct cross-pass alignment lands few
+  points within 5 cm, so quality collapses to ~0% and every loop is rejected. The
+  Oxford Spires launcher therefore points at `params/loop-closure-f2f-mapper-
+  oxford-spires.yaml`, which `$import`s the shared mapper override and only raises
+  `threshold_sigma_final` to 0.3 m (env `LC_ICP_FINAL_SIGMA`). This is a
+  registration-resolution setting for a dense sensor, NOT a change to the
+  `min_icp_goodness` acceptance level; KITTI/MulRan keep 0.05 m. Validated on
+  observatory-quarter-01 (real-time, zero drops): 5 loops closed, APE RMSE 0.47 m
+  vs 1.53 m with LC off. Note the real-time pipeline is non-deterministic (async
+  optimizer + LC threads, scan drops under time-warp), so the absolute APE varies
+  run-to-run (~0.25-0.5 m LC-on in good runs); LC helps in every fair
+  same-playback comparison.
 
 - Online LC scans alone close few loops: a pair only closes once BOTH endpoints
   exist AND drift is small enough, which for big revisits happens near the end of
@@ -183,7 +199,11 @@ KITTI_SEQ=04 MOLA_LINK_FIRST_POSE_SIGMA=1e-6 \
 
 ```bash
 export OXFORD_SPIRES_ROSBAG2=/path/to/sequence/raw/ros2bag/<segment>
-mola-cli mola-cli-launchs/lidar_odometry_mapper_from_oxford_spires.yaml
+MOLA_WITH_GUI=false MOLA_MAPPER3D_TUM_TRAJECTORY_OUTPUT=/tmp/obs01.tum \
+  mola-cli mola-cli-launchs/lidar_odometry_mapper_from_oxford_spires.yaml
+# LiDAR+IMU only (no GNSS). Loop closure is ON by default (Hesai has per-point
+# timestamps, so the LC pipeline deskews normally). GT trajectories ship as TUM
+# under each sequence's processed/trajectory/gt-tum.txt.
 # Multi-segment sequences: override rosbag_filename in the YAML with a list
 # (Rosbag2Dataset supports multi-bag playback).
 ```

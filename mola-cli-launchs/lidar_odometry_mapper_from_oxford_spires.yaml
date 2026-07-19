@@ -33,12 +33,21 @@
 #
 #   mola-cli $(ros2 pkg prefix mola_mapper)/share/mola_mapper/mola-cli-launchs/lidar_odometry_mapper_from_oxford_spires.yaml
 #
+# LOOP CLOSURE is ON by default here: the Oxford Spires sequences walk closed
+# loops around Oxford colleges/quarters (revisiting the start and crossing prior
+# passes), so the mapper's background loop-closure thread (mola_sm_loop_closure
+# F2F engine) can cancel accumulated LiDAR-odometry drift. Disable with
+# MOLA_MAPPER3D_LOOP_CLOSURE=false. The Hesai PandarXT-32 provides per-point
+# timestamps, so the LC pipeline deskews normally (no ignore-no-timestamps flag).
+#
 # Recommended env vars (defaults already set for Oxford Spires below):
 #   MOLA_DESKEW_METHOD=MotionCompensationMethod::IMU      (IMU-based deskew)
 #   MOLA_LO_INITIAL_LOCALIZATION_METHOD=InitLocalization::PitchAndRollFromIMU
 #   MOLA_WITH_GUI=false    for headless / batch runs
 #   MOLA_TIME_WARP=N       to speed up (N>1) or slow down (N<1) playback
 #   MOLA_QUIT_ON_DATASET_END=true  to exit automatically when the bag ends
+#   MOLA_MAPPER3D_LOOP_CLOSURE=false  to disable loop closure
+#   MOLA_MAPPER3D_TUM_TRAJECTORY_OUTPUT=/path.tum  to dump the trajectory
 # -----------------------------------------------------------------------------
 
 modules:
@@ -123,6 +132,17 @@ modules:
       # graph floats and iSAM2 throws IndeterminantLinearSystemException.
       # estimate_geo_reference stays false (the common default).
       link_first_pose_to_reference_origin_sigma: ${MOLA_LINK_FIRST_POSE_SIGMA|1e-6}
+
+      # Loop closure ON by default (see header). Same thin mola_mapper wrapper
+      # the KITTI/MulRan launchers use: it $imports the shared f2f GICP pipeline
+      # from mola_sm_loop_closure and only widens the ICP convergence basin so
+      # real (drifted) loops close. Runs on a background thread off the
+      # query/solve path; accepted edges merge as robust BetweenFactors.
+      loop_closure_enabled: ${MOLA_MAPPER3D_LOOP_CLOSURE|true}
+      # Dataset-specific LC pipeline: same shared mapper override, but with a
+      # wider ICP final pairing sigma so the dense Hesai clouds' cross-pass
+      # overlap scores above the acceptance gate (see the pipeline file's header).
+      loop_closure_pipeline_file: "${MOLA_MAPPER3D_LC_PIPELINE|$(ros2 pkg prefix mola_mapper)/share/mola_mapper/params/loop-closure-f2f-mapper-oxford-spires.yaml}"
 
       # ~200 Hz IMU: buffer all readings in LocalVelocityBuffer and emit one
       # gravity/attitude/gyro factor set per keyframe (no per-sample factors).

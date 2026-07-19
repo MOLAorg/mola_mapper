@@ -151,6 +151,7 @@ void Parameters::loadFrom(const mrpt::containers::yaml & cfg)
   MCP_LOAD_OPT(cfg, loop_closure_incremental);
   MCP_LOAD_OPT(cfg, loop_closure_full_scan_every_n);
   MCP_LOAD_OPT(cfg, loop_closure_finalize_rounds);
+  MCP_LOAD_OPT(cfg, loop_closure_finalize_max_seconds);
   MCP_LOAD_OPT(cfg, loop_closure_edge_robust_param);
 
   // High-rate pose publisher

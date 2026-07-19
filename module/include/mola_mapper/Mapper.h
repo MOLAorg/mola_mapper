@@ -516,6 +516,12 @@ private:
   /// Stops and joins the loop-closure thread if running (no lock held).
   void stop_loop_closure_thread();
 
+  /// Shared shutdown sequence for the loop-closure thread: signals exit,
+  /// wakes it, and joins it if running. Resets lc_engine_ only when
+  /// resetEngine is true (finalize_loop_closures() keeps the engine alive for
+  /// its synchronous batch rounds; stop_loop_closure_thread() does not).
+  void stop_loop_closure_thread_locked(bool resetEngine);
+
   /// Runs one loop-closure scan: snapshots the map under stateMutex_, runs the
   /// detector off-lock (streaming + abortable), merges accepted edges, and wakes
   /// the optimizer. Returns the number of edges merged. When forceFullScan is

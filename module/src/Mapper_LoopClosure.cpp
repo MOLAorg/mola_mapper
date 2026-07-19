@@ -55,12 +55,16 @@ void Mapper::start_loop_closure_thread()
   // Allow raising the background LC engine verbosity independently of the
   // mapper's own logger (e.g. to inspect per-candidate ICP/global-registration
   // details), via env var. Defaults to the mapper's level.
+  auto lcVerbosity = this->getMinLoggingLevel();
   if (const char * v = ::getenv("MOLA_VERBOSITY_LOOP_CLOSURE"); v != nullptr) {
-    engine->setMinLoggingLevel(
-      mrpt::typemeta::TEnumType<mrpt::system::VerbosityLevel>::name2value(v));
-  } else {
-    engine->setMinLoggingLevel(this->getMinLoggingLevel());
+    try {
+      lcVerbosity = mrpt::typemeta::TEnumType<mrpt::system::VerbosityLevel>::name2value(v);
+    } catch (const std::exception & e) {
+      MRPT_LOG_WARN_STREAM(
+        "[loop_closure] ignoring invalid MOLA_VERBOSITY_LOOP_CLOSURE='" << v << "': " << e.what());
+    }
   }
+  engine->setMinLoggingLevel(lcVerbosity);
   const auto cfg = mola::load_yaml_file(params_.loop_closure_pipeline_file);
   engine->initialize(cfg);
   lc_engine_ = engine;
@@ -74,7 +78,9 @@ void Mapper::start_loop_closure_thread()
     "[loop_closure] started, pipeline='" << params_.loop_closure_pipeline_file << "'");
 }
 
-void Mapper::stop_loop_closure_thread()
+void Mapper::stop_loop_closure_thread() { stop_loop_closure_thread_locked(/*resetEngine=*/true); }
+
+void Mapper::stop_loop_closure_thread_locked(bool resetEngine)
 {
   if (!lc_thread_.joinable()) {
     return;
@@ -85,7 +91,9 @@ void Mapper::stop_loop_closure_thread()
   }
   lc_wakeup_cv_.notify_all();
   lc_thread_.join();
-  lc_engine_.reset();
+  if (resetEngine) {
+    lc_engine_.reset();
+  }
 }
 
 void Mapper::loop_closure_thread_loop()
@@ -223,14 +231,7 @@ void Mapper::finalize_loop_closures()
 
   // Stop the background LC thread (so we own the engine) but keep the engine
   // alive for the synchronous batch rounds below.
-  {
-    auto lk = mrpt::lockHelper(lc_wakeup_mutex_);
-    lc_should_exit_.store(true);
-  }
-  lc_wakeup_cv_.notify_all();
-  if (lc_thread_.joinable()) {
-    lc_thread_.join();
-  }
+  stop_loop_closure_thread_locked(/*resetEngine=*/false);
   lc_should_exit_.store(false);
 
   // Also stop the optimizer thread: the batch rounds re-optimize synchronously,
@@ -241,8 +242,20 @@ void Mapper::finalize_loop_closures()
     "[loop_closure] finalize: up to " << params_.loop_closure_finalize_rounds
                                       << " batch full-scan rounds");
 
+  const auto t0 = std::chrono::steady_clock::now();
+
   std::size_t total = 0;
   for (uint32_t round = 0; round < params_.loop_closure_finalize_rounds; round++) {
+    if (params_.loop_closure_finalize_max_seconds > 0) {
+      const std::chrono::duration<double> elapsed = std::chrono::steady_clock::now() - t0;
+      if (elapsed.count() >= params_.loop_closure_finalize_max_seconds) {
+        MRPT_LOG_WARN_STREAM(
+          "[loop_closure] finalize: time budget of " << params_.loop_closure_finalize_max_seconds
+                                                     << " s reached after " << round
+                                                     << " round(s), stopping");
+        break;
+      }
+    }
     const std::size_t merged = run_loop_closure_scan(/*forceFullScan=*/true);
     if (merged == 0) {
       break;  // converged: no new loops this round

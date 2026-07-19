@@ -31,6 +31,7 @@
 
 #include <chrono>
 #include <exception>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -51,6 +52,19 @@ void Mapper::start_loop_closure_thread()
   // Create and configure the detector engine (F2F). We only ever call its
   // detector-only analyze() from the LC thread; process() is not used here.
   auto engine = std::make_shared<mola::FrameToFrameLoopClosure>();
+  // Allow raising the background LC engine verbosity independently of the
+  // mapper's own logger (e.g. to inspect per-candidate ICP/global-registration
+  // details), via env var. Defaults to the mapper's level.
+  auto lcVerbosity = this->getMinLoggingLevel();
+  if (const char * v = ::getenv("MOLA_VERBOSITY_LOOP_CLOSURE"); v != nullptr) {
+    try {
+      lcVerbosity = mrpt::typemeta::TEnumType<mrpt::system::VerbosityLevel>::name2value(v);
+    } catch (const std::exception & e) {
+      MRPT_LOG_WARN_STREAM(
+        "[loop_closure] ignoring invalid MOLA_VERBOSITY_LOOP_CLOSURE='" << v << "': " << e.what());
+    }
+  }
+  engine->setMinLoggingLevel(lcVerbosity);
   const auto cfg = mola::load_yaml_file(params_.loop_closure_pipeline_file);
   engine->initialize(cfg);
   lc_engine_ = engine;
@@ -64,7 +78,9 @@ void Mapper::start_loop_closure_thread()
     "[loop_closure] started, pipeline='" << params_.loop_closure_pipeline_file << "'");
 }
 
-void Mapper::stop_loop_closure_thread()
+void Mapper::stop_loop_closure_thread() { stop_loop_closure_thread_locked(/*resetEngine=*/true); }
+
+void Mapper::stop_loop_closure_thread_locked(bool resetEngine)
 {
   if (!lc_thread_.joinable()) {
     return;
@@ -75,7 +91,9 @@ void Mapper::stop_loop_closure_thread()
   }
   lc_wakeup_cv_.notify_all();
   lc_thread_.join();
-  lc_engine_.reset();
+  if (resetEngine) {
+    lc_engine_.reset();
+  }
 }
 
 void Mapper::loop_closure_thread_loop()
@@ -100,20 +118,24 @@ void Mapper::loop_closure_thread_loop()
   }
 }
 
-std::size_t Mapper::run_loop_closure_scan()
+std::size_t Mapper::run_loop_closure_scan(bool forceFullScan)
 {
   if (!lc_engine_) {
     return 0;
   }
 
   // 1) Snapshot the central map under the state lock (cheap gate first, to
-  //    avoid copying observations when the map barely grew).
+  //    avoid copying observations when the map barely grew). The finalize pass
+  //    re-examines the same (complete) map every round, so it bypasses the
+  //    min-new-keyframes gate.
   mrpt::maps::CSimpleMap snapshot;
   std::vector<KeyFrameID> frameIds;
   {
     auto lck = mrpt::lockHelper(stateMutex_);
     const std::size_t kfCount = state_.time_to_kf_id.size();
-    if (kfCount < lc_scan_.kf_count_at_last_scan + params_.loop_closure_min_new_keyframes) {
+    if (
+      !forceFullScan &&
+      kfCount < lc_scan_.kf_count_at_last_scan + params_.loop_closure_min_new_keyframes) {
       return 0;  // not enough new keyframes yet
     }
     snapshot = state_.as_simple_map(&frameIds);
@@ -124,7 +146,7 @@ std::size_t Mapper::run_loop_closure_scan()
   }
 
   // 2) Decide incremental vs full scan.
-  bool fullScan = !params_.loop_closure_incremental;
+  bool fullScan = forceFullScan || !params_.loop_closure_incremental;
   if (
     params_.loop_closure_incremental && params_.loop_closure_full_scan_every_n > 0 &&
     lc_scan_.incremental_scans_since_full >= params_.loop_closure_full_scan_every_n) {
@@ -142,9 +164,28 @@ std::size_t Mapper::run_loop_closure_scan()
   // Abort promptly on shutdown.
   opts.should_abort = [this] { return lc_should_exit_.load(); };
 
+  // Exclude already-closed pairs from candidate selection so each scan spends
+  // its budget on new loops instead of re-proposing the same ones. merged_pairs
+  // holds keyframe ids; map them to snapshot indices for this scan.
+  {
+    std::unordered_map<KeyFrameID, uint32_t> kfIdToIndex;
+    kfIdToIndex.reserve(frameIds.size());
+    for (uint32_t i = 0; i < frameIds.size(); i++) {
+      kfIdToIndex[frameIds[i]] = i;
+    }
+    for (const auto & [a, b] : lc_scan_.merged_pairs) {
+      const auto ia = kfIdToIndex.find(a);
+      const auto ib = kfIdToIndex.find(b);
+      if (ia != kfIdToIndex.end() && ib != kfIdToIndex.end()) {
+        opts.exclude_pairs.insert(std::minmax(ia->second, ib->second));
+      }
+    }
+  }
+
   // 3) Stream accepted edges into the graph as soon as they are found, mapping
   //    snapshot frame indices back to keyframe ids. The heavy ICP runs here
-  //    OFF the state lock; only each merge briefly re-takes it.
+  //    OFF the state lock; only each merge briefly re-takes it. Count only
+  //    edges actually added (a duplicate merge adds nothing).
   std::size_t merged = 0;
   opts.on_edge_found = [&](const mola::ProposedLoopEdge & e) {
     if (e.from >= frameIds.size() || e.to >= frameIds.size()) {
@@ -152,11 +193,14 @@ std::size_t Mapper::run_loop_closure_scan()
     }
     const KeyFrameID kfFrom = frameIds[e.from];
     const KeyFrameID kfTo = frameIds[e.to];
+    bool added = false;
     {
       auto lck = mrpt::lockHelper(stateMutex_);
-      merge_loop_closure_edge_locked(kfFrom, kfTo, e.relative_pose);
+      added = merge_loop_closure_edge_locked(kfFrom, kfTo, e.relative_pose);
     }
-    merged++;
+    if (added) {
+      merged++;
+    }
   };
 
   lc_engine_->analyze(snapshot, opts);
@@ -176,11 +220,63 @@ std::size_t Mapper::run_loop_closure_scan()
   return merged;
 }
 
-void Mapper::merge_loop_closure_edge_locked(
+void Mapper::finalize_loop_closures()
+{
+  if (!params_.loop_closure_enabled || !lc_engine_) {
+    return;
+  }
+  if (params_.loop_closure_finalize_rounds == 0) {
+    return;
+  }
+
+  // Stop the background LC thread (so we own the engine) but keep the engine
+  // alive for the synchronous batch rounds below.
+  stop_loop_closure_thread_locked(/*resetEngine=*/false);
+  lc_should_exit_.store(false);
+
+  // Also stop the optimizer thread: the batch rounds re-optimize synchronously,
+  // so a concurrently-running optimizer thread would race optimize_and_refresh().
+  stop_optimizer_thread();
+
+  MRPT_LOG_INFO_STREAM(
+    "[loop_closure] finalize: up to " << params_.loop_closure_finalize_rounds
+                                      << " batch full-scan rounds");
+
+  const auto t0 = std::chrono::steady_clock::now();
+
+  std::size_t total = 0;
+  for (uint32_t round = 0; round < params_.loop_closure_finalize_rounds; round++) {
+    if (params_.loop_closure_finalize_max_seconds > 0) {
+      const std::chrono::duration<double> elapsed = std::chrono::steady_clock::now() - t0;
+      if (elapsed.count() >= params_.loop_closure_finalize_max_seconds) {
+        MRPT_LOG_WARN_STREAM(
+          "[loop_closure] finalize: time budget of " << params_.loop_closure_finalize_max_seconds
+                                                     << " s reached after " << round
+                                                     << " round(s), stopping");
+        break;
+      }
+    }
+    const std::size_t merged = run_loop_closure_scan(/*forceFullScan=*/true);
+    if (merged == 0) {
+      break;  // converged: no new loops this round
+    }
+    total += merged;
+    // Re-optimize synchronously so the next round sees the reduced drift, which
+    // brings further loop candidates within the ICP convergence basin.
+    optimize_and_refresh();
+    MRPT_LOG_INFO_STREAM(
+      "[loop_closure] finalize round " << (round + 1) << ": merged " << merged << " edge(s) (total "
+                                       << total << ")");
+  }
+
+  MRPT_LOG_INFO_STREAM("[loop_closure] finalize done: " << total << " edge(s) added");
+}
+
+bool Mapper::merge_loop_closure_edge_locked(
   KeyFrameID from, KeyFrameID to, const mrpt::poses::CPose3DPDFGaussian & relPose)
 {
   if (from == to) {
-    return;
+    return false;
   }
 
   // Skip pairs already closed in a previous scan: a periodic full scan
@@ -188,7 +284,7 @@ void Mapper::merge_loop_closure_edge_locked(
   // pair would over-weight the constraint and grow the graph without bound.
   const std::pair<KeyFrameID, KeyFrameID> pairKey = std::minmax(from, to);
   if (!lc_scan_.merged_pairs.insert(pairKey).second) {
-    return;
+    return false;
   }
 
   // Convert the proposed relative pose + covariance to the GTSAM Pose3 tangent
@@ -212,6 +308,7 @@ void Mapper::merge_loop_closure_edge_locked(
     T(from), T(to), relMean, robust);
 
   state_.add_kf_connectivity(from, to);
+  return true;
 }
 
 }  // namespace mola::mapper

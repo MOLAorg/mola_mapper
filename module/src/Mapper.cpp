@@ -51,6 +51,14 @@ Mapper::Mapper()
 
 Mapper::~Mapper()
 {
+  // Batch loop-closure pass over the now-complete trajectory (stops the LC
+  // thread internally, then runs full scans + re-optimization to convergence).
+  try {
+    finalize_loop_closures();
+  } catch (const std::exception & e) {
+    MRPT_LOG_ERROR_STREAM("[loop_closure] finalize failed: " << e.what());
+  }
+
   // Stop the LC thread first: it feeds the optimizer, so it must not enqueue
   // more work once the optimizer is gone.
   stop_loop_closure_thread();
@@ -247,8 +255,7 @@ void Mapper::saveSimpleMapToFile()
   }
 
   const auto & fil = params_.save_simplemap_file;
-  MRPT_LOG_INFO_STREAM(
-    "Saving simplemap with " << sm.size() << " keyframes to '" << fil << "'...");
+  MRPT_LOG_INFO_STREAM("Saving simplemap with " << sm.size() << " keyframes to '" << fil << "'...");
 
   std::vector<std::future<void>> pendingDiskIO;
 
@@ -263,9 +270,9 @@ void Mapper::saveSimpleMapToFile()
     if (!mrpt::system::directoryExists(out_basedir)) {
       const bool dirCreatedOk = mrpt::system::createDirectory(out_basedir);
       ASSERTMSG_(
-        dirCreatedOk, mrpt::format(
-                        "Error creating lazy-load directory for output simplemap: '%s'",
-                        out_basedir.c_str()));
+        dirCreatedOk,
+        mrpt::format(
+          "Error creating lazy-load directory for output simplemap: '%s'", out_basedir.c_str()));
       MRPT_LOG_INFO_STREAM("Creating lazy-load directory for output .simplemap: " << out_basedir);
     }
 

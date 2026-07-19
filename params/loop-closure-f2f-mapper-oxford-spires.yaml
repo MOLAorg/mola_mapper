@@ -1,0 +1,34 @@
+# ============================================================================
+# Loop-closure ICP configuration for the Oxford Spires mapper launcher
+# ============================================================================
+# Imports the shared mola_mapper loop-closure override (loop-closure-f2f-mapper.yaml)
+# UNCHANGED and bumps ONLY the ICP final pairing sigma. Rationale:
+#
+# The base pipeline evaluates ICP quality as the ratio of point pairs within the
+# FINAL annealed pairing threshold (force_final_pairings_for_quality: true), which
+# defaults to 0.05 m. On the KITTI/MulRan spinning-Velodyne clouds a genuine loop
+# aligns to well under 5 cm, so that gate is fine. The Oxford Spires Hesai
+# PandarXT-32 is much denser and the sequences are outdoor walks with real
+# residual drift between passes, so almost no points fall within 5 cm even for a
+# correct alignment -> the paired-ratio quality collapses to ~0% and every loop is
+# rejected, despite ICP converging with a small pose correction.
+#
+# Widening the final pairing sigma to 0.3 m makes the quality reflect the true
+# cross-pass overlap (genuine loops score 60-80%, wrong ones stay ~0%), so real
+# loops close. This is a registration-resolution parameter for a dense sensor, NOT
+# a relaxation of the min_icp_goodness acceptance level (which stays at the shared
+# override's value). Env-overridable via LC_ICP_FINAL_SIGMA. The KITTI/MulRan
+# launchers keep the 0.05 m default (they point at loop-closure-f2f-mapper.yaml).
+# ============================================================================
+
+$import: $(ros2 pkg prefix mola_mapper)/share/mola_mapper/params/loop-closure-f2f-mapper.yaml
+
+params:
+  threshold_sigma_final: "${LC_ICP_FINAL_SIGMA|0.3}"
+
+  # Restrict candidate generation to nearby revisits. On this dataset that gives
+  # the best accuracy/compute trade-off: single-scan ICP only bridges its own
+  # convergence basin, so far pairs mostly add cost and false candidates, while
+  # the finalize cascade brings genuine far loops back into range as drift
+  # shrinks. Env-overridable; raise for aggressive offline refinement.
+  max_distance_for_lc_candidate: "${MAX_LC_DISTANCE|15.0}"

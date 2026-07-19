@@ -11,17 +11,27 @@
 # for headless/automated runs with MOLA_WITH_GUI=false, or switch back to the
 # older nanogui-based mola::MolaViz with MOLA_GUI_MODULE=mola::MolaViz.
 #
-# Usage:
-#   export KITTI_BASE_DIR=/path/to/kitti_root
-#   KITTI_SEQ=04 MOLA_LINK_FIRST_POSE_SIGMA=1e-6 mola-cli $(ros2 pkg prefix mola_mapper)/share/mola_mapper/mola-cli-launchs/lidar_odometry_mapper_from_kitti.yaml
+# LOOP CLOSURE is ON by default here: several KITTI odometry sequences (00, 02,
+# 05, 06, 07, 08, 09) revisit places, so the mapper's background loop-closure
+# thread (mola_sm_loop_closure engine) can cancel accumulated LiDAR-odometry
+# drift. Disable with MOLA_MAPPER3D_LOOP_CLOSURE=false. KITTI scans carry NO
+# per-point timestamps, so the loop-closure pipeline must be told to skip its
+# deskew/timestamp-adjust filters: this launcher's usage sets
+# MOLA_DESKEW_IGNORE_NO_TIMESTAMPS=true for that reason.
 #
-# MOLA_LINK_FIRST_POSE_SIGMA is REQUIRED for pure-odometry runs like this one
-# (no GNSS/fixed_geo_reference to fix the gauge): without it, mapper_3d's
-# whole graph is gauge-free (only relative geometry is determined), so
-# estimated_navstate() returns ~1e6-sigma absolute poses and LidarOdometry
-# discards the motion model every step ("Discarding motion model ... due to
-# large uncertainty"), which starves the local map of updates and the
-# SharedKeyframeMap sink of keyframes. See Parameters.h's
+# Usage (loop-closure enabled, headless benchmark):
+#   export KITTI_BASE_DIR=/path/to/kitti_root
+#   KITTI_SEQ=00 MOLA_DESKEW_IGNORE_NO_TIMESTAMPS=true MOLA_WITH_GUI=false \
+#   MOLA_MAPPER3D_TUM_TRAJECTORY_OUTPUT=/tmp/kitti00.tum \
+#     mola-cli $(ros2 pkg prefix mola_mapper)/share/mola_mapper/mola-cli-launchs/lidar_odometry_mapper_from_kitti.yaml
+#
+# This is a pure-odometry run (no GNSS/fixed_geo_reference), so the graph gauge
+# is pinned via link_first_pose_to_reference_origin_sigma (defaulted to 1e-6
+# below). Without such an anchor the whole graph is gauge-free (only relative
+# geometry is determined), so estimated_navstate() returns ~1e6-sigma absolute
+# poses and LidarOdometry discards the motion model every step ("Discarding
+# motion model ... due to large uncertainty"), starving the local map and the
+# SharedKeyframeMap sink. See Parameters.h's
 # link_first_pose_to_reference_origin_sigma doc.
 # -----------------------------------------------------------------------------
 
@@ -78,5 +88,28 @@ modules:
   - name: mapper3d
     type: mola::mapper::Mapper
     verbosity_level: "${MOLA_VERBOSITY_MAPPER3D|INFO}"
-    # This includes here a whole block "params: (...)":
-    params: "${MOLA_MAPPER3D_YAML|../params/mapper-3d.yaml}"
+
+    params:
+      # Import the shared defaults and override ONLY the KITTI-specific keys
+      # (mola_yaml `$import`: imported file is the base; siblings override it):
+      $import: ../params/mapper-3d-common.yaml
+
+      # Pure-LiDAR odometry: pin the gauge (no GNSS/IMU to fix it). See header.
+      link_first_pose_to_reference_origin_sigma: ${MOLA_LINK_FIRST_POSE_SIGMA|1e-6}
+
+      # Loop closure ON by default (KITTI 00/02/05/06/07/08/09 revisit places).
+      # The engine runs on a background thread off the query/solve path and
+      # merges accepted edges as robust BetweenFactors. The pipeline below is a
+      # thin mola_mapper wrapper (params/loop-closure-f2f-mapper.yaml) that
+      # $imports the shared frame-to-frame GICP pipeline from mola_sm_loop_closure
+      # and only widens the ICP convergence basin so real (drifted) loops close;
+      # the package keeps its own defaults. Deskew/timestamp filters are skipped
+      # for KITTI via MOLA_DESKEW_IGNORE_NO_TIMESTAMPS=true (see header).
+      loop_closure_enabled: ${MOLA_MAPPER3D_LOOP_CLOSURE|true}
+      loop_closure_pipeline_file: "${MOLA_MAPPER3D_LC_PIPELINE|$(ros2 pkg prefix mola_mapper)/share/mola_mapper/params/loop-closure-f2f-mapper.yaml}"
+
+    # Optional visualization (MolaViz / MolaVizImGui): keyframe tree + graph
+    # edges in {map}, with each odometry source's movable {odom_i} frame node.
+    visualization:
+      update_rate_hz: 5.0
+      keyframe_corner_size: 0.5

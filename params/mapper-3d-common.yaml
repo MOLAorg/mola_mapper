@@ -148,8 +148,14 @@ loop_closure_min_new_keyframes: ${MOLA_MAPPER3D_LC_MIN_NEW_KFS|10}
 # Incremental scans only test candidate pairs that involve a new keyframe; a
 # full scan is forced every N incremental scans to recover loops that only
 # become plausible after re-optimization (0 = never force a full scan).
-loop_closure_incremental: true
-loop_closure_full_scan_every_n: 10
+loop_closure_incremental: ${MOLA_MAPPER3D_LC_INCREMENTAL|true}
+loop_closure_full_scan_every_n: ${MOLA_MAPPER3D_LC_FULL_SCAN_EVERY_N|10}
+
+# After the dataset ends, run up to this many batch loop-closure rounds (each a
+# full scan + synchronous re-optimization) until no new loops are found. Online
+# scans miss loops whose two endpoints only both exist late in the run; this
+# recovers them. 0 disables.
+loop_closure_finalize_rounds: ${MOLA_MAPPER3D_LC_FINALIZE_ROUNDS|8}
 
 # Huber robust-kernel threshold [sigmas] applied to merged LC edges.
 loop_closure_edge_robust_param: 1.5

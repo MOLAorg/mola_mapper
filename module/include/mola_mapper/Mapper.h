@@ -516,15 +516,33 @@ private:
   /// Stops and joins the loop-closure thread if running (no lock held).
   void stop_loop_closure_thread();
 
+  /// Shared shutdown sequence for the loop-closure thread: signals exit,
+  /// wakes it, and joins it if running. Resets lc_engine_ only when
+  /// resetEngine is true (finalize_loop_closures() keeps the engine alive for
+  /// its synchronous batch rounds; stop_loop_closure_thread() does not).
+  void stop_loop_closure_thread_locked(bool resetEngine);
+
   /// Runs one loop-closure scan: snapshots the map under stateMutex_, runs the
   /// detector off-lock (streaming + abortable), merges accepted edges, and wakes
-  /// the optimizer. Returns the number of edges merged.
-  std::size_t run_loop_closure_scan();
+  /// the optimizer. Returns the number of edges merged. When forceFullScan is
+  /// true, the min-new-keyframes gate and incremental hint are bypassed so the
+  /// entire map is re-examined (used by the finalize pass).
+  std::size_t run_loop_closure_scan(bool forceFullScan = false);
+
+  /// After the dataset ends, repeatedly runs full loop-closure scans interleaved
+  /// with a synchronous re-optimization, until a round finds no new loops or the
+  /// round budget is exhausted. Online scans only close loops near the end of the
+  /// run (both endpoints must exist and drift must already be small); this batch
+  /// pass recovers the remaining loops now that the whole trajectory is present
+  /// and each round's optimization shrinks the drift for the next. No-op when
+  /// loop_closure_finalize_rounds is 0. (Mapper_LoopClosure.cpp)
+  void finalize_loop_closures();
 
   /// Adds one accepted loop-closure edge as a robust BetweenFactor(T(from),
-  /// T(to)) built from the proposed relative pose + covariance. Caller holds
-  /// stateMutex_.
-  void merge_loop_closure_edge_locked(
+  /// T(to)) built from the proposed relative pose + covariance. Returns false
+  /// (adding nothing) if this pair was already closed in an earlier scan.
+  /// Caller holds stateMutex_.
+  bool merge_loop_closure_edge_locked(
     KeyFrameID from, KeyFrameID to, const mrpt::poses::CPose3DPDFGaussian & relPose);
 
   /// Writes the current estimated trajectory (all keyframe poses in

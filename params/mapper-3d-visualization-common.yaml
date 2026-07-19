@@ -1,0 +1,20 @@
+# ============================================================================
+# Shared default `visualization` block for mola::mapper::Mapper
+# ============================================================================
+# This is a FLAT fragment (no top-level `visualization:` wrapper) meant to be
+# pulled in via the mola_yaml `$import` directive, so both the standalone
+# module config and per-dataset launch files share these defaults, e.g.:
+#
+#   visualization:
+#     $import: ../params/mapper-3d-visualization-common.yaml
+#
+# (`$import`: the imported file is the base; sibling keys override it.)
+#
+# Refer to:
+# https://docs.mola-slam.org/latest/
+# https://github.com/MOLAorg/mola_mapper
+# ============================================================================
+
+update_rate_hz: 5.0
+keyframe_corner_size: 0.5    # XYZ-corner scale (m) at each keyframe pose; 0 = hidden
+keyframe_sphere_radius: 0.2  # position-only sphere marker (m) at each keyframe; 0 = hidden

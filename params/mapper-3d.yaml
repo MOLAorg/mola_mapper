@@ -27,5 +27,4 @@ params:
 # odometry source's movable {odom_i} frame node (LidarOdometry draws its dense
 # clouds / local map under it via render_in_movable_frame).
 visualization:
-  update_rate_hz: 5.0
-  keyframe_corner_size: 0.5
+  $import: mapper-3d-visualization-common.yaml

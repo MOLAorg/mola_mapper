@@ -34,6 +34,7 @@
 #include <array>
 #include <cmath>
 #include <set>
+#include <type_traits>
 #include <utility>
 
 namespace mola::mapper
@@ -46,6 +47,34 @@ namespace
 constexpr std::array<float, 7> kKeyframeCornerScalePresets{0.0f, 0.1f, 0.2f, 0.3f,
                                                            0.5f, 1.0f, 2.0f};
 constexpr std::array<float, 6> kKeyframeSphereRadiusPresets{0.0f, 0.1f, 0.2f, 0.3f, 0.5f, 1.0f};
+// Fixed pixel width for the two combo boxes above, so their (short) option
+// labels don't stretch to fill the sub-window as it is resized (ImGui's
+// default combo width tracks the available content width).
+constexpr int kComboFixedWidthPx = 90;
+
+// mola::gui::ComboBox::fixed_width was added after this file's minimum
+// supported mola_kernel; detect it at compile time (rather than pinning a
+// mola_kernel version number) so this still builds against older headers.
+template <typename T, typename = void>
+struct combo_has_fixed_width : std::false_type
+{
+};
+template <typename T>
+struct combo_has_fixed_width<T, std::void_t<decltype(std::declval<T &>().fixed_width)>>
+: std::true_type
+{
+};
+
+template <typename ComboBoxT>
+void setComboFixedWidthIfSupported(ComboBoxT & combo, int width)
+{
+  if constexpr (combo_has_fixed_width<ComboBoxT>::value) {
+    combo.fixed_width = width;
+  } else {
+    (void)combo;
+    (void)width;
+  }
+}
 
 template <std::size_t N>
 int closestPresetIndex(const std::array<float, N> & presets, float value)
@@ -431,28 +460,34 @@ void Mapper::internalBuildGUI()
     // Viz reference frame: which frame is the scene origin (0,0,0). "enu" (the
     // default) renders the map North-oriented via T_enu_to_map (identity, hence
     // == map, until a geo-reference is estimated).
-    tab.widgets.emplace_back(ComboBox{
+    ComboBox frameSelectionCombo{
       "Viz reference frame", {"map", "enu"}, viz_reference_frame_.load(), [this](int index) {
         viz_reference_frame_.store(index);
-      }});
+      }};
+    setComboFixedWidthIfSupported(frameSelectionCombo, kComboFixedWidthPx);
+    tab.widgets.emplace_back(frameSelectionCombo);
+    ComboBox cornerScaleCombo{
+      "Corner scale",
+      {"Off", "0.1 m", "0.2 m", "0.3 m", "0.5 m", "1.0 m", "2.0 m"},
+      closestPresetIndex(kKeyframeCornerScalePresets, viz_keyframe_corner_scale_.load()),
+      [this](int index) {
+        viz_keyframe_corner_scale_.store(kKeyframeCornerScalePresets.at(index));
+      }};
+    setComboFixedWidthIfSupported(cornerScaleCombo, kComboFixedWidthPx);
+    ComboBox sphereRadiusCombo{
+      "Sphere radius",
+      {"Off", "0.1 m", "0.2 m", "0.3 m", "0.5 m", "1.0 m"},
+      closestPresetIndex(kKeyframeSphereRadiusPresets, viz_keyframe_sphere_radius_.load()),
+      [this](int index) {
+        viz_keyframe_sphere_radius_.store(kKeyframeSphereRadiusPresets.at(index));
+      }};
+    setComboFixedWidthIfSupported(sphereRadiusCombo, kComboFixedWidthPx);
     tab.widgets.emplace_back(Row{{
       CheckBox{
         "Show keyframes", viz_show_keyframes_.load(),
         [this](bool checked) { viz_show_keyframes_.store(checked); }},
-      ComboBox{
-        "Corner scale",
-        {"Off", "0.1 m", "0.2 m", "0.3 m", "0.5 m", "1.0 m", "2.0 m"},
-        closestPresetIndex(kKeyframeCornerScalePresets, viz_keyframe_corner_scale_.load()),
-        [this](int index) {
-          viz_keyframe_corner_scale_.store(kKeyframeCornerScalePresets.at(index));
-        }},
-      ComboBox{
-        "Sphere radius",
-        {"Off", "0.1 m", "0.2 m", "0.3 m", "0.5 m", "1.0 m"},
-        closestPresetIndex(kKeyframeSphereRadiusPresets, viz_keyframe_sphere_radius_.load()),
-        [this](int index) {
-          viz_keyframe_sphere_radius_.store(kKeyframeSphereRadiusPresets.at(index));
-        }},
+      std::move(cornerScaleCombo),
+      std::move(sphereRadiusCombo),
     }});
     tab.widgets.emplace_back(CheckBox{
       "Show graph edges", viz_show_edges_.load(),

@@ -49,6 +49,7 @@
 #include <numeric>
 
 #include "GtsamData.h"
+#include "covariance_utils.h"
 #include "factor_builders.h"
 
 namespace mola::mapper
@@ -125,15 +126,6 @@ mrpt::poses::CPose3D body_twist_delta(
   }
 }
 
-/// Returns (max position sigma [m], max orientation sigma [deg]) from an SE(3)
-/// covariance using MRPT's (x, y, z, yaw, pitch, roll) convention.
-std::pair<double, double> max_pos_and_orientation_sigma(const mrpt::math::CMatrixDouble66 & cov)
-{
-  const double maxPosSigma = std::sqrt(std::max({cov(0, 0), cov(1, 1), cov(2, 2)}));
-  const double maxOriSigmaDeg =
-    mrpt::RAD2DEG(std::sqrt(std::max({cov(3, 3), cov(4, 4), cov(5, 5)})));
-  return {maxPosSigma, maxOriSigmaDeg};
-}
 }  // namespace
 
 // ---------------------------------------------------------------------------

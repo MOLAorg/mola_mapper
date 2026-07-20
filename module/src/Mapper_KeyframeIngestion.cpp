@@ -13,7 +13,7 @@
 */
 
 /**
- * @file   Mapper3D_KeyframeIngestion.cpp
+ * @file   Mapper_KeyframeIngestion.cpp
  * @brief  SharedKeyframeMap sink: central-map keyframe ingestion from front
  *         ends (LIO/VIO).
  * @author Jose Luis Blanco Claraco

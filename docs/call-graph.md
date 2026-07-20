@@ -93,7 +93,7 @@ flowchart TD
     %% Spinonce
     %% ----------------------------------------------------------------
     SPIN --> PUB_POSE["publish_high_rate_pose()"]
-    SPIN --> VIZ["updateVisualization()\n(Mapper3D_GUI.cpp)"]
+    SPIN --> VIZ["updateVisualization()\n(Mapper_GUI.cpp)"]
     PUB_POSE --> EST_NAV
 
     %% ----------------------------------------------------------------

@@ -1,7 +1,7 @@
 # Unit tests:
 mola_add_test(
-  TARGET  test-mapper3d-basic
-  SOURCES test-mapper3d-basic.cpp
+  TARGET  test-mapper-basic
+  SOURCES test-mapper-basic.cpp
   LINK_LIBRARIES
     mola::mola_mapper
 )
@@ -65,6 +65,20 @@ mola_add_test(
 mola_add_test(
   TARGET  test-multisource-georef-stability
   SOURCES test-multisource-georef-stability.cpp
+  LINK_LIBRARIES
+    mola::mola_mapper
+)
+
+mola_add_test(
+  TARGET  test-relocalize-georef
+  SOURCES test-relocalize-georef.cpp
+  LINK_LIBRARIES
+    mola::mola_mapper
+)
+
+mola_add_test(
+  TARGET  test-predict-twist-filter
+  SOURCES test-predict-twist-filter.cpp
   LINK_LIBRARIES
     mola::mola_mapper
 )

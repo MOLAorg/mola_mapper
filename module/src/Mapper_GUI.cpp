@@ -13,7 +13,7 @@
 */
 
 /**
- * @file   Mapper3D_GUI.cpp
+ * @file   Mapper_GUI.cpp
  * @brief  Visualization (MolaViz / MolaVizImGui) for the central 3D map:
  *         keyframe tree, graph edges, and per-source movable {odom_i} frames.
  * @author Jose Luis Blanco Claraco
@@ -233,7 +233,7 @@ void Mapper::updateVisualization()
       glKfs->insert(glPath);
     }
     glKfs->setPose(vizXform);
-    visualizer_->update_3d_object("mapper3d/keyframes", glKfs);
+    visualizer_->update_3d_object("mapper/keyframes", glKfs);
   }
 
   // --- Graph edges ---
@@ -248,7 +248,7 @@ void Mapper::updateVisualization()
       glEdges->insert(glLines);
     }
     glEdges->setPose(vizXform);
-    visualizer_->update_3d_object("mapper3d/edges", glEdges);
+    visualizer_->update_3d_object("mapper/edges", glEdges);
   }
 
   // --- Ground grid (XY extent from the trajectory bounding box) ---
@@ -282,7 +282,7 @@ void Mapper::updateVisualization()
       glGroundGrid->insert(glGrid);
     }
     glGroundGrid->setPose(vizXform);
-    visualizer_->update_3d_object("mapper3d/groundgrid", glGroundGrid);
+    visualizer_->update_3d_object("mapper/groundgrid", glGroundGrid);
   }
 
   // --- Per-source movable frame nodes + visible markers ---
@@ -329,7 +329,7 @@ void Mapper::updateVisualization()
       glMarkers->insert(glEnuText);
     }
     glMarkers->setPose(vizXform);
-    visualizer_->update_3d_object("mapper3d/odom_frames", glMarkers);
+    visualizer_->update_3d_object("mapper/odom_frames", glMarkers);
   }
 
   // --- Camera follow ---

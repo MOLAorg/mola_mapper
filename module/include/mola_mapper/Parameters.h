@@ -44,7 +44,7 @@ enum class KinematicModel : uint8_t
  *  - Auto: acts like SharedMapOnly once any requestInsertKeyframe() call is
  *    received; before that, falls back to legacy creation (all paths create KFs
  *    at min_time_difference_to_create_new_frame). Suitable for typical
- *    LIO+mapper3d deployments: the first sparse KF from LIO flips the mode.
+ *    LIO+mapper deployments: the first sparse KF from LIO flips the mode.
  *  - SharedMapOnly: ONLY requestInsertKeyframe() creates keyframe GTSAM
  *    variables. Dense fuse_pose(), fuse_imu(), fuse_odometry(), fuse_gnss()
  *    only record the predictor anchor and snap to the nearest EXISTING keyframe
@@ -142,10 +142,31 @@ public:
   /// (wheels + IMU + GNSS without LIO/VIO).
   double sensor_clock_min_period_s = 0.5;  // [s]
 
-  double sigma_random_walk_acceleration_linear = 1.0;   // [m/s^2]
+  /// Acceleration random-walk sigmas of the kinematic (constant-velocity)
+  /// factors, and of the twist/pose covariance growth in the short-term
+  /// prediction. Moderate by default: a loose angular sigma lets the newest
+  /// keyframe's yaw rate swing between solves, which rotates the predicted
+  /// pose. Loosen only for platforms with genuinely high linear/angular
+  /// acceleration.
+  double sigma_random_walk_acceleration_linear = 0.5;   // [m/s^2]
   double sigma_random_walk_acceleration_angular = 1.0;  // [rad/s^2]
   double sigma_integrator_position = 0.10;              // [m]
   double sigma_integrator_orientation = 0.10;           // [rad]
+
+  /// If true, the velocity used for short-term extrapolation in
+  /// estimated_navstate() is a low-pass-filtered twist instead of the raw one.
+  /// Applies to BOTH velocity sources: the newest keyframe's optimized V/W
+  /// (re-jittered by every absolute factor over the non-windowed central map)
+  /// and each source's own finite-difference `local_twist` (a single-interval
+  /// difference of consecutive raw poses, hence noisy). Extrapolating either
+  /// un-damped feeds a jittery motion prior to a LiDAR front end, which starts
+  /// ICP from a bad guess and, under real-time load, drops scans. A plain
+  /// dt-aware EMA, so it stays deterministic.
+  bool predict_twist_filter_enabled = true;
+
+  /// [s] Time constant of the predict-twist low-pass. Larger = smoother prior
+  /// but more lag behind genuine acceleration.
+  double predict_twist_filter_time_const = 0.3;
 
   double sigma_twist_from_consecutive_poses_linear = 1.0;   // [m/s]
   double sigma_twist_from_consecutive_poses_angular = 1.0;  // [rad/s]
@@ -365,7 +386,7 @@ public:
 
   /// If non-empty, save the estimated robot trajectory (in {reference_frame})
   /// as a TUM-format file at shutdown, and on demand via the GUI.
-  /// Set via env var MOLA_MAPPER3D_TUM_TRAJECTORY_OUTPUT (empty = don't save).
+  /// Set via env var MOLA_MAPPER_TUM_TRAJECTORY_OUTPUT (empty = don't save).
   std::string save_trajectory_to_file;
 
   /** @} */

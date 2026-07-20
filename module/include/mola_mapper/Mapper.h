@@ -134,6 +134,15 @@ public:
   [[nodiscard]] std::optional<NavState> estimated_navstate(
     const mrpt::Clock::time_point & timestamp, const std::string & frame_id) override;
 
+  /** Anchors T_enu_to_map to a known, fixed value, instead of leaving it a free
+   * variable. Called by a localization front end once a geo-referenced map is
+   * loaded (relocalize mode). Without this, T_enu_to_map keeps its weak
+   * construction-time prior, and since every gravity/attitude factor only
+   * measures rotation RELATIVE to it, the system's absolute rotation stays a
+   * genuine gauge freedom that the solver cannot resolve.
+   */
+  void set_geo_reference(const mola::Georeferencing & georef) override;
+
   // --- Diagnostics / convergence ---
   [[nodiscard]] bool has_converged_localization(
     mrpt::poses::CPose3DPDFGaussian & pose_in_map) const override;
@@ -398,13 +407,13 @@ private:
   /// Renders the keyframe tree, graph edges and per-source movable {odom_i}
   /// frames into the visualizer, and creates/updates the GUI sub-window.
   /// Throttled to visualization.update_rate_hz. No-op when no visualizer is
-  /// attached. (Mapper3D_GUI.cpp)
+  /// attached. (Mapper_GUI.cpp)
   void updateVisualization();
 
   /// Builds the backend-agnostic GUI sub-window (status + control tabs) once.
   void internalBuildGUI();
 
-  // --- helpers implemented across the Mapper3D_*.cpp translation units ---
+  // --- helpers implemented across the Mapper_*.cpp translation units ---
 
   /// Registers (or returns the existing id for) an odometry frame name.
   [[nodiscard]] OdometryFrameID add_or_get_odom_frame_id_locked(const std::string & frame_id_name);
@@ -480,13 +489,13 @@ private:
   /// the map. Called from ingest_imu_sample_locked under stateMutex_.
   void maybe_emit_gravity_factor_locked(mola::imu::TimeStamp tNow);
 
-  /// Env-gated (MOLA_MAPPER3D_TRACE_IMU) diagnostic: logs T_enu_to_map (F0) and
+  /// Env-gated (MOLA_MAPPER_TRACE_IMU) diagnostic: logs T_enu_to_map (F0) and
   /// the distribution of IMU gravity-factor residuals (mean/median/p90/max +
   /// the mean residual VECTOR norm, which separates a systematic map tilt from
   /// random motion-acceleration noise). No-op unless the env var is set.
   void trace_imu_factors_locked(const gtsam::Values & estimate);
 
-  /// Env-gated (MOLA_MAPPER3D_TRACE_GEOM) diagnostic: measures the ACTUAL
+  /// Env-gated (MOLA_MAPPER_TRACE_GEOM) diagnostic: measures the ACTUAL
   /// keyframe trajectory geometry in {map} (not the gravity-factor residual):
   /// the keyframe-position z-span and the best-fit slope of z vs horizontal
   /// arc length (the apparent path tilt), plus the average keyframe body up
@@ -569,7 +578,14 @@ private:
   void publish_high_rate_pose();
 
   /// Returns the optimized NavState (pose+twist+covariances) of a keyframe.
+  /// Throws if `idx` has no solved estimate yet; callers must handle that.
   [[nodiscard]] NavState get_latest_state_and_covariance(KeyFrameID idx) const;
+
+  /// Body of estimated_navstate(). Kept separate so the public entry point can
+  /// turn any unexpected failure into the "not ready yet" nullopt its signature
+  /// already promises, instead of letting it escape into the caller's thread.
+  [[nodiscard]] std::optional<NavState> estimated_navstate_impl(
+    const mrpt::Clock::time_point & timestamp, const std::string & frame_id);
 
   /// Returns the (before, after) keyframe iterators bracketing timestamp `t`.
   [[nodiscard]] pair_nearby_frame_iterators_t find_before_after(

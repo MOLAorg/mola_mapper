@@ -168,7 +168,7 @@ struct Combo
 
 std::string make_params_yaml(const Combo & c)
 {
-  // Mirrors params/mapper-3d-common.yaml + the MulRan launcher overrides, but
+  // Mirrors params/mapper-common.yaml + the MulRan launcher overrides, but
   // single-threaded + deterministic for the unit test.
   std::string s =
     R"###(

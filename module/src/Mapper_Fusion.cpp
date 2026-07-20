@@ -13,7 +13,7 @@
 */
 
 /**
- * @file   Mapper3D_Fusion.cpp
+ * @file   Mapper_Fusion.cpp
  * @brief  Sensor fusion: keyframe management and the native GTSAM/iSAM2 graph.
  * @author Jose Luis Blanco Claraco
  * @date   2026
@@ -49,6 +49,7 @@
 #include <numeric>
 
 #include "GtsamData.h"
+#include "covariance_utils.h"
 #include "factor_builders.h"
 
 namespace mola::mapper
@@ -125,15 +126,22 @@ mrpt::poses::CPose3D body_twist_delta(
   }
 }
 
-/// Returns (max position sigma [m], max orientation sigma [deg]) from an SE(3)
-/// covariance using MRPT's (x, y, z, yaw, pitch, roll) convention.
-std::pair<double, double> max_pos_and_orientation_sigma(const mrpt::math::CMatrixDouble66 & cov)
+/// Picks the velocity to extrapolate a source's raw {odom_i} anchor with:
+/// the low-pass-filtered finite-difference twist when enabled and available,
+/// otherwise the raw finite difference, otherwise `fallback` (the graph V/W).
+const mrpt::math::TTwist3D & source_predict_twist(
+  const Parameters & params, const WorldModelState::RawSourcePose & anchor,
+  const mrpt::math::TTwist3D & fallback)
 {
-  const double maxPosSigma = std::sqrt(std::max({cov(0, 0), cov(1, 1), cov(2, 2)}));
-  const double maxOriSigmaDeg =
-    mrpt::RAD2DEG(std::sqrt(std::max({cov(3, 3), cov(4, 4), cov(5, 5)})));
-  return {maxPosSigma, maxOriSigmaDeg};
+  if (params.predict_twist_filter_enabled && anchor.filtered_local_twist.value.has_value()) {
+    return *anchor.filtered_local_twist.value;
+  }
+  if (anchor.has_local_twist) {
+    return anchor.local_twist;
+  }
+  return fallback;
 }
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -454,9 +462,13 @@ void Mapper::fuse_pose_locked(
   // factors bend the soft keyframe chain) and would leak meter/degree jumps into
   // the prediction. The source's own finite-difference velocity is immune to
   // those {map}-frame corrections. See WorldModelState::RawSourcePose.
-  WorldModelState::RawSourcePose newAnchor{timestamp, poseSanitized, {}, false};
+  WorldModelState::RawSourcePose newAnchor{timestamp, poseSanitized, {}, false, {}};
   if (const auto itPrev = state_.last_raw_pose_by_source.find(frame_id_idx);
       itPrev != state_.last_raw_pose_by_source.end()) {
+    // Carry the filter state across updates (the anchor struct is replaced
+    // wholesale below).
+    newAnchor.filtered_local_twist = itPrev->second.filtered_local_twist;
+
     const double dt = mrpt::system::timeDifference(itPrev->second.stamp, timestamp);
     if (dt > 1e-4 && dt <= params_.max_time_to_use_velocity_model) {
       // Relative body motion prev^-1 (+) curr, then log() / dt -> body twist.
@@ -465,6 +477,13 @@ void Mapper::fuse_pose_locked(
       newAnchor.local_twist = mrpt::math::TTwist3D(
         logv[0] / dt, logv[1] / dt, logv[2] / dt, logv[3] / dt, logv[4] / dt, logv[5] / dt);
       newAnchor.has_local_twist = true;
+
+      // Damp this single-interval finite difference before it reaches the
+      // front end's motion prior.
+      if (params_.predict_twist_filter_enabled) {
+        newAnchor.filtered_local_twist.update(
+          newAnchor.local_twist, timestamp, params_.predict_twist_filter_time_const);
+      }
     }
   }
   state_.last_raw_pose_by_source[frame_id_idx] = newAnchor;
@@ -929,7 +948,7 @@ void Mapper::maybe_emit_gravity_factor_locked(mola::imu::TimeStamp tNow)
   geo_ref_counters_.imu_gravity++;
   notify_optimizer();
 
-  thread_local const bool traceGeom = mrpt::get_env<bool>("MOLA_MAPPER3D_TRACE_GEOM", false);
+  thread_local const bool traceGeom = mrpt::get_env<bool>("MOLA_MAPPER_TRACE_GEOM", false);
   if (traceGeom) {
     static mrpt::math::TVector3D gAccum{0, 0, 0};
     static size_t gN = 0;
@@ -1021,7 +1040,7 @@ void Mapper::emit_imu_factors_for_keyframe_locked(KeyFrameID newKf)
 
 void Mapper::trace_imu_factors_locked(const gtsam::Values & estimate)
 {
-  thread_local const bool traceImu = mrpt::get_env<bool>("MOLA_MAPPER3D_TRACE_IMU", false);
+  thread_local const bool traceImu = mrpt::get_env<bool>("MOLA_MAPPER_TRACE_IMU", false);
   if (!traceImu || !state_.gtsam->isam2.has_value()) {
     return;
   }
@@ -1074,7 +1093,7 @@ void Mapper::trace_imu_factors_locked(const gtsam::Values & estimate)
 
 void Mapper::trace_keyframe_geometry_locked(const gtsam::Values & estimate)
 {
-  thread_local const bool traceGeom = mrpt::get_env<bool>("MOLA_MAPPER3D_TRACE_GEOM", false);
+  thread_local const bool traceGeom = mrpt::get_env<bool>("MOLA_MAPPER_TRACE_GEOM", false);
   if (!traceGeom) {
     return;
   }
@@ -1186,9 +1205,9 @@ void Mapper::fuse_gnss(const mrpt::obs::CObservationGPS & gps)
   auto lck = mrpt::lockHelper(stateMutex_);
 
   // Diagnostic: dump EVERY raw GNSS reading (and why it is accepted/rejected),
-  // un-throttled, when MOLA_MAPPER3D_TRACE_GPS is set. Lets us inspect the data
+  // un-throttled, when MOLA_MAPPER_TRACE_GPS is set. Lets us inspect the data
   // quality (height constancy + per-fix ENU covariance) end to end.
-  thread_local const bool traceGps = mrpt::get_env<bool>("MOLA_MAPPER3D_TRACE_GPS", false);
+  thread_local const bool traceGps = mrpt::get_env<bool>("MOLA_MAPPER_TRACE_GPS", false);
   geo_ref_counters_.gnss_readings_seen++;
   if (traceGps) {
     std::string lla = "(no GGA)";
@@ -1418,7 +1437,7 @@ void Mapper::optimize_and_refresh()
         enforce_planar_pose(t.pose);
         enforce_planar_twist(t.twist);
       }
-      thread_local const bool traceVW = mrpt::get_env<bool>("MOLA_MAPPER3D_TRACE_VW", false);
+      thread_local const bool traceVW = mrpt::get_env<bool>("MOLA_MAPPER_TRACE_VW", false);
       if (traceVW && (angV.norm() > 5.0 || linV.norm() < 0.5)) {
         // dt to the time-adjacent previous keyframe (the kinematic-factor dt):
         double dtPrev = -1.0;
@@ -1548,6 +1567,15 @@ void Mapper::optimize_and_refresh()
       if (it != state_.last_estimated_states.end()) {
         it->second.pose_cov = latestPoseCov;
         it->second.twist_cov = latestTwistCov;
+
+        // Drive the predict-twist low-pass with the newest keyframe's optimized
+        // twist, so the short-term prediction extrapolates a damped velocity
+        // rather than this (least-constrained, per-solve jittery) node's raw one.
+        if (params_.predict_twist_filter_enabled) {
+          state_.filtered_predict_twist.update(
+            it->second.twist, state_.time_to_kf_id.inverse(latestKfId),
+            params_.predict_twist_filter_time_const);
+        }
       }
     }
     std::string driftTrace;
@@ -1660,6 +1688,24 @@ NavState Mapper::get_latest_state_and_covariance(KeyFrameID idx) const
 std::optional<NavState> Mapper::estimated_navstate(
   const mrpt::Clock::time_point & timestamp, const std::string & frame_id)
 {
+  // This is queried at high rate by front ends from their own threads, and its
+  // [[nodiscard]] std::optional<NavState> signature already promises a graceful
+  // "not ready yet" for a transiently under-constrained / not-yet-solved graph.
+  // Letting an exception escape instead would kill the calling module's thread
+  // and take down fusion for the rest of the run.
+  try {
+    return estimated_navstate_impl(timestamp, frame_id);
+  } catch (const std::exception & e) {
+    MRPT_LOG_THROTTLE_ERROR_STREAM(
+      2.0, "[estimated_navstate] Returning no estimate after exception:\n"
+             << e.what());
+    return {};
+  }
+}
+
+std::optional<NavState> Mapper::estimated_navstate_impl(
+  const mrpt::Clock::time_point & timestamp, const std::string & frame_id)
+{
   const ProfilerEntry tle(profiler_, "estimated_navstate");
   // 1) Ensure cached estimates are up to date. With the background optimizer
   // thread, the caches are refreshed off the query path (so this returns
@@ -1698,6 +1744,18 @@ std::optional<NavState> Mapper::estimated_navstate(
   if (!closestFrameIdx.has_value()) {
     return {};
   }
+
+  // A keyframe exists in time_to_kf_id as soon as it is CREATED, but its state
+  // only lands in last_estimated_states after a solve commits. With the
+  // background optimizer that window is routinely open, so treat it as the
+  // ordinary "not ready yet" case rather than letting the lookup below throw.
+  if (state_.last_estimated_states.count(*closestFrameIdx) == 0) {
+    MRPT_LOG_THROTTLE_DEBUG_FMT(
+      5.0, "[estimated_navstate] Keyframe %u not solved yet.",
+      static_cast<unsigned>(*closestFrameIdx));
+    return {};
+  }
+
   // NOTE: the "closest keyframe too far in time" check is NOT applied globally
   // here. The frame-local odometry path (below) anchors on the requested
   // source's OWN fresh raw pose (last_raw_pose_by_source), not on this
@@ -1724,6 +1782,16 @@ std::optional<NavState> Mapper::estimated_navstate(
         mrpt::square(params_.sigma_random_walk_acceleration_angular * closestFrameDtSigned);
     }
     ret.twist_inv_cov = twist_cov.inverse_LLt();
+  }
+
+  // Extrapolate the low-pass-filtered velocity instead of the newest keyframe's
+  // raw optimized twist. Only when anchoring on that newest keyframe: older
+  // keyframes are constrained on both sides, so their twist is not the noisy
+  // boundary estimate the filter exists to damp.
+  if (
+    params_.predict_twist_filter_enabled && state_.filtered_predict_twist.value.has_value() &&
+    *closestFrameIdx == state_.last_kf_id()) {
+    ret.twist = *state_.filtered_predict_twist.value;
   }
 
   // 4) Produce the pose in the requested frame.
@@ -1783,7 +1851,7 @@ std::optional<NavState> Mapper::estimated_navstate(
         // twist (frame-local, immune to the graph V/W re-optimization jitter the
         // absolute factors inject), then compose into {map}.
         const mrpt::math::TTwist3D & twistOdom =
-          rawAnchor.has_local_twist ? rawAnchor.local_twist : ret.twist;
+          source_predict_twist(params_, rawAnchor, ret.twist);
         const auto poseInOdom =
           rawAnchor.pose.mean + body_twist_delta(params_, twistOdom, dtFromRaw);
         freshestPoseInMap = pFrame->mean + poseInOdom;
@@ -1853,9 +1921,7 @@ std::optional<NavState> Mapper::estimated_navstate(
   // roll/pitch is pinned those factors bend the soft keyframe chain, so the
   // latest keyframe's V/W swings per solve and would otherwise leak meter/degree
   // jumps into this prediction (wrecking the front end's ICP guess on MulRan).
-  if (rawAnchor.has_local_twist) {
-    ret.twist = rawAnchor.local_twist;
-  }
+  ret.twist = source_predict_twist(params_, rawAnchor, ret.twist);
 
   mrpt::poses::CPose3DPDFGaussian pred;
   pred.mean = rawAnchor.pose.mean + body_twist_delta(params_, ret.twist, dtPred);
@@ -1876,7 +1942,7 @@ std::optional<NavState> Mapper::estimated_navstate(
 
   ret.pose.copyFrom(pred);  // NavState.pose is CPose3DPDFGaussianInf
 
-  thread_local const bool tracePred = mrpt::get_env<bool>("MOLA_MAPPER3D_TRACE_PREDICT", false);
+  thread_local const bool tracePred = mrpt::get_env<bool>("MOLA_MAPPER_TRACE_PREDICT", false);
   if (tracePred) {
     const auto disp = body_twist_delta(params_, ret.twist, dtPred);
     MRPT_LOG_INFO_FMT(
@@ -1921,6 +1987,55 @@ std::optional<mola::Georeferencing> Mapper::current_georeferencing() const
 {
   auto lck = mrpt::lockHelper(stateMutex_);
   return state_.geo_reference;
+}
+
+void Mapper::set_geo_reference(const mola::Georeferencing & georef)
+{
+  bool rebuilt = false;
+  {
+    auto lck = mrpt::lockHelper(stateMutex_);
+
+    MRPT_LOG_INFO_STREAM(
+      "[set_geo_reference] Anchoring T_enu_to_map to a fixed, known value: "
+      << georef.T_enu_to_map.mean.asString());
+
+    params_.fixed_geo_reference = georef;
+
+    if (state_.time_to_kf_id.empty()) {
+      // No keyframes yet (the usual case: the front end loads the map before
+      // any fusion starts). Rebuild the graph from scratch so T_enu_to_map is
+      // created with the tight prior directly. state_.clear() first: the
+      // pending newValues/newFactors still hold the symbol_T_enu_to_map entry
+      // from the initialize()-time reinitialize_gtsam_locked(), and inserting
+      // that key a second time would throw on the next solve.
+      state_.clear();
+      reinitialize_gtsam_locked();
+      reset_sensor_anchors_locked();
+      rebuilt = true;
+    } else {
+      // The central map is shared, persistent state and must survive this call,
+      // so do not wipe it. Pin the EXISTING T_enu_to_map variable with an extra
+      // prior instead: that removes the gauge freedom without discarding the
+      // keyframes.
+      gtsam::Pose3 enu2map;
+      gtsam::Matrix6 enu2map_cov;
+      mrpt::gtsam_wrappers::to_gtsam_se3_cov6(georef.T_enu_to_map, enu2map, enu2map_cov);
+      state_.gtsam->newFactors.addPrior(symbol_T_enu_to_map, enu2map, enu2map_cov);
+
+      state_.geo_reference = georef;
+      state_.last_estimated_frames[REFERENCE_FRAME_ID] = georef.T_enu_to_map;
+
+      MRPT_LOG_WARN_FMT(
+        "[set_geo_reference] Called with %zu keyframes already in the map: pinning the existing "
+        "T_enu_to_map with an additional prior instead of rebuilding.",
+        state_.time_to_kf_id.size());
+    }
+  }
+
+  // Outside the lock: the optimizer takes stateMutex_ itself.
+  if (!rebuilt) {
+    notify_optimizer();
+  }
 }
 
 // ---------------------------------------------------------------------------

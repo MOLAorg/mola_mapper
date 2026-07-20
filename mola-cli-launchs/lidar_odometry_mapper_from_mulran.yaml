@@ -9,13 +9,13 @@
 # Unlike the KITTI launcher (lidar_odometry_mapper_from_kitti.yaml), the
 # MulRan dataset also provides IMU (with absolute orientation quaternion +
 # magnetometer) and GNSS (NMEA GGA), both labeled "imu"/"gps". This file wires
-# `mapper3d` directly to `raw_data_source: dataset_input` so it receives
+# `mapper` directly to `raw_data_source: dataset_input` so it receives
 # those observations via onNewObservation()/fuse_imu()/fuse_gnss(), in
 # addition to the sparse keyframes pushed by LidarOdometry through the
 # SharedKeyframeMap sink.
 #
-# The mapper3d `params:` block below `$import`s the shared defaults from
-# ../params/mapper-3d-common.yaml and overrides ONLY the few MulRan-specific
+# The mapper `params:` block below `$import`s the shared defaults from
+# ../params/mapper-common.yaml and overrides ONLY the few MulRan-specific
 # keys this launcher needs active out of the box (no env var required for a
 # first run):
 #   - estimate_geo_reference: true -- otherwise fuse_gnss() silently ignores
@@ -52,7 +52,7 @@ modules:
     params:
       # Persist ImGui window layout/docking across runs (no-op for MolaViz).
       # Set to "" to disable persistence. Ignored by mola::MolaViz.
-      imgui_app_name: mapper3d_mulran
+      imgui_app_name: mapper_mulran
 
   # =====================
   # MulranDataset
@@ -94,9 +94,9 @@ modules:
   # =====================
   # mola_mapper (NavStateFilter + SharedKeyframeMap sink + direct IMU/GNSS)
   # =====================
-  - name: mapper3d
+  - name: mapper
     type: mola::mapper::Mapper
-    verbosity_level: "${MOLA_VERBOSITY_MAPPER3D|INFO}"
+    verbosity_level: "${MOLA_VERBOSITY_MAPPER|INFO}"
     # Subscribe directly to the dataset's IMU ("imu") and GNSS ("gps")
     # observations (lidar_odom's keyframes arrive separately, via the
     # SharedKeyframeMap sink, not through this subscription):
@@ -105,7 +105,7 @@ modules:
     params:
       # Import the shared defaults and override ONLY the MulRan-specific keys
       # (mola_yaml `$import`: imported file is the base; siblings override it):
-      $import: ../params/mapper-3d-common.yaml
+      $import: ../params/mapper-common.yaml
 
       # MulRan has GNSS ("gps") + IMU ("imu") => estimate geo-referencing live.
       # This REQUIRES the gauge anchor too (otherwise the graph floats and iSAM2
@@ -117,7 +117,7 @@ modules:
       # MulRan's standard-precision GNSS), so the common 1.0 m gate never latches;
       # 1.5 m gives margin. The geo-ref ORIENTATION converges to ~0.2 deg thanks
       # to the Xsens absolute-attitude factor, so the 5 deg gate clears quickly.
-      convergence_max_position_sigma: ${MOLA_MAPPER3D_CONV_POS_SIGMA|1.5}
+      convergence_max_position_sigma: ${MOLA_MAPPER_CONV_POS_SIGMA|1.5}
 
       # IMU gravity LEVELING of the central map (see agents.md "IMU gravity
       # leveling"). The filtered low-dynamics gravity factor (default on) only
@@ -125,20 +125,20 @@ modules:
       # compliant in roll/pitch; 3 deg lets gravity bend it back to level while
       # yaw stays pinned (no absolute yaw reference without GNSS). Validated on
       # DCC01 (gravity-factor chi2 ~16700 -> ~24, residual 2.2 -> 0.6 deg).
-      odometry_edge_min_sigma_rollpitch_deg: ${MOLA_MAPPER3D_ODOM_RP_SIGMA|3.0}
+      odometry_edge_min_sigma_rollpitch_deg: ${MOLA_MAPPER_ODOM_RP_SIGMA|3.0}
 
       # Loop closure ON by default: MulRan urban sequences (DCC, KAIST,
       # Riverside) revisit places, so the mapper's background loop-closure
       # thread (mola_sm_loop_closure engine) cancels accumulated LiDAR-odometry
-      # drift. Disable with MOLA_MAPPER3D_LOOP_CLOSURE=false. The pipeline below
+      # drift. Disable with MOLA_MAPPER_LOOP_CLOSURE=false. The pipeline below
       # is the mola_mapper wrapper (params/loop-closure-f2f-mapper.yaml) that
       # $imports the shared frame-to-frame GICP pipeline and widens the ICP
       # convergence basin; it uses the Ouster per-point timestamps to deskew each
       # keyframe scan. NOTE: cov2cov (GICP) loop detection is weak on Ouster data
       # (see ~/plans/lio-mulran-benchmarking.md), so on DCC01 few/no loops cross
       # the acceptance threshold; global accuracy here comes mainly from GNSS.
-      loop_closure_enabled: ${MOLA_MAPPER3D_LOOP_CLOSURE|true}
-      loop_closure_pipeline_file: "${MOLA_MAPPER3D_LC_PIPELINE|$(ros2 pkg prefix mola_mapper)/share/mola_mapper/params/loop-closure-f2f-mapper.yaml}"
+      loop_closure_enabled: ${MOLA_MAPPER_LOOP_CLOSURE|true}
+      loop_closure_pipeline_file: "${MOLA_MAPPER_LC_PIPELINE|$(ros2 pkg prefix mola_mapper)/share/mola_mapper/params/loop-closure-f2f-mapper.yaml}"
 
       # MulRan's Xsens reports orientation already ENU-referenced (yaw measured
       # from East, Z-up), but emit_imu_factors_for_keyframe_locked() applies a

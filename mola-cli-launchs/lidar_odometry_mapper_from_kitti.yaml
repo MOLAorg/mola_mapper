@@ -14,7 +14,7 @@
 # LOOP CLOSURE is ON by default here: several KITTI odometry sequences (00, 02,
 # 05, 06, 07, 08, 09) revisit places, so the mapper's background loop-closure
 # thread (mola_sm_loop_closure engine) can cancel accumulated LiDAR-odometry
-# drift. Disable with MOLA_MAPPER3D_LOOP_CLOSURE=false. KITTI scans carry NO
+# drift. Disable with MOLA_MAPPER_LOOP_CLOSURE=false. KITTI scans carry NO
 # per-point timestamps, so the loop-closure pipeline must be told to skip its
 # deskew/timestamp-adjust filters: this launcher's usage sets
 # MOLA_DESKEW_IGNORE_NO_TIMESTAMPS=true for that reason.
@@ -22,7 +22,7 @@
 # Usage (loop-closure enabled, headless benchmark):
 #   export KITTI_BASE_DIR=/path/to/kitti_root
 #   KITTI_SEQ=00 MOLA_DESKEW_IGNORE_NO_TIMESTAMPS=true MOLA_WITH_GUI=false \
-#   MOLA_MAPPER3D_TUM_TRAJECTORY_OUTPUT=/tmp/kitti00.tum \
+#   MOLA_MAPPER_TUM_TRAJECTORY_OUTPUT=/tmp/kitti00.tum \
 #     mola-cli $(ros2 pkg prefix mola_mapper)/share/mola_mapper/mola-cli-launchs/lidar_odometry_mapper_from_kitti.yaml
 #
 # This is a pure-odometry run (no GNSS/fixed_geo_reference), so the graph gauge
@@ -46,7 +46,7 @@ modules:
     params:
       # Persist ImGui window layout/docking across runs (no-op for MolaViz).
       # Set to "" to disable persistence. Ignored by mola::MolaViz.
-      imgui_app_name: mapper3d_kitti
+      imgui_app_name: mapper_kitti
 
   # =====================
   # KittiOdometryDataset
@@ -85,14 +85,14 @@ modules:
   # =====================
   # mola_mapper (NavStateFilter + SharedKeyframeMap sink)
   # =====================
-  - name: mapper3d
+  - name: mapper
     type: mola::mapper::Mapper
-    verbosity_level: "${MOLA_VERBOSITY_MAPPER3D|INFO}"
+    verbosity_level: "${MOLA_VERBOSITY_MAPPER|INFO}"
 
     params:
       # Import the shared defaults and override ONLY the KITTI-specific keys
       # (mola_yaml `$import`: imported file is the base; siblings override it):
-      $import: ../params/mapper-3d-common.yaml
+      $import: ../params/mapper-common.yaml
 
       # Pure-LiDAR odometry: pin the gauge (no GNSS/IMU to fix it). See header.
       link_first_pose_to_reference_origin_sigma: ${MOLA_LINK_FIRST_POSE_SIGMA|1e-6}
@@ -105,11 +105,11 @@ modules:
       # and only widens the ICP convergence basin so real (drifted) loops close;
       # the package keeps its own defaults. Deskew/timestamp filters are skipped
       # for KITTI via MOLA_DESKEW_IGNORE_NO_TIMESTAMPS=true (see header).
-      loop_closure_enabled: ${MOLA_MAPPER3D_LOOP_CLOSURE|true}
-      loop_closure_pipeline_file: "${MOLA_MAPPER3D_LC_PIPELINE|$(ros2 pkg prefix mola_mapper)/share/mola_mapper/params/loop-closure-f2f-mapper.yaml}"
+      loop_closure_enabled: ${MOLA_MAPPER_LOOP_CLOSURE|true}
+      loop_closure_pipeline_file: "${MOLA_MAPPER_LC_PIPELINE|$(ros2 pkg prefix mola_mapper)/share/mola_mapper/params/loop-closure-f2f-mapper.yaml}"
 
     # Optional visualization (MolaViz / MolaVizImGui): keyframe tree + graph
     # edges in {map}, with each odometry source's movable {odom_i} frame node.
     # Shared defaults (mola_yaml `$import`: imported file is the base):
     visualization:
-      $import: ../params/mapper-3d-visualization-common.yaml
+      $import: ../params/mapper-visualization-common.yaml

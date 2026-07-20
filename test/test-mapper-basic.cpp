@@ -13,7 +13,7 @@
 */
 
 /**
- * @file   test-mapper3d-basic.cpp
+ * @file   test-mapper-basic.cpp
  * @brief  Phase 1 skeleton tests: lifecycle, frame registry, keyframe guard.
  * @author Jose Luis Blanco Claraco
  * @date   2026

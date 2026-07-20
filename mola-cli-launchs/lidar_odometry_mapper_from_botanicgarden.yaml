@@ -18,13 +18,13 @@
 # NO GNSS/GPS topic exists in this bag (the Xsens has D-GNSS/INS hardware, but
 # it is not published -- see ~/datasets/botanic/AGENTS.md). So this launcher
 # fuses LiDAR + IMU + wheel odometry (the three available modalities), NOT
-# GNSS. mapper3d's `estimate_geo_reference` stays at its default `false`.
+# GNSS. mapper's `estimate_geo_reference` stays at its default `false`.
 #
-# This launcher is SELF-CONTAINED: the safe defaults that mapper3d needs for
+# This launcher is SELF-CONTAINED: the safe defaults that mapper needs for
 # this dataset are baked into its inline `params:` block below, so it runs out
 # of the box with only BOTANICGARDEN_LIO_BAG + MOLA_ODOMETRY_PIPELINE_YAML set
 # (every default is still overridable via the same env vars). Two of those
-# defaults are NOT the ones in ../params/mapper-3d.yaml and are mandatory here:
+# defaults are NOT the ones in ../params/mapper.yaml and are mandatory here:
 #
 #  - `link_first_pose_to_reference_origin_sigma` (default 1e-6 here, empty in
 #    the shared params file): fixes the graph gauge. Without it the whole graph
@@ -53,7 +53,7 @@
 #   mola-cli $(ros2 pkg prefix mola_mapper)/share/mola_mapper/mola-cli-launchs/lidar_odometry_mapper_from_botanicgarden.yaml
 #
 # Optional: export BOTANICGARDEN_GT_BAG=$HOME/datasets/botanic/gt_1018_00_qnew.bag
-#   to also replay /gt_poses (not consumed by mapper3d; for manual comparison
+#   to also replay /gt_poses (not consumed by mapper; for manual comparison
 #   only). GUI is on by default (MOLA_WITH_GUI=false for headless).
 # -----------------------------------------------------------------------------
 
@@ -66,7 +66,7 @@ modules:
     enabled: ${MOLA_WITH_GUI|true}
     verbosity_level: "${MOLA_VERBOSITY_MOLA_VIZ|INFO}"
     params:
-      imgui_app_name: mapper3d_botanicgarden
+      imgui_app_name: mapper_botanicgarden
 
   # =====================
   # Rosbag1Dataset (BotanicGarden)
@@ -126,9 +126,9 @@ modules:
   # =====================
   # mola_mapper (NavStateFilter + SharedKeyframeMap sink + direct IMU/wheels)
   # =====================
-  - name: mapper3d
+  - name: mapper
     type: mola::mapper::Mapper
-    verbosity_level: "${MOLA_VERBOSITY_MAPPER3D|INFO}"
+    verbosity_level: "${MOLA_VERBOSITY_MAPPER|INFO}"
     # Subscribe directly to the dataset's IMU ("imu") and wheel-odometry
     # ("odom_wheels") observations (lidar_odom's keyframes arrive separately,
     # via the SharedKeyframeMap sink, not through this subscription):
@@ -137,7 +137,7 @@ modules:
     params:
       # Import the shared defaults and override ONLY the BotanicGarden-specific
       # keys (mola_yaml `$import`: imported file is the base; siblings override):
-      $import: ../params/mapper-3d-common.yaml
+      $import: ../params/mapper-common.yaml
 
       # MANDATORY gauge anchor: this is a pure-odometry run (no GNSS), so without
       # it the graph floats and iSAM2 throws IndeterminantLinearSystemException
@@ -146,7 +146,7 @@ modules:
 
       # ~400 Hz IMU + ~200 Hz wheels: aggregate the high-rate streams into
       # bounded-rate shared keyframes + relative edges (see header).
-      aggregate_high_rate_into_edges: ${MOLA_MAPPER3D_AGGREGATE|true}
+      aggregate_high_rate_into_edges: ${MOLA_MAPPER_AGGREGATE|true}
 
       # Publish the extrapolated reference-frame pose at 20 Hz.
-      high_rate_pose_publish_rate_hz: ${MOLA_MAPPER3D_PUBLISH_RATE_HZ|20.0}
+      high_rate_pose_publish_rate_hz: ${MOLA_MAPPER_PUBLISH_RATE_HZ|20.0}

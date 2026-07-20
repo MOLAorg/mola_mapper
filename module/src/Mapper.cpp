@@ -36,6 +36,8 @@
 #include <iomanip>
 #include <string>
 
+#include "covariance_utils.h"
+
 // arguments: class_name, parent_class, class namespace
 IMPLEMENTS_MRPT_OBJECT(Mapper, mola::ExecutableBase, mola::mapper)
 
@@ -441,15 +443,54 @@ bool Mapper::has_converged_localization(mrpt::poses::CPose3DPDFGaussian & pose_i
 {
   auto lck = mrpt::lockHelper(stateMutex_);
 
-  // Converged if we were told to estimate geo-referencing, and the
-  // convergence-gated publication in optimize_and_refresh()
-  // has already published one (see that function for the actual sigma
-  // thresholds against convergence_max_position_sigma /
-  // convergence_max_orientation_sigma_deg).
-  const bool converged = params_.estimate_geo_reference && state_.geo_reference.has_value();
+  if (state_.time_to_kf_id.empty() || state_.last_estimated_states.empty()) {
+    return false;
+  }
 
-  if (converged && !state_.time_to_kf_id.empty()) {
-    const NavState ns = get_latest_state_and_covariance(state_.last_kf_id());
+  // A geo-reference is required before a pose in {map} is even meaningful:
+  // either already estimated live (estimate_geo_reference=true) or fixed from a
+  // loaded geo-referenced map (relocalize mode, via set_geo_reference() or the
+  // fixed_geo_reference param).
+  if (!state_.geo_reference.has_value()) {
+    return false;
+  }
+
+  NavState ns;
+  try {
+    ns = get_latest_state_and_covariance(state_.last_kf_id());
+  } catch (const std::exception & e) {
+    // Latest keyframe not solved yet: not converged, not a fatal error.
+    MRPT_LOG_DEBUG_STREAM("[has_converged_localization] Latest KF state not ready: " << e.what());
+    return false;
+  }
+
+  bool converged = false;
+  if (params_.estimate_geo_reference) {
+    // Live geo-referencing: state_.geo_reference is only ever populated by
+    // optimize_and_refresh() once T_enu_to_map's OWN sigmas already cleared
+    // these same thresholds, and is sticky afterwards (a temporarily worse
+    // per-keyframe sigma must not un-converge an established geo-reference).
+    converged = true;
+  } else {
+    // Relocalize mode: the geo-reference is fixed up front, before any GNSS/IMU
+    // fusion has happened, so its mere presence says nothing about whether the
+    // vehicle is actually localized. Gate on the vehicle's OWN latest pose
+    // uncertainty instead.
+    const auto [posSigma, oriSigmaDeg] =
+      max_pos_and_orientation_sigma(ns.pose.cov_inv.inverse_LLt());
+
+    converged = posSigma <= params_.convergence_max_position_sigma &&
+                oriSigmaDeg <= params_.convergence_max_orientation_sigma_deg;
+
+    MRPT_LOG_THROTTLE_DEBUG_FMT(
+      2.0,
+      "[has_converged_localization] relocalize mode: pos_sigma=%.3f m ori_sigma=%.3f deg "
+      "thresh=(%.2f m, %.2f deg) -> %s",
+      posSigma, oriSigmaDeg, params_.convergence_max_position_sigma,
+      params_.convergence_max_orientation_sigma_deg, converged ? "CONVERGED" : "not yet");
+  }
+
+  if (converged) {
     pose_in_map.copyFrom(ns.pose);
   }
 
@@ -488,7 +529,7 @@ void Mapper::getDiagnostics(std::vector<mola::DiagnosticStatusMsg> & status)
       continue;
     }
     // T_map_to_odom_i as translation + rotation magnitude (LIO drift is mostly
-    // z/tilt, so the rotation term is the informative one; see Mapper3D_GUI).
+    // z/tilt, so the rotation term is the informative one; see Mapper_GUI).
     const double cosAngle =
       std::clamp((itF->second.mean.getRotationMatrix().trace() - 1.0) * 0.5, -1.0, 1.0);
     msg.values.push_back(

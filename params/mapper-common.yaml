@@ -6,7 +6,7 @@
 # can share these defaults and override ONLY what differs, e.g.:
 #
 #   params:
-#     $import: ../params/mapper-3d-common.yaml
+#     $import: ../params/mapper-common.yaml
 #     estimate_geo_reference: true     # dataset-specific override
 #
 # (`$import`: the imported file is the base; the sibling keys override it.)
@@ -27,7 +27,7 @@ enu_frame_name: "enu"
 # Kinematic Model & Motion Factors
 # --------------------------------------------------------------------------
 # Options: KinematicModel::ConstantVelocity, KinematicModel::Tricycle
-kinematic_model: "${MOLA_MAPPER3D_KINEMATIC_MODEL|KinematicModel::ConstantVelocity}"
+kinematic_model: "${MOLA_MAPPER_KINEMATIC_MODEL|KinematicModel::ConstantVelocity}"
 
 max_time_to_use_velocity_model: ${MOLA_MAX_TIME_TO_USE_VELOCITY_MODEL|0.75}
 min_time_difference_to_create_new_frame: 0.05
@@ -40,29 +40,40 @@ gnss_nearby_keyframe_stamp_tolerance: 1.0
 # keyframes nor inserts per-sample factors. Every reading is accumulated in a
 # LocalVelocityBuffer (lever-arm corrected) and the backend factors are built
 # once per real keyframe, so the IMU factor rate equals the keyframe rate.
-odometry_max_insert_rate_hz: ${MOLA_MAPPER3D_ODOM_MAX_RATE_HZ|5.0}
+odometry_max_insert_rate_hz: ${MOLA_MAPPER_ODOM_MAX_RATE_HZ|5.0}
 
 # High-rate IMU/wheels aggregation: do NOT spawn a keyframe per sample. Share a
 # bounded-rate keyframe clock and aggregate wheels into relative-pose edges.
-aggregate_high_rate_into_edges: ${MOLA_MAPPER3D_AGGREGATE|false}
-sensor_keyframe_min_period: ${MOLA_MAPPER3D_SENSOR_KF_PERIOD|0.5}
+aggregate_high_rate_into_edges: ${MOLA_MAPPER_AGGREGATE|false}
+sensor_keyframe_min_period: ${MOLA_MAPPER_SENSOR_KF_PERIOD|0.5}
 
 # Keyframe-variable creation gating (plan 4.13 Phase A).
 #   shared_map_only: only requestInsertKeyframe() creates KF graph variables (default).
 #   auto:           legacy until first requestInsertKeyframe(); then shared_map_only.
 #   sensor_clock:   sensor paths create KFs at sensor_clock_min_period_s rate.
-keyframe_creation_source: "${MOLA_MAPPER3D_KF_CREATION|KeyframeCreationSource::SharedMapOnly}"
-sensor_clock_min_period_s: ${MOLA_MAPPER3D_SENSOR_KF_CLOCK_S|0.5}
+keyframe_creation_source: "${MOLA_MAPPER_KF_CREATION|KeyframeCreationSource::SharedMapOnly}"
+sensor_clock_min_period_s: ${MOLA_MAPPER_SENSOR_KF_CLOCK_S|0.5}
 
-sigma_random_walk_acceleration_linear: ${MOLA_SIGMA_RW_LINACC|1.0}
-sigma_random_walk_acceleration_angular: ${MOLA_SIGMA_RW_ANGACC|10.0}
+# Moderate: a loose angular sigma lets the newest keyframe's yaw rate swing
+# between solves and rotate the predicted pose. Paired with the predict-twist
+# low-pass below. Loosen for platforms with genuinely high acceleration.
+sigma_random_walk_acceleration_linear: ${MOLA_SIGMA_RW_LINACC|0.5}
+sigma_random_walk_acceleration_angular: ${MOLA_SIGMA_RW_ANGACC|1.0}
 sigma_integrator_position: 0.10
 sigma_integrator_orientation: 1.0
+
+# Low-pass the velocity used for short-term extrapolation, so the motion prior
+# handed to a LiDAR front end stays smooth (a jittery prior starts ICP from a
+# bad guess and, under real-time load, drops scans). Deterministic (plain EMA).
+# Raise the time constant for a smoother prior, lower it for platforms with
+# genuinely high acceleration.
+predict_twist_filter_enabled: ${MOLA_MAPPER_PREDICT_TWIST_FILTER|true}
+predict_twist_filter_time_const: ${MOLA_MAPPER_PREDICT_TWIST_TAU|0.3}
 
 initial_twist_sigma_lin: 20.0
 initial_twist_sigma_ang: 3.0
 
-enforce_planar_motion: ${MOLA_MAPPER3D_ENFORCE_PLANAR_MOTION|false}
+enforce_planar_motion: ${MOLA_MAPPER_ENFORCE_PLANAR_MOTION|false}
 
 # Pin the first frame to the reference origin (use 1e-6 for pure-odometry or
 # when estimating geo-referencing; leave empty for pre-built geo-ref maps):
@@ -101,7 +112,7 @@ imu_gravity_sigma_ceil_deg: ${MOLA_IMU_GRAVITY_SIGMA_CEIL|5.0}
 # --------------------------------------------------------------------------
 estimate_geo_reference: "${MOLA_ESTIMATE_GEO_REF|false}"
 gnss_huber_threshold: ${MOLA_GNSS_HUBER_THRESHOLD|1.5}
-convergence_max_position_sigma: ${MOLA_MAPPER3D_CONV_POS_SIGMA|1.0}
+convergence_max_position_sigma: ${MOLA_MAPPER_CONV_POS_SIGMA|1.0}
 
 # Consecutive-keyframe odometry-edge noise: derived from the PROPAGATED relative
 # covariance of the source pose PDFs (anisotropic, like
@@ -120,7 +131,7 @@ additional_isam2_update_steps: 3
 
 # Run the (growing) iSAM2 solve on a background thread so estimated_navstate()
 # and the high-rate publisher return immediately from cached estimates.
-enable_optimizer_thread: ${MOLA_MAPPER3D_OPTIMIZER_THREAD|true}
+enable_optimizer_thread: ${MOLA_MAPPER_OPTIMIZER_THREAD|true}
 
 # --------------------------------------------------------------------------
 # Loop closure
@@ -129,7 +140,7 @@ enable_optimizer_thread: ${MOLA_MAPPER3D_OPTIMIZER_THREAD|true}
 # snapshot of the central map and merges accepted edges (robust kernel) into the
 # live graph. The detector runs OFF the query/solve path; only the edge merge
 # touches the graph, feeding the same background optimizer.
-loop_closure_enabled: ${MOLA_MAPPER3D_LOOP_CLOSURE|false}
+loop_closure_enabled: ${MOLA_MAPPER_LOOP_CLOSURE|false}
 
 # The loop-closure engine's own pipeline YAML (ICP + candidate selection), from
 # the mola_sm_loop_closure package. Env-substituted; required when enabled.
@@ -138,24 +149,24 @@ loop_closure_enabled: ${MOLA_MAPPER3D_LOOP_CLOSURE|false}
 # LC pipeline may deskew scans that provide per-point timestamps. For sensors
 # without per-point timestamps (e.g. KITTI), use a deskew-free pipeline or
 # export MOLA_DESKEW_METHOD=MotionCompensationMethod::None.
-loop_closure_pipeline_file: "${MOLA_MAPPER3D_LC_PIPELINE|}"
+loop_closure_pipeline_file: "${MOLA_MAPPER_LC_PIPELINE|}"
 
 # How often the LC thread wakes to consider a new scan [s], and the minimum
 # number of new keyframes since the last scan before one actually runs.
-loop_closure_check_period_sec: ${MOLA_MAPPER3D_LC_PERIOD|5.0}
-loop_closure_min_new_keyframes: ${MOLA_MAPPER3D_LC_MIN_NEW_KFS|10}
+loop_closure_check_period_sec: ${MOLA_MAPPER_LC_PERIOD|5.0}
+loop_closure_min_new_keyframes: ${MOLA_MAPPER_LC_MIN_NEW_KFS|10}
 
 # Incremental scans only test candidate pairs that involve a new keyframe; a
 # full scan is forced every N incremental scans to recover loops that only
 # become plausible after re-optimization (0 = never force a full scan).
-loop_closure_incremental: ${MOLA_MAPPER3D_LC_INCREMENTAL|true}
-loop_closure_full_scan_every_n: ${MOLA_MAPPER3D_LC_FULL_SCAN_EVERY_N|10}
+loop_closure_incremental: ${MOLA_MAPPER_LC_INCREMENTAL|true}
+loop_closure_full_scan_every_n: ${MOLA_MAPPER_LC_FULL_SCAN_EVERY_N|10}
 
 # After the dataset ends, run up to this many batch loop-closure rounds (each a
 # full scan + synchronous re-optimization) until no new loops are found. Online
 # scans miss loops whose two endpoints only both exist late in the run; this
 # recovers them. 0 disables.
-loop_closure_finalize_rounds: ${MOLA_MAPPER3D_LC_FINALIZE_ROUNDS|8}
+loop_closure_finalize_rounds: ${MOLA_MAPPER_LC_FINALIZE_ROUNDS|8}
 
 # Huber robust-kernel threshold [sigmas] applied to merged LC edges.
 loop_closure_edge_robust_param: 1.5
@@ -163,14 +174,14 @@ loop_closure_edge_robust_param: 1.5
 # --------------------------------------------------------------------------
 # High-rate pose publisher
 # --------------------------------------------------------------------------
-high_rate_pose_publish_rate_hz: ${MOLA_MAPPER3D_PUBLISH_RATE_HZ|0.0}
+high_rate_pose_publish_rate_hz: ${MOLA_MAPPER_PUBLISH_RATE_HZ|0.0}
 high_rate_use_latest_sensors: true
 
 # --------------------------------------------------------------------------
 # Map save/load (single externalized .simplemap)
 # --------------------------------------------------------------------------
-load_simplemap_file: "${MOLA_MAPPER3D_LOAD_SM|}"
-save_simplemap_file: "${MOLA_MAPPER3D_SAVE_SM|}"
+load_simplemap_file: "${MOLA_MAPPER_LOAD_SM|}"
+save_simplemap_file: "${MOLA_MAPPER_SAVE_SM|}"
 # If enabled, a directory will be created alongside save_simplemap_file and
 # keyframe point clouds will be externally serialized there (same env var
 # name as mola_lidar_odometry's equivalent option, for consistency).
@@ -180,15 +191,15 @@ externalize_after_seconds: 30.0
 # --------------------------------------------------------------------------
 # Sensor Input Filtering (Regex Patterns)
 # --------------------------------------------------------------------------
-do_process_imu_labels_re: "${MOLA_MAPPER3D_IMU_LABELS_RE|.*}"
-do_process_odometry_labels_re: "${MOLA_MAPPER3D_ODOMETRY_LABELS_RE|.*}"
-do_process_gnss_labels_re: "${MOLA_MAPPER3D_GNSS_LABELS_RE|.*}"
+do_process_imu_labels_re: "${MOLA_MAPPER_IMU_LABELS_RE|.*}"
+do_process_odometry_labels_re: "${MOLA_MAPPER_ODOMETRY_LABELS_RE|.*}"
+do_process_gnss_labels_re: "${MOLA_MAPPER_GNSS_LABELS_RE|.*}"
 
 # --------------------------------------------------------------------------
 # Output trajectory
 # --------------------------------------------------------------------------
 # If non-empty, save the estimated robot trajectory (in {reference_frame_name})
 # as a TUM file at shutdown (and on demand via the GUI "Output" tab).
-# Set MOLA_MAPPER3D_TUM_TRAJECTORY_OUTPUT to the desired path, or leave empty
+# Set MOLA_MAPPER_TUM_TRAJECTORY_OUTPUT to the desired path, or leave empty
 # to skip (default).
-save_trajectory_to_file: "${MOLA_MAPPER3D_TUM_TRAJECTORY_OUTPUT|}"
+save_trajectory_to_file: "${MOLA_MAPPER_TUM_TRAJECTORY_OUTPUT|}"

@@ -1956,6 +1956,65 @@ std::optional<NavState> Mapper::estimated_navstate_impl(
   return ret;
 }
 
+std::optional<mrpt::poses::CPose3D> Mapper::freshest_vehicle_pose_in_map(
+  const mrpt::Clock::time_point & atStamp) const
+{
+  auto lck = mrpt::lockHelper(stateMutex_);
+
+  if (state_.last_raw_pose_by_source.empty()) {
+    return std::nullopt;
+  }
+
+  const auto & idToName = state_.known_odom_frames.getInverseMap();
+  const auto & nameToId = state_.known_odom_frames.getDirectMap();
+
+  std::optional<mrpt::Clock::time_point> bestStamp;
+  std::optional<mrpt::poses::CPose3D> bestPoseInMap;
+
+  for (const auto & [rawFrameIdx, rawAnchor] : state_.last_raw_pose_by_source) {
+    // Keep only the single freshest source anchor.
+    if (bestStamp.has_value() && rawAnchor.stamp <= *bestStamp) {
+      continue;
+    }
+    // Resolve this source's T_map_to_odom: direct match first, then the
+    // "foo" -> "foo_kf" counterpart (only the keyframe-creating "_kf" source
+    // owns the graph transform in a SharedKeyframeMap setup).
+    const mrpt::poses::CPose3DPDFGaussian * pFrame = nullptr;
+    if (const auto itEst = state_.last_estimated_frames.find(rawFrameIdx);
+        itEst != state_.last_estimated_frames.end()) {
+      pFrame = &itEst->second;
+    } else if (const auto itName = idToName.find(rawFrameIdx); itName != idToName.end()) {
+      if (const auto itKf = nameToId.find(itName->second + "_kf"); itKf != nameToId.end()) {
+        if (const auto itKfEst = state_.last_estimated_frames.find(itKf->second);
+            itKfEst != state_.last_estimated_frames.end()) {
+          pFrame = &itKfEst->second;
+        }
+      }
+    }
+    if (pFrame == nullptr) {
+      continue;
+    }
+
+    // Extrapolate the anchor in its OWN {odom_i} frame with its OWN twist, then
+    // compose into {map}. Clamp the horizon so a stale anchor cannot fling the
+    // camera far ahead of the last real measurement.
+    double dt = mrpt::system::timeDifference(rawAnchor.stamp, atStamp);
+    dt = std::clamp(
+      dt, -params_.max_time_to_use_velocity_model, params_.max_time_to_use_velocity_model);
+    // Named local (not a temporary): source_predict_twist() may return this
+    // fallback by reference, so it must outlive the call.
+    const mrpt::math::TTwist3D zeroTwistFallback;
+    const mrpt::math::TTwist3D & twistOdom =
+      source_predict_twist(params_, rawAnchor, zeroTwistFallback);
+    const auto poseInOdom = rawAnchor.pose.mean + body_twist_delta(params_, twistOdom, dt);
+
+    bestStamp = rawAnchor.stamp;
+    bestPoseInMap = pFrame->mean + poseInOdom;
+  }
+
+  return bestPoseInMap;
+}
+
 std::optional<mrpt::poses::CPose3DPDFGaussian> Mapper::estimated_T_map_to_odometry_frame(
   const std::string & frame_id) const
 {

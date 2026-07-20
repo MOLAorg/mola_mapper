@@ -269,7 +269,7 @@ private:
     // Current / most-recent scan:
     std::atomic<bool> scan_in_progress{false};
     std::atomic<std::size_t> cur_total{0};  // candidates this scan (queue size)
-    std::atomic<std::size_t> cur_done{0};  // evaluated so far (pending = total - done)
+    std::atomic<std::size_t> cur_done{0};   // evaluated so far (pending = total - done)
     std::atomic<std::size_t> last_scan_accepted{0};
     std::atomic<double> last_scan_seconds{0.0};
     std::atomic<bool> last_scan_full{false};
@@ -428,6 +428,10 @@ private:
   std::mutex state_gui_mtx_;
   bool gui_created_ = false;
   std::optional<mrpt::Clock::time_point> last_viz_update_wallclock_;
+  // Separate wall-clock throttle for the camera-follow: it runs every spinOnce
+  // (well above the scene-rebuild rate) so the camera tracks the dense vehicle
+  // pose smoothly, not at the sparse keyframe / scene cadence.
+  std::optional<mrpt::Clock::time_point> last_camera_follow_wallclock_;
 
   // Runtime view toggles, driven from the GUI "Control" tab. Written from the
   // GUI thread, read from the spinOnce/viz thread (atomic to avoid a data race;
@@ -499,6 +503,12 @@ private:
   /// Throttled to visualization.update_rate_hz. No-op when no visualizer is
   /// attached. (Mapper_GUI.cpp)
   void updateVisualization();
+
+  /// Centers the viewport on the vehicle when "camera follows vehicle" is on.
+  /// Runs every spinOnce (self-throttled) using the freshest dense fuse_pose()
+  /// vehicle pose extrapolated to the current instant, so it tracks actual
+  /// high-rate motion instead of jumping at the keyframe cadence. (Mapper_GUI.cpp)
+  void updateCameraFollow();
 
   /// Builds the backend-agnostic GUI sub-window (status + control tabs) once.
   void internalBuildGUI();
@@ -700,6 +710,15 @@ private:
   /// already promises, instead of letting it escape into the caller's thread.
   [[nodiscard]] std::optional<NavState> estimated_navstate_impl(
     const mrpt::Clock::time_point & timestamp, const std::string & frame_id);
+
+  /// Freshest dense fuse_pose() vehicle pose expressed in {map}, extrapolated to
+  /// `atStamp` with the source's own (filtered) twist. Unlike estimated_navstate
+  /// it is GATE-FREE: it does not require the nearest keyframe to be solved or
+  /// within the velocity-model window, so it stays smooth for the camera even
+  /// when the newest keyframe is unsolved or sparse. Returns nullopt when no raw
+  /// source anchor with a resolvable T_map_to_odom exists yet. (Mapper_Fusion.cpp)
+  [[nodiscard]] std::optional<mrpt::poses::CPose3D> freshest_vehicle_pose_in_map(
+    const mrpt::Clock::time_point & atStamp) const;
 
   /// Returns the (before, after) keyframe iterators bracketing timestamp `t`.
   [[nodiscard]] pair_nearby_frame_iterators_t find_before_after(

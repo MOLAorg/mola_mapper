@@ -164,6 +164,7 @@ modules:
   - name: mapper
     type: mola::mapper::Mapper
     verbosity_level: "${MOLA_VERBOSITY_MAPPER|INFO}"
+    execution_rate: ${MOLA_MAPPER_RATE|50}  # Hz spinOnce rate: drives the high-rate publisher + smooth camera-follow
     # Subscribe directly to the dataset's IMU observations. LidarOdometry
     # keyframes arrive separately via the SharedKeyframeMap sink:
     raw_data_source: "dataset_input"

@@ -137,6 +137,12 @@ void Mapper::updateVisualization()
   if (updateRateHz <= 0) {
     return;  // visualization explicitly disabled
   }
+
+  // Camera-follow runs on EVERY tick (it self-throttles to a high rate), before
+  // the scene-rebuild throttle below, so the camera tracks the dense vehicle
+  // pose smoothly instead of only refreshing at the (slower) scene rate.
+  updateCameraFollow();
+
   const auto nowWall = mrpt::Clock::now();
   if (last_viz_update_wallclock_.has_value()) {
     const double dt = mrpt::system::timeDifference(*last_viz_update_wallclock_, nowWall);
@@ -155,8 +161,6 @@ void Mapper::updateVisualization()
   std::vector<std::pair<mrpt::math::TPoint3D, mrpt::math::TPoint3D>> edges;
   std::vector<std::pair<mrpt::math::TPoint3D, mrpt::math::TPoint3D>> lcEdges;
   std::vector<std::pair<std::string, mrpt::poses::CPose3D>> odomFrames;
-  std::optional<mrpt::poses::CPose3D> latestVehiclePose;
-  std::optional<mrpt::Clock::time_point> freshestStamp;
   bool hasGeoref = false;
   std::size_t gnssFactors = 0;
   std::size_t imuFactorsGravity = 0;
@@ -177,12 +181,6 @@ void Mapper::updateVisualization()
       }
       kfPoses.emplace_back(kfId, it->second.pose);
     }
-    if (!kfPoses.empty()) {
-      latestVehiclePose = kfPoses.back().second;
-    }
-
-    // Freshest instant for the camera-follow high-rate query (see below).
-    freshestStamp = get_current_extrapolated_stamp_locked();
 
     // Graph edges (undirected): de-duplicate the (a,b)/(b,a) pairs, and split
     // loop-closure edges (present in the LC merged-pairs set) from the
@@ -387,29 +385,8 @@ void Mapper::updateVisualization()
     visualizer_->update_3d_object("mapper/odom_frames", glMarkers);
   }
 
-  // --- Camera follow ---
-  // Track the same high-rate extrapolated pose the publisher emits, so the
-  // camera advances with actual vehicle motion at the viz rate instead of
-  // jumping once per keyframe. Query {map} at the freshest instant; the state
-  // lock was released above, and estimated_navstate() locks internally. Fall
-  // back to the last keyframe pose if the fresh estimate is not available yet.
-  if (viz_camera_follows_vehicle_.load()) {
-    std::optional<mrpt::poses::CPose3D> target = latestVehiclePose;
-    if (freshestStamp.has_value()) {
-      const auto nv = estimated_navstate(*freshestStamp, params_.reference_frame_name);
-      if (nv.has_value()) {
-        target = nv->pose.getPoseMean();
-      }
-    }
-    if (target.has_value()) {
-      // Render the target in the selected viz frame, matching the scene geometry
-      // (which is placed under vizXform).
-      const mrpt::poses::CPose3D targetInScene = vizXform + *target;
-      visualizer_->update_viewport_look_at(mrpt::math::TPoint3Df(
-        static_cast<float>(targetInScene.x()), static_cast<float>(targetInScene.y()),
-        static_cast<float>(targetInScene.z())));
-    }
-  }
+  // Camera-follow is handled by updateCameraFollow() at the top of this method
+  // (it runs at a higher rate than this throttled scene rebuild).
 
   // --- GUI sub-window (created once) + text labels ---
   {
@@ -506,6 +483,80 @@ void Mapper::updateVisualization()
       "Last scan: +%zu loop(s), %.1f s (%s)", lc_ui_.last_scan_accepted.load(),
       lc_ui_.last_scan_seconds.load(), lc_ui_.last_scan_full.load() ? "full" : "incremental"));
   }
+}
+
+void Mapper::updateCameraFollow()
+{
+  if (!visualizer_ || !viz_camera_follows_vehicle_.load()) {
+    return;
+  }
+
+  // Self-throttle to a smooth-but-cheap wall-clock rate. This runs every
+  // spinOnce (well above the scene rate), so without this it would enqueue a
+  // look-at every tick.
+  constexpr double kCameraFollowRateHz = 30.0;
+  const auto nowWall = mrpt::Clock::now();
+  if (last_camera_follow_wallclock_.has_value()) {
+    const double dt = mrpt::system::timeDifference(*last_camera_follow_wallclock_, nowWall);
+    if (dt < 1.0 / kCameraFollowRateHz) {
+      return;
+    }
+  }
+
+  // Snapshot the little we need under the state lock; the geo-ref transform (for
+  // the {enu} viz frame) and a last-solved-keyframe fallback.
+  std::optional<mrpt::Clock::time_point> freshStamp;
+  std::optional<mrpt::poses::CPose3D> enuToMap;
+  std::optional<mrpt::poses::CPose3D> latestKfPose;
+  {
+    auto lck = mrpt::lockHelper(stateMutex_);
+    freshStamp = get_current_extrapolated_stamp_locked();
+    if (const auto itEnu = state_.last_estimated_frames.find(0);
+        itEnu != state_.last_estimated_frames.end()) {
+      enuToMap = itEnu->second.mean;
+    }
+    if (!state_.time_to_kf_id.empty()) {
+      const auto kfId = state_.time_to_kf_id.getDirectMap().rbegin()->second;
+      if (const auto it = state_.last_estimated_states.find(kfId);
+          it != state_.last_estimated_states.end()) {
+        latestKfPose = it->second.pose;
+      }
+    }
+  }
+
+  // Prefer the freshest dense fuse_pose() vehicle pose (LIO pushes these every
+  // scan, between the sparse keyframes), extrapolated to the current instant.
+  // This tracks the actual high-rate motion. Fall back to the kinematic
+  // estimate, then the last solved keyframe.
+  std::optional<mrpt::poses::CPose3D> target;
+  if (freshStamp.has_value()) {
+    target = freshest_vehicle_pose_in_map(*freshStamp);
+    if (!target.has_value()) {
+      const auto nv = estimated_navstate(*freshStamp, params_.reference_frame_name);
+      if (nv.has_value()) {
+        target = nv->pose.getPoseMean();
+      }
+    }
+  }
+  if (!target.has_value()) {
+    target = latestKfPose;
+  }
+  if (!target.has_value()) {
+    return;
+  }
+
+  last_camera_follow_wallclock_ = nowWall;
+
+  // Render in the selected viz frame (scene geometry is placed under vizXform:
+  // identity for {map}, T_enu_to_map for {enu}).
+  mrpt::poses::CPose3D vizXform;
+  if (viz_reference_frame_.load() == 1 && enuToMap.has_value()) {
+    vizXform = *enuToMap;
+  }
+  const mrpt::poses::CPose3D targetInScene = vizXform + *target;
+  visualizer_->update_viewport_look_at(mrpt::math::TPoint3Df(
+    static_cast<float>(targetInScene.x()), static_cast<float>(targetInScene.y()),
+    static_cast<float>(targetInScene.z())));
 }
 
 void Mapper::internalBuildGUI()

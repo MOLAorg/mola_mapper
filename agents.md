@@ -93,11 +93,19 @@ docs/call-graph.md               Mermaid diagram tracing every public-API method
   LIO+SharedKeyframeMap setup: there the mapper's only dense inputs are the
   high-rate IMU/wheels (no dense odometry `fuse_pose()` source), so the newest
   keyframe stamp alone advances only at the keyframe cadence. This mirrors the
-  smoother's `last_observation_stamp` / `get_current_extrapolated_stamp()`. The
-  GUI "camera follows vehicle" tracks that SAME freshest-instant estimate
-  (queried independently at the viz rate, so it works with no external
-  subscriber), rendered in the selected viz frame, instead of jumping once per
-  keyframe.
+  smoother's `last_observation_stamp` / `get_current_extrapolated_stamp()`.
+- The GUI "camera follows vehicle" (`updateCameraFollow()`, called every
+  `spinOnce` and self-throttled to ~30 Hz, ABOVE the throttled scene rebuild)
+  centers the viewport on `freshest_vehicle_pose_in_map()`: the freshest dense
+  `fuse_pose()` anchor (LIO pushes one per scan, between keyframes) composed into
+  {map} via its source's `T_map_to_odom` and extrapolated to the current instant
+  with the source's own filtered twist. This is deliberately GATE-FREE, unlike
+  `estimated_navstate()` whose {map} path returns nullopt when the nearest
+  keyframe is unsolved or outside the velocity-model window — which made the
+  camera fall back to the last solved keyframe and jump at the keyframe cadence
+  even while dense poses were available. Falls back to `estimated_navstate()`
+  then the last solved keyframe only when no raw anchor exists. Rendered in the
+  selected viz frame; works with no external subscriber.
 - IMU never creates keyframes nor inserts per-sample factors: each raw
   reading is lever-arm-corrected to the vehicle frame and pushed into one
   global `LocalVelocityBuffer`; the gravity/attitude/gyro factors are built

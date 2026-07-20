@@ -93,6 +93,7 @@ modules:
   - name: mapper
     type: mola::mapper::Mapper
     verbosity_level: "${MOLA_VERBOSITY_MAPPER|INFO}"
+    execution_rate: ${MOLA_MAPPER_RATE|50}  # Hz spinOnce rate: drives the high-rate publisher + smooth camera-follow
 
     params:
       # Import the shared defaults and override ONLY the KITTI-specific keys

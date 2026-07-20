@@ -82,7 +82,14 @@ docs/call-graph.md               Mermaid diagram tracing every public-API method
 - The high-rate publisher (`spinOnce()` -> `publish_high_rate_pose()`)
   extrapolates the latest anchor with the kinematic model and publishes via
   `advertiseUpdatedLocalization()` at `high_rate_pose_publish_rate_hz`, gated
-  on a subscriber existing.
+  on a subscriber existing. It queries `estimated_navstate()` at
+  `get_current_extrapolated_stamp_locked()` (newest raw source anchor, else
+  newest keyframe), which advances between keyframes as dense `fuse_pose()`
+  readings arrive - mirroring the smoother's `get_current_extrapolated_stamp()`.
+  The GUI "camera follows vehicle" tracks that SAME freshest-instant estimate
+  (queried independently at the viz rate, so it works with no external
+  subscriber), rendered in the selected viz frame, instead of jumping once per
+  keyframe.
 - IMU never creates keyframes nor inserts per-sample factors: each raw
   reading is lever-arm-corrected to the vehicle frame and pushed into one
   global `LocalVelocityBuffer`; the gravity/attitude/gyro factors are built

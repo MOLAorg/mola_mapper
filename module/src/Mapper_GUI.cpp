@@ -155,6 +155,7 @@ void Mapper::updateVisualization()
   std::vector<std::pair<mrpt::math::TPoint3D, mrpt::math::TPoint3D>> edges;
   std::vector<std::pair<std::string, mrpt::poses::CPose3D>> odomFrames;
   std::optional<mrpt::poses::CPose3D> latestVehiclePose;
+  std::optional<mrpt::Clock::time_point> freshestStamp;
   bool hasGeoref = false;
   std::size_t gnssFactors = 0;
   std::size_t imuFactorsGravity = 0;
@@ -178,6 +179,9 @@ void Mapper::updateVisualization()
     if (!kfPoses.empty()) {
       latestVehiclePose = kfPoses.back().second;
     }
+
+    // Freshest instant for the camera-follow high-rate query (see below).
+    freshestStamp = get_current_extrapolated_stamp_locked();
 
     // Graph edges (undirected): de-duplicate the (a,b)/(b,a) pairs.
     std::set<std::pair<KeyFrameID, KeyFrameID>> seen;
@@ -368,10 +372,27 @@ void Mapper::updateVisualization()
   }
 
   // --- Camera follow ---
-  if (viz_camera_follows_vehicle_.load() && latestVehiclePose.has_value()) {
-    visualizer_->update_viewport_look_at(mrpt::math::TPoint3Df(
-      static_cast<float>(latestVehiclePose->x()), static_cast<float>(latestVehiclePose->y()),
-      static_cast<float>(latestVehiclePose->z())));
+  // Track the same high-rate extrapolated pose the publisher emits, so the
+  // camera advances with actual vehicle motion at the viz rate instead of
+  // jumping once per keyframe. Query {map} at the freshest instant; the state
+  // lock was released above, and estimated_navstate() locks internally. Fall
+  // back to the last keyframe pose if the fresh estimate is not available yet.
+  if (viz_camera_follows_vehicle_.load()) {
+    std::optional<mrpt::poses::CPose3D> target = latestVehiclePose;
+    if (freshestStamp.has_value()) {
+      const auto nv = estimated_navstate(*freshestStamp, params_.reference_frame_name);
+      if (nv.has_value()) {
+        target = nv->pose.getPoseMean();
+      }
+    }
+    if (target.has_value()) {
+      // Render the target in the selected viz frame, matching the scene geometry
+      // (which is placed under vizXform).
+      const mrpt::poses::CPose3D targetInScene = vizXform + *target;
+      visualizer_->update_viewport_look_at(mrpt::math::TPoint3Df(
+        static_cast<float>(targetInScene.x()), static_cast<float>(targetInScene.y()),
+        static_cast<float>(targetInScene.z())));
+    }
   }
 
   // --- GUI sub-window (created once) + text labels ---

@@ -94,7 +94,10 @@ flowchart TD
     %% ----------------------------------------------------------------
     SPIN --> PUB_POSE["publish_high_rate_pose()"]
     SPIN --> VIZ["updateVisualization()\n(Mapper_GUI.cpp)"]
+    PUB_POSE --> FRESH_STAMP["get_current_extrapolated_stamp_locked()"]
     PUB_POSE --> EST_NAV
+    VIZ --> FRESH_STAMP
+    VIZ -->|camera follow| EST_NAV
 
     %% ----------------------------------------------------------------
     %% initialize

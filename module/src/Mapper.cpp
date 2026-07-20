@@ -407,13 +407,12 @@ void Mapper::publish_high_rate_pose()
     }
   }
 
-  // Publish at the latest fused keyframe time (the freshest data instant):
+  // Publish at the freshest data instant (advances between keyframes as dense
+  // odometry arrives), not just at the latest keyframe stamp:
   std::optional<mrpt::Clock::time_point> stamp;
   {
     auto lck = mrpt::lockHelper(stateMutex_);
-    if (!state_.time_to_kf_id.empty()) {
-      stamp = state_.time_to_kf_id.getDirectMap().rbegin()->first;
-    }
+    stamp = get_current_extrapolated_stamp_locked();
   }
   if (!stamp.has_value()) {
     return;
@@ -438,6 +437,27 @@ void Mapper::publish_high_rate_pose()
   lu.cov = nv->pose.cov_inv.inverse_LLt();
 
   advertiseUpdatedLocalization(lu);
+}
+
+std::optional<mrpt::Clock::time_point> Mapper::get_current_extrapolated_stamp_locked() const
+{
+  std::optional<mrpt::Clock::time_point> stamp;
+  // Newest raw odometry anchor (updated every dense fuse_pose(), i.e. at scan
+  // rate, well above the keyframe cadence):
+  for (const auto & [id, raw] : state_.last_raw_pose_by_source) {
+    (void)id;
+    if (!stamp.has_value() || raw.stamp > *stamp) {
+      stamp = raw.stamp;
+    }
+  }
+  // Fall back to (or advance past) the newest keyframe stamp:
+  if (!state_.time_to_kf_id.empty()) {
+    const auto kfStamp = state_.time_to_kf_id.getDirectMap().rbegin()->first;
+    if (!stamp.has_value() || kfStamp > *stamp) {
+      stamp = kfStamp;
+    }
+  }
+  return stamp;
 }
 
 bool Mapper::has_converged_localization(mrpt::poses::CPose3DPDFGaussian & pose_in_map) const

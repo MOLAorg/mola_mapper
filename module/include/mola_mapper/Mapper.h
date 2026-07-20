@@ -589,6 +589,15 @@ private:
   /// advertiseUpdatedLocalization, throttled to high_rate_pose_publish_rate_hz.
   void publish_high_rate_pose();
 
+  /// Freshest instant the {map}-frame pose can be extrapolated to: the newest
+  /// raw source anchor, falling back to the newest keyframe. This advances
+  /// between keyframes as dense fuse_pose() readings arrive, so both the
+  /// high-rate publisher and the camera-follow track actual vehicle motion
+  /// rather than the sparse keyframe cadence. Mirrors the smoother's
+  /// get_current_extrapolated_stamp(). Caller must hold stateMutex_.
+  [[nodiscard]] std::optional<mrpt::Clock::time_point> get_current_extrapolated_stamp_locked()
+    const;
+
   /// Returns the optimized NavState (pose+twist+covariances) of a keyframe.
   /// Throws if `idx` has no solved estimate yet; callers must handle that.
   [[nodiscard]] NavState get_latest_state_and_covariance(KeyFrameID idx) const;

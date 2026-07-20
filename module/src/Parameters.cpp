@@ -59,6 +59,9 @@ void Parameters::loadFrom(const mrpt::containers::yaml & cfg)
   MCP_LOAD_OPT(cfg, sigma_twist_from_consecutive_poses_linear);
   MCP_LOAD_OPT(cfg, sigma_twist_from_consecutive_poses_angular);
 
+  MCP_LOAD_OPT(cfg, predict_twist_filter_enabled);
+  MCP_LOAD_OPT(cfg, predict_twist_filter_time_const);
+
   MCP_LOAD_OPT(cfg, initial_twist_sigma_lin);
   MCP_LOAD_OPT(cfg, initial_twist_sigma_ang);
 

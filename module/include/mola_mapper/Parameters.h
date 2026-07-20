@@ -147,6 +147,21 @@ public:
   double sigma_integrator_position = 0.10;              // [m]
   double sigma_integrator_orientation = 0.10;           // [rad]
 
+  /// If true, the velocity used for short-term extrapolation in
+  /// estimated_navstate() is a low-pass-filtered twist instead of the raw one.
+  /// Applies to BOTH velocity sources: the newest keyframe's optimized V/W
+  /// (re-jittered by every absolute factor over the non-windowed central map)
+  /// and each source's own finite-difference `local_twist` (a single-interval
+  /// difference of consecutive raw poses, hence noisy). Extrapolating either
+  /// un-damped feeds a jittery motion prior to a LiDAR front end, which starts
+  /// ICP from a bad guess and, under real-time load, drops scans. A plain
+  /// dt-aware EMA, so it stays deterministic.
+  bool predict_twist_filter_enabled = true;
+
+  /// [s] Time constant of the predict-twist low-pass. Larger = smoother prior
+  /// but more lag behind genuine acceleration.
+  double predict_twist_filter_time_const = 0.3;
+
   double sigma_twist_from_consecutive_poses_linear = 1.0;   // [m/s]
   double sigma_twist_from_consecutive_poses_angular = 1.0;  // [rad/s]
 

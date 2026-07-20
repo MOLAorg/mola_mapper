@@ -126,6 +126,22 @@ mrpt::poses::CPose3D body_twist_delta(
   }
 }
 
+/// Picks the velocity to extrapolate a source's raw {odom_i} anchor with:
+/// the low-pass-filtered finite-difference twist when enabled and available,
+/// otherwise the raw finite difference, otherwise `fallback` (the graph V/W).
+const mrpt::math::TTwist3D & source_predict_twist(
+  const Parameters & params, const WorldModelState::RawSourcePose & anchor,
+  const mrpt::math::TTwist3D & fallback)
+{
+  if (params.predict_twist_filter_enabled && anchor.filtered_local_twist.value.has_value()) {
+    return *anchor.filtered_local_twist.value;
+  }
+  if (anchor.has_local_twist) {
+    return anchor.local_twist;
+  }
+  return fallback;
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -446,9 +462,13 @@ void Mapper::fuse_pose_locked(
   // factors bend the soft keyframe chain) and would leak meter/degree jumps into
   // the prediction. The source's own finite-difference velocity is immune to
   // those {map}-frame corrections. See WorldModelState::RawSourcePose.
-  WorldModelState::RawSourcePose newAnchor{timestamp, poseSanitized, {}, false};
+  WorldModelState::RawSourcePose newAnchor{timestamp, poseSanitized, {}, false, {}};
   if (const auto itPrev = state_.last_raw_pose_by_source.find(frame_id_idx);
       itPrev != state_.last_raw_pose_by_source.end()) {
+    // Carry the filter state across updates (the anchor struct is replaced
+    // wholesale below).
+    newAnchor.filtered_local_twist = itPrev->second.filtered_local_twist;
+
     const double dt = mrpt::system::timeDifference(itPrev->second.stamp, timestamp);
     if (dt > 1e-4 && dt <= params_.max_time_to_use_velocity_model) {
       // Relative body motion prev^-1 (+) curr, then log() / dt -> body twist.
@@ -457,6 +477,13 @@ void Mapper::fuse_pose_locked(
       newAnchor.local_twist = mrpt::math::TTwist3D(
         logv[0] / dt, logv[1] / dt, logv[2] / dt, logv[3] / dt, logv[4] / dt, logv[5] / dt);
       newAnchor.has_local_twist = true;
+
+      // Damp this single-interval finite difference before it reaches the
+      // front end's motion prior.
+      if (params_.predict_twist_filter_enabled) {
+        newAnchor.filtered_local_twist.update(
+          newAnchor.local_twist, timestamp, params_.predict_twist_filter_time_const);
+      }
     }
   }
   state_.last_raw_pose_by_source[frame_id_idx] = newAnchor;
@@ -1540,6 +1567,15 @@ void Mapper::optimize_and_refresh()
       if (it != state_.last_estimated_states.end()) {
         it->second.pose_cov = latestPoseCov;
         it->second.twist_cov = latestTwistCov;
+
+        // Drive the predict-twist low-pass with the newest keyframe's optimized
+        // twist, so the short-term prediction extrapolates a damped velocity
+        // rather than this (least-constrained, per-solve jittery) node's raw one.
+        if (params_.predict_twist_filter_enabled) {
+          state_.filtered_predict_twist.update(
+            it->second.twist, state_.time_to_kf_id.inverse(latestKfId),
+            params_.predict_twist_filter_time_const);
+        }
       }
     }
     std::string driftTrace;
@@ -1748,6 +1784,16 @@ std::optional<NavState> Mapper::estimated_navstate_impl(
     ret.twist_inv_cov = twist_cov.inverse_LLt();
   }
 
+  // Extrapolate the low-pass-filtered velocity instead of the newest keyframe's
+  // raw optimized twist. Only when anchoring on that newest keyframe: older
+  // keyframes are constrained on both sides, so their twist is not the noisy
+  // boundary estimate the filter exists to damp.
+  if (
+    params_.predict_twist_filter_enabled && state_.filtered_predict_twist.value.has_value() &&
+    *closestFrameIdx == state_.last_kf_id()) {
+    ret.twist = *state_.filtered_predict_twist.value;
+  }
+
   // 4) Produce the pose in the requested frame.
   if (frame_id == params_.reference_frame_name) {
     // The reference-frame path extrapolates the closest keyframe's {map} pose,
@@ -1805,7 +1851,7 @@ std::optional<NavState> Mapper::estimated_navstate_impl(
         // twist (frame-local, immune to the graph V/W re-optimization jitter the
         // absolute factors inject), then compose into {map}.
         const mrpt::math::TTwist3D & twistOdom =
-          rawAnchor.has_local_twist ? rawAnchor.local_twist : ret.twist;
+          source_predict_twist(params_, rawAnchor, ret.twist);
         const auto poseInOdom =
           rawAnchor.pose.mean + body_twist_delta(params_, twistOdom, dtFromRaw);
         freshestPoseInMap = pFrame->mean + poseInOdom;
@@ -1875,9 +1921,7 @@ std::optional<NavState> Mapper::estimated_navstate_impl(
   // roll/pitch is pinned those factors bend the soft keyframe chain, so the
   // latest keyframe's V/W swings per solve and would otherwise leak meter/degree
   // jumps into this prediction (wrecking the front end's ICP guess on MulRan).
-  if (rawAnchor.has_local_twist) {
-    ret.twist = rawAnchor.local_twist;
-  }
+  ret.twist = source_predict_twist(params_, rawAnchor, ret.twist);
 
   mrpt::poses::CPose3DPDFGaussian pred;
   pred.mean = rawAnchor.pose.mean + body_twist_delta(params_, ret.twist, dtPred);

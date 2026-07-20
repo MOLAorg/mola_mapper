@@ -59,6 +59,14 @@ sigma_random_walk_acceleration_angular: ${MOLA_SIGMA_RW_ANGACC|10.0}
 sigma_integrator_position: 0.10
 sigma_integrator_orientation: 1.0
 
+# Low-pass the velocity used for short-term extrapolation, so the motion prior
+# handed to a LiDAR front end stays smooth (a jittery prior starts ICP from a
+# bad guess and, under real-time load, drops scans). Deterministic (plain EMA).
+# Raise the time constant for a smoother prior, lower it for platforms with
+# genuinely high acceleration.
+predict_twist_filter_enabled: ${MOLA_MAPPER3D_PREDICT_TWIST_FILTER|true}
+predict_twist_filter_time_const: ${MOLA_MAPPER3D_PREDICT_TWIST_TAU|0.3}
+
 initial_twist_sigma_lin: 20.0
 initial_twist_sigma_ang: 3.0
 

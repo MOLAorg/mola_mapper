@@ -21,11 +21,43 @@
 
 #include <mola_mapper/WorldModelState.h>
 #include <mrpt/poses/CPose3DPDFGaussian.h>
+#include <mrpt/system/datetime.h>
+
+#include <cmath>
 
 #include "GtsamData.h"
 
 namespace mola::mapper
 {
+
+void TwistLowPass::update(
+  const mrpt::math::TTwist3D & raw, const mrpt::Clock::time_point & t, double timeConstant)
+{
+  // Bootstrap (first sample, or after a reset): adopt the raw value.
+  if (!value.has_value() || !stamp.has_value()) {
+    value = raw;
+    stamp = t;
+    return;
+  }
+
+  const double dt = mrpt::system::timeDifference(*stamp, t);
+  if (dt <= 0) {
+    // Same-stamp or out-of-order update: keep the smoothed state as is.
+    return;
+  }
+
+  if (timeConstant <= 0) {
+    value = raw;
+    stamp = t;
+    return;
+  }
+
+  const double alpha = 1.0 - std::exp(-dt / timeConstant);
+  for (size_t i = 0; i < 6; i++) {
+    (*value)[i] += alpha * (raw[i] - (*value)[i]);
+  }
+  stamp = t;
+}
 
 WorldModelState::WorldModelState() : gtsam(mrpt::make_impl<GtsamData>()) {}
 
@@ -111,6 +143,7 @@ void WorldModelState::clear()
   last_estimated_states.clear();
   last_estimated_frames.clear();
   last_raw_pose_by_source.clear();
+  filtered_predict_twist.reset();
   kf_connectivity.clearEdges();
   known_odom_frames.clear();
   next_odom_frame_id = 1;

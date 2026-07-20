@@ -57,6 +57,37 @@ struct DummyEdgeData
 using KeyFrameConnectivity = mrpt::graphs::CDirectedGraph<DummyEdgeData>;
 using KeyFrameConnectivityDijkstra = mrpt::graphs::CDijkstra<KeyFrameConnectivity>;
 
+/** A dt-aware exponential moving average of a body-frame twist, used to damp
+ *  the velocity fed to the short-term motion prediction.
+ *
+ *  Deterministic (a plain EMA), so runs stay reproducible. Its cost is a short
+ *  lag behind genuine acceleration.
+ *
+ * \ingroup mola_mapper_grp
+ */
+struct TwistLowPass
+{
+  std::optional<mrpt::math::TTwist3D> value;
+  std::optional<mrpt::Clock::time_point> stamp;
+
+  void reset()
+  {
+    value.reset();
+    stamp.reset();
+  }
+
+  /** Advances the filter towards `raw`. `timeConstant` is in seconds; <=0
+   *  disables smoothing (the raw value passes through).
+   *
+   *  A non-advancing timestamp leaves the smoothed state UNTOUCHED: the solver
+   *  can re-run several times while the newest keyframe stamp is unchanged, and
+   *  overwriting the state with the raw value there would wipe the EMA history
+   *  and let exactly the jitter this filter exists to suppress straight through.
+   */
+  void update(
+    const mrpt::math::TTwist3D & raw, const mrpt::Clock::time_point & t, double timeConstant);
+};
+
 /** Holds the full state of the central world model: the GTSAM factor graph,
  *  the keyframe raw observations (as a CSimpleMap-like store), the odometry
  *  frame registry, keyframe connectivity, and the latest optimized poses.
@@ -146,8 +177,22 @@ public:
     /// frame-local. Falls back to the graph V/W until two raw poses exist.
     mrpt::math::TTwist3D local_twist;
     bool has_local_twist = false;
+
+    /// Low-pass-filtered version of `local_twist`, and what the predictor
+    /// actually extrapolates when `predict_twist_filter_enabled`. A single
+    /// finite difference of two consecutive raw poses is a noisy velocity
+    /// estimate; extrapolating it un-damped hands a jittery motion prior to the
+    /// front end's ICP.
+    TwistLowPass filtered_local_twist;
   };
   std::map<OdometryFrameID, RawSourcePose> last_raw_pose_by_source;
+
+  /// Low-pass-filtered twist of the NEWEST keyframe, used as the extrapolation
+  /// velocity for short-term {map}-frame prediction. The newest keyframe's
+  /// optimized V/W is the least-constrained node in the graph and is re-jittered
+  /// by every absolute factor (GNSS / gravity leveling / loop closure), so
+  /// extrapolating it raw injects that jitter into a front end's motion prior.
+  TwistLowPass filtered_predict_twist;
 
   /// Topological connectivity for radius queries and loop-closure gating.
   KeyFrameConnectivity kf_connectivity;

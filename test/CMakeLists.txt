@@ -75,3 +75,10 @@ mola_add_test(
   LINK_LIBRARIES
     mola::mola_mapper
 )
+
+mola_add_test(
+  TARGET  test-predict-twist-filter
+  SOURCES test-predict-twist-filter.cpp
+  LINK_LIBRARIES
+    mola::mola_mapper
+)

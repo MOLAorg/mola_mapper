@@ -44,7 +44,7 @@ enum class KinematicModel : uint8_t
  *  - Auto: acts like SharedMapOnly once any requestInsertKeyframe() call is
  *    received; before that, falls back to legacy creation (all paths create KFs
  *    at min_time_difference_to_create_new_frame). Suitable for typical
- *    LIO+mapper3d deployments: the first sparse KF from LIO flips the mode.
+ *    LIO+mapper deployments: the first sparse KF from LIO flips the mode.
  *  - SharedMapOnly: ONLY requestInsertKeyframe() creates keyframe GTSAM
  *    variables. Dense fuse_pose(), fuse_imu(), fuse_odometry(), fuse_gnss()
  *    only record the predictor anchor and snap to the nearest EXISTING keyframe
@@ -386,7 +386,7 @@ public:
 
   /// If non-empty, save the estimated robot trajectory (in {reference_frame})
   /// as a TUM-format file at shutdown, and on demand via the GUI.
-  /// Set via env var MOLA_MAPPER3D_TUM_TRAJECTORY_OUTPUT (empty = don't save).
+  /// Set via env var MOLA_MAPPER_TUM_TRAJECTORY_OUTPUT (empty = don't save).
   std::string save_trajectory_to_file;
 
   /** @} */

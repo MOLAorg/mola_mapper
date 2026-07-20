@@ -36,11 +36,11 @@ module/include/mola_mapper/   Public headers
   ImuGravityFilter.h             Robust low-dynamics gravity-direction reducer
 module/src/
   Mapper.cpp                   Lifecycle: initialize/spinOnce/reset/diagnostics + IMPLEMENTS_MRPT_OBJECT
-  Mapper3D_Fusion.cpp            Keyframe management + factor-graph fusion + estimated_navstate
-  Mapper3D_KeyframeIngestion.cpp SharedKeyframeMap sink: requestInsertKeyframe()
-  Mapper3D_GUI.cpp               MolaViz/MolaVizImGui viz: KF tree, graph edges, per-source movable
+  Mapper_Fusion.cpp            Keyframe management + factor-graph fusion + estimated_navstate
+  Mapper_KeyframeIngestion.cpp SharedKeyframeMap sink: requestInsertKeyframe()
+  Mapper_GUI.cpp               MolaViz/MolaVizImGui viz: KF tree, graph edges, per-source movable
                                   {odom_i} frames, {enu} geo-ref marker, status/geo-ref/view panel
-  Mapper3D_SensorCallbacks.cpp   onNewObservation dispatch -> fuse_*()
+  Mapper_SensorCallbacks.cpp   onNewObservation dispatch -> fuse_*()
   Mapper_LoopClosure.cpp         Background LC thread: snapshots the map, runs the
                                   mola_sm_loop_closure detector (analyze()) off-lock,
                                   merges accepted edges as robust BetweenFactors;
@@ -54,8 +54,8 @@ module/src/
   Parameters.cpp                 loadFrom(yaml)
   register.cpp                   MOLA_REGISTER_MODULE(mola::mapper::Mapper)
   GtsamData.h, factor_builders.h Private GTSAM symbol scheme + factor builders (shared by the two fusion TUs)
-apps/mola-mapper-3d-cli.cpp      Offline front end (skeleton)
-params/mapper-3d.yaml            Default config (no fixed geo-ref; pure-odometry-safe defaults)
+apps/mola-mapper-cli.cpp      Offline front end (skeleton)
+params/mapper.yaml            Default config (no fixed geo-ref; pure-odometry-safe defaults)
 mola-cli-launchs/                Live system YAMLs (KITTI, MulRan, BotanicGarden, Oxford Spires,
                                   ConSLAM, generic ROS 2 bag)
 test/                            Unit tests (plain main() + MRPT ASSERT_ macros, run by mola_add_test)
@@ -228,7 +228,7 @@ KITTI_SEQ=04 MOLA_LINK_FIRST_POSE_SIGMA=1e-6 \
 
 ```bash
 export OXFORD_SPIRES_ROSBAG2=/path/to/sequence/raw/ros2bag/<segment>
-MOLA_WITH_GUI=false MOLA_MAPPER3D_TUM_TRAJECTORY_OUTPUT=/tmp/obs01.tum \
+MOLA_WITH_GUI=false MOLA_MAPPER_TUM_TRAJECTORY_OUTPUT=/tmp/obs01.tum \
   mola-cli mola-cli-launchs/lidar_odometry_mapper_from_oxford_spires.yaml
 # LiDAR+IMU only (no GNSS). Loop closure is ON by default (Hesai has per-point
 # timestamps, so the LC pipeline deskews normally). GT trajectories ship as TUM

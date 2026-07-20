@@ -27,7 +27,7 @@ number of LIO/VIO front-ends running concurrently, replacing the lighter-weight
 
 |
 
-.. _mola_mapper3d_role:
+.. _mola_mapper_role:
 
 Role within the MOLA ecosystem
 ----------------------------------
@@ -46,7 +46,7 @@ The relationship between front-ends and Mapper is symmetric: the front-end drive
 short-term motion estimation, while Mapper provides the globally-consistent anchor
 and corrects for drift over time.
 
-.. figure:: imgs/mapper3d_system_scheme.png
+.. figure:: imgs/mapper_system_scheme.png
    :width: 640
    :alt: Mapper system block diagram
 
@@ -55,7 +55,7 @@ and corrects for drift over time.
 
 |
 
-.. _mola_mapper3d_interfaces:
+.. _mola_mapper_interfaces:
 
 Provided interfaces
 -----------------------
@@ -87,7 +87,7 @@ Mapper implements the following ``mola_kernel`` interfaces:
 
 |
 
-.. _mola_mapper3d_frames:
+.. _mola_mapper_frames:
 
 Reference frame conventions
 -------------------------------
@@ -107,13 +107,13 @@ This mirrors the conventions of :ref:`mola_state_estimators <mola_sta_est_index>
 
 |
 
-.. _mola_mapper3d_params:
+.. _mola_mapper_params:
 
 Configuration parameters
 ----------------------------
 
 All parameters are loaded from the ``params:`` subtree of the module YAML.
-The shared defaults live in ``params/mapper-3d-common.yaml`` and are imported
+The shared defaults live in ``params/mapper-common.yaml`` and are imported
 via the ``$import`` directive in per-dataset launch files.
 
 Below is a summary of the most frequently tuned parameters, grouped by topic.
@@ -134,20 +134,20 @@ All of them can be overridden via environment variables (listed in parentheses).
    .. code-block:: yaml
 
       # Options: KinematicModel::ConstantVelocity, KinematicModel::Tricycle
-      kinematic_model: "${MOLA_MAPPER3D_KINEMATIC_MODEL|KinematicModel::ConstantVelocity}"
+      kinematic_model: "${MOLA_MAPPER_KINEMATIC_MODEL|KinematicModel::ConstantVelocity}"
 
       max_time_to_use_velocity_model: 0.75   # [s]  (MOLA_MAX_TIME_TO_USE_VELOCITY_MODEL)
       min_time_difference_to_create_new_frame: 0.05  # [s]
 
       # Bound high-rate sensor insertion rate (0 = insert every reading):
-      imu_max_insert_rate_hz: 5.0    # (MOLA_MAPPER3D_IMU_MAX_RATE_HZ)
-      odometry_max_insert_rate_hz: 5.0  # (MOLA_MAPPER3D_ODOM_MAX_RATE_HZ)
+      imu_max_insert_rate_hz: 5.0    # (MOLA_MAPPER_IMU_MAX_RATE_HZ)
+      odometry_max_insert_rate_hz: 5.0  # (MOLA_MAPPER_ODOM_MAX_RATE_HZ)
 
       # Share a bounded-rate keyframe clock for IMU + wheels:
-      aggregate_high_rate_into_edges: false  # (MOLA_MAPPER3D_AGGREGATE)
-      sensor_keyframe_min_period: 0.5        # [s] (MOLA_MAPPER3D_SENSOR_KF_PERIOD)
+      aggregate_high_rate_into_edges: false  # (MOLA_MAPPER_AGGREGATE)
+      sensor_keyframe_min_period: 0.5        # [s] (MOLA_MAPPER_SENSOR_KF_PERIOD)
 
-      enforce_planar_motion: false   # (MOLA_MAPPER3D_ENFORCE_PLANAR_MOTION)
+      enforce_planar_motion: false   # (MOLA_MAPPER_ENFORCE_PLANAR_MOTION)
 
 .. dropdown:: IMU fusion
    :icon: list-unordered
@@ -168,7 +168,7 @@ All of them can be overridden via environment variables (listed in parentheses).
 
       estimate_geo_reference: false   # (MOLA_ESTIMATE_GEO_REF)
       gnss_huber_threshold: 1.5       # [sigmas] (MOLA_GNSS_HUBER_THRESHOLD)
-      convergence_max_position_sigma: 1.0   # [m] (MOLA_MAPPER3D_CONV_POS_SIGMA)
+      convergence_max_position_sigma: 1.0   # [m] (MOLA_MAPPER_CONV_POS_SIGMA)
       convergence_max_orientation_sigma_deg: 5.0
       publish_estimated_georef_on_convergence: true
 
@@ -179,14 +179,14 @@ All of them can be overridden via environment variables (listed in parentheses).
 
       additional_isam2_update_steps: 3
       # Background thread for iSAM2 (recommended for online use):
-      enable_optimizer_thread: true   # (MOLA_MAPPER3D_OPTIMIZER_THREAD)
+      enable_optimizer_thread: true   # (MOLA_MAPPER_OPTIMIZER_THREAD)
 
 .. dropdown:: High-rate pose publisher
    :icon: list-unordered
 
    .. code-block:: yaml
 
-      high_rate_pose_publish_rate_hz: 0.0  # [Hz] 0 = disabled (MOLA_MAPPER3D_PUBLISH_RATE_HZ)
+      high_rate_pose_publish_rate_hz: 0.0  # [Hz] 0 = disabled (MOLA_MAPPER_PUBLISH_RATE_HZ)
       high_rate_use_latest_sensors: true
 
 .. dropdown:: Map save / load
@@ -194,8 +194,8 @@ All of them can be overridden via environment variables (listed in parentheses).
 
    .. code-block:: yaml
 
-      load_simplemap_file: ""   # path to .simplemap (MOLA_MAPPER3D_LOAD_SM)
-      save_simplemap_file: ""   # path to .simplemap (MOLA_MAPPER3D_SAVE_SM)
+      load_simplemap_file: ""   # path to .simplemap (MOLA_MAPPER_LOAD_SM)
+      save_simplemap_file: ""   # path to .simplemap (MOLA_MAPPER_SAVE_SM)
       externalize_after_seconds: 30.0
 
 .. dropdown:: Output trajectory (TUM format)
@@ -205,7 +205,7 @@ All of them can be overridden via environment variables (listed in parentheses).
 
       # If non-empty, save estimated trajectory at shutdown (and on demand via
       # the GUI "Output" tab).  Reference frame = reference_frame_name ({map}).
-      save_trajectory_to_file: ""   # (MOLA_MAPPER3D_TUM_TRAJECTORY_OUTPUT)
+      save_trajectory_to_file: ""   # (MOLA_MAPPER_TUM_TRAJECTORY_OUTPUT)
 
    The file is written in
    `TUM format <https://github.com/MichaelGrupp/evo/wiki/Formats#tum---tum-rgb-d-dataset-trajectory-format>`_
@@ -222,13 +222,13 @@ All of them can be overridden via environment variables (listed in parentheses).
 
    .. code-block:: yaml
 
-      do_process_imu_labels_re: ".*"       # (MOLA_MAPPER3D_IMU_LABELS_RE)
-      do_process_odometry_labels_re: ".*"  # (MOLA_MAPPER3D_ODOMETRY_LABELS_RE)
-      do_process_gnss_labels_re: ".*"      # (MOLA_MAPPER3D_GNSS_LABELS_RE)
+      do_process_imu_labels_re: ".*"       # (MOLA_MAPPER_IMU_LABELS_RE)
+      do_process_odometry_labels_re: ".*"  # (MOLA_MAPPER_ODOMETRY_LABELS_RE)
+      do_process_gnss_labels_re: ".*"      # (MOLA_MAPPER_GNSS_LABELS_RE)
 
 |
 
-.. _mola_mapper3d_gui:
+.. _mola_mapper_gui:
 
 GUI sub-window
 -----------------
@@ -247,13 +247,13 @@ creates a floating sub-window with four tabs:
 
 |
 
-.. _mola_mapper3d_ros2:
+.. _mola_mapper_ros2:
 
 ROS 2 integration
 -----------------------
 
 ROS 2 launch files are provided in the ``ros2-launchs/`` directory.
-See :ref:`mola_mapper3d_ros2_node` for a description of published topics,
+See :ref:`mola_mapper_ros2_node` for a description of published topics,
 subscribed topics, parameters, and ``/tf`` conventions.
 
 |

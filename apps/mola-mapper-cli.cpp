@@ -13,7 +13,7 @@
 */
 
 /**
- * @file   mola-mapper-3d-cli.cpp
+ * @file   mola-mapper-cli.cpp
  * @brief  Offline CLI front end for Mapper (skeleton).
  * @author Jose Luis Blanco Claraco
  * @date   2026
@@ -31,13 +31,13 @@
 int main(int argc, char ** argv)
 {
   try {
-    TCLAP::CmdLine cmd("mola-mapper-3d-cli", ' ', "0.1.0");
+    TCLAP::CmdLine cmd("mola-mapper-cli", ' ', "0.1.0");
 
     TCLAP::ValueArg<std::string> argInput(
       "i", "input", "Input dataset (.simplemap / rosbag2) to process offline.", false, "",
       "map.simplemap", cmd);
     TCLAP::ValueArg<std::string> argConfig(
-      "c", "config", "YAML configuration file for Mapper.", false, "", "mapper-3d.yaml", cmd);
+      "c", "config", "YAML configuration file for Mapper.", false, "", "mapper.yaml", cmd);
 
     if (!cmd.parse(argc, argv)) {
       return 1;
@@ -47,7 +47,7 @@ int main(int argc, char ** argv)
     auto m = mola::mapper::Mapper::Create();
     ASSERT_(m);
 
-    std::cout << "[mola-mapper-3d-cli] Offline processing is not implemented yet "
+    std::cout << "[mola-mapper-cli] Offline processing is not implemented yet "
                  "(Mapper is under construction).\n";
 
     return 0;

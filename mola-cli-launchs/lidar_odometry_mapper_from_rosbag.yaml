@@ -13,7 +13,7 @@
 # is `is_optional: true` with an empty-topic default, so any subset of them
 # (including none) can be left unset without the dataset source failing to
 # initialize; a LiDAR topic is normally needed for LidarOdometry to produce
-# keyframes, the rest are extra fusion sources consumed directly by mapper3d.
+# keyframes, the rest are extra fusion sources consumed directly by mapper.
 #
 # Sensor extrinsics: each sensor (except wheel odometry) accepts an optional
 # `fixed_sensor_pose`, only applied if its `use_fixed_sensor_pose` env var is
@@ -35,7 +35,7 @@
 # A pure-odometry run (no GNSS, no fixed geo-ref) needs
 # MOLA_LINK_FIRST_POSE_SIGMA=1e-6, or the whole graph stays gauge-free and
 # LidarOdometry discards its motion model (see agents.md). Set
-# MOLA_ESTIMATE_GEO_REF=true once a GNSS topic is fed in and you want mapper3d
+# MOLA_ESTIMATE_GEO_REF=true once a GNSS topic is fed in and you want mapper
 # to estimate T_enu_to_map live.
 # -----------------------------------------------------------------------------
 
@@ -48,7 +48,7 @@ modules:
     enabled: ${MOLA_WITH_GUI|true}
     verbosity_level: "${MOLA_VERBOSITY_MOLA_VIZ|INFO}"
     params:
-      imgui_app_name: mapper3d_rosbag2
+      imgui_app_name: mapper_rosbag2
 
   # ==========================================
   # Rosbag1Dataset or Rosbag2Dataset
@@ -130,12 +130,12 @@ modules:
   # =====================
   # mola_mapper (NavStateFilter + SharedKeyframeMap sink + direct IMU/GNSS/odom)
   # =====================
-  - name: mapper3d
+  - name: mapper
     type: mola::mapper::Mapper
-    verbosity_level: "${MOLA_VERBOSITY_MAPPER3D|INFO}"
+    verbosity_level: "${MOLA_VERBOSITY_MAPPER|INFO}"
     # Subscribe directly to the dataset's IMU/GNSS/wheel-odometry observations
     # (lidar_odom's keyframes arrive separately, via the SharedKeyframeMap sink):
     raw_data_source: "dataset_input"
 
     # This includes here a whole block "params: (...)":
-    params: "${MOLA_MAPPER3D_YAML|../params/mapper-3d.yaml}"
+    params: "${MOLA_MAPPER_YAML|../params/mapper.yaml}"

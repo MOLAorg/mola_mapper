@@ -6,7 +6,7 @@
 # module config and per-dataset launch files share these defaults, e.g.:
 #
 #   visualization:
-#     $import: ../params/mapper-3d-visualization-common.yaml
+#     $import: ../params/mapper-visualization-common.yaml
 #
 # (`$import`: the imported file is the base; sibling keys override it.)
 #

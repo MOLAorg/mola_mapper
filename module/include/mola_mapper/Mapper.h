@@ -407,13 +407,13 @@ private:
   /// Renders the keyframe tree, graph edges and per-source movable {odom_i}
   /// frames into the visualizer, and creates/updates the GUI sub-window.
   /// Throttled to visualization.update_rate_hz. No-op when no visualizer is
-  /// attached. (Mapper3D_GUI.cpp)
+  /// attached. (Mapper_GUI.cpp)
   void updateVisualization();
 
   /// Builds the backend-agnostic GUI sub-window (status + control tabs) once.
   void internalBuildGUI();
 
-  // --- helpers implemented across the Mapper3D_*.cpp translation units ---
+  // --- helpers implemented across the Mapper_*.cpp translation units ---
 
   /// Registers (or returns the existing id for) an odometry frame name.
   [[nodiscard]] OdometryFrameID add_or_get_odom_frame_id_locked(const std::string & frame_id_name);
@@ -489,13 +489,13 @@ private:
   /// the map. Called from ingest_imu_sample_locked under stateMutex_.
   void maybe_emit_gravity_factor_locked(mola::imu::TimeStamp tNow);
 
-  /// Env-gated (MOLA_MAPPER3D_TRACE_IMU) diagnostic: logs T_enu_to_map (F0) and
+  /// Env-gated (MOLA_MAPPER_TRACE_IMU) diagnostic: logs T_enu_to_map (F0) and
   /// the distribution of IMU gravity-factor residuals (mean/median/p90/max +
   /// the mean residual VECTOR norm, which separates a systematic map tilt from
   /// random motion-acceleration noise). No-op unless the env var is set.
   void trace_imu_factors_locked(const gtsam::Values & estimate);
 
-  /// Env-gated (MOLA_MAPPER3D_TRACE_GEOM) diagnostic: measures the ACTUAL
+  /// Env-gated (MOLA_MAPPER_TRACE_GEOM) diagnostic: measures the ACTUAL
   /// keyframe trajectory geometry in {map} (not the gravity-factor residual):
   /// the keyframe-position z-span and the best-fit slope of z vs horizontal
   /// arc length (the apparent path tilt), plus the average keyframe body up

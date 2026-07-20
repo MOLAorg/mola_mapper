@@ -13,7 +13,7 @@
 */
 
 /**
- * @file   Mapper3D_Fusion.cpp
+ * @file   Mapper_Fusion.cpp
  * @brief  Sensor fusion: keyframe management and the native GTSAM/iSAM2 graph.
  * @author Jose Luis Blanco Claraco
  * @date   2026
@@ -948,7 +948,7 @@ void Mapper::maybe_emit_gravity_factor_locked(mola::imu::TimeStamp tNow)
   geo_ref_counters_.imu_gravity++;
   notify_optimizer();
 
-  thread_local const bool traceGeom = mrpt::get_env<bool>("MOLA_MAPPER3D_TRACE_GEOM", false);
+  thread_local const bool traceGeom = mrpt::get_env<bool>("MOLA_MAPPER_TRACE_GEOM", false);
   if (traceGeom) {
     static mrpt::math::TVector3D gAccum{0, 0, 0};
     static size_t gN = 0;
@@ -1040,7 +1040,7 @@ void Mapper::emit_imu_factors_for_keyframe_locked(KeyFrameID newKf)
 
 void Mapper::trace_imu_factors_locked(const gtsam::Values & estimate)
 {
-  thread_local const bool traceImu = mrpt::get_env<bool>("MOLA_MAPPER3D_TRACE_IMU", false);
+  thread_local const bool traceImu = mrpt::get_env<bool>("MOLA_MAPPER_TRACE_IMU", false);
   if (!traceImu || !state_.gtsam->isam2.has_value()) {
     return;
   }
@@ -1093,7 +1093,7 @@ void Mapper::trace_imu_factors_locked(const gtsam::Values & estimate)
 
 void Mapper::trace_keyframe_geometry_locked(const gtsam::Values & estimate)
 {
-  thread_local const bool traceGeom = mrpt::get_env<bool>("MOLA_MAPPER3D_TRACE_GEOM", false);
+  thread_local const bool traceGeom = mrpt::get_env<bool>("MOLA_MAPPER_TRACE_GEOM", false);
   if (!traceGeom) {
     return;
   }
@@ -1205,9 +1205,9 @@ void Mapper::fuse_gnss(const mrpt::obs::CObservationGPS & gps)
   auto lck = mrpt::lockHelper(stateMutex_);
 
   // Diagnostic: dump EVERY raw GNSS reading (and why it is accepted/rejected),
-  // un-throttled, when MOLA_MAPPER3D_TRACE_GPS is set. Lets us inspect the data
+  // un-throttled, when MOLA_MAPPER_TRACE_GPS is set. Lets us inspect the data
   // quality (height constancy + per-fix ENU covariance) end to end.
-  thread_local const bool traceGps = mrpt::get_env<bool>("MOLA_MAPPER3D_TRACE_GPS", false);
+  thread_local const bool traceGps = mrpt::get_env<bool>("MOLA_MAPPER_TRACE_GPS", false);
   geo_ref_counters_.gnss_readings_seen++;
   if (traceGps) {
     std::string lla = "(no GGA)";
@@ -1437,7 +1437,7 @@ void Mapper::optimize_and_refresh()
         enforce_planar_pose(t.pose);
         enforce_planar_twist(t.twist);
       }
-      thread_local const bool traceVW = mrpt::get_env<bool>("MOLA_MAPPER3D_TRACE_VW", false);
+      thread_local const bool traceVW = mrpt::get_env<bool>("MOLA_MAPPER_TRACE_VW", false);
       if (traceVW && (angV.norm() > 5.0 || linV.norm() < 0.5)) {
         // dt to the time-adjacent previous keyframe (the kinematic-factor dt):
         double dtPrev = -1.0;
@@ -1942,7 +1942,7 @@ std::optional<NavState> Mapper::estimated_navstate_impl(
 
   ret.pose.copyFrom(pred);  // NavState.pose is CPose3DPDFGaussianInf
 
-  thread_local const bool tracePred = mrpt::get_env<bool>("MOLA_MAPPER3D_TRACE_PREDICT", false);
+  thread_local const bool tracePred = mrpt::get_env<bool>("MOLA_MAPPER_TRACE_PREDICT", false);
   if (tracePred) {
     const auto disp = body_twist_delta(params_, ret.twist, dtPred);
     MRPT_LOG_INFO_FMT(

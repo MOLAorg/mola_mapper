@@ -1,4 +1,4 @@
-.. _mola_mapper3d_ros2_node:
+.. _mola_mapper_ros2_node:
 
 ==============================
 Mapper ROS 2 node
@@ -32,7 +32,7 @@ The Mapper ROS 2 integration consists of:
 
 |
 
-.. _mola_mapper3d_ros2_launch:
+.. _mola_mapper_ros2_launch:
 
 Launch file
 -----------
@@ -70,7 +70,7 @@ Launch file
 
 |
 
-.. _mola_mapper3d_ros2_topics:
+.. _mola_mapper_ros2_topics:
 
 Published topics
 -----------------

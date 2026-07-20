@@ -20,7 +20,7 @@
  *
  * This private header defines the GTSAM pimpl payload. It is shared by the
  * translation units that need to touch the factor graph (WorldModelState.cpp,
- * Mapper3D_Fusion.cpp) while keeping GTSAM out of the public Mapper headers.
+ * Mapper_Fusion.cpp) while keeping GTSAM out of the public Mapper headers.
  */
 #pragma once
 

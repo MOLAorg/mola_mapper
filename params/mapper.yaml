@@ -3,13 +3,13 @@
 # ============================================================================
 # This is the whole-module config form, referenced from a launch file as:
 #
-#   - name: mapper3d
+#   - name: mapper
 #     type: mola::mapper::Mapper
-#     params: "../params/mapper-3d.yaml"
+#     params: "../params/mapper.yaml"
 #
 # It just `$import`s the shared parameter fragment (single source of truth) and
 # adds the `visualization` block (a SIBLING of `params`, read separately by the
-# module). Per-dataset launch files instead `$import: ../params/mapper-3d-common.yaml`
+# module). Per-dataset launch files instead `$import: ../params/mapper-common.yaml`
 # directly under their own `params:` and override the few keys that differ.
 #
 # Refer to:
@@ -18,7 +18,7 @@
 # ============================================================================
 
 params:
-  $import: mapper-3d-common.yaml
+  $import: mapper-common.yaml
 
 # --------------------------------------------------------------------------
 # Optional visualization (MolaViz / MolaVizImGui).
@@ -27,4 +27,4 @@ params:
 # odometry source's movable {odom_i} frame node (LidarOdometry draws its dense
 # clouds / local map under it via render_in_movable_frame).
 visualization:
-  $import: mapper-3d-visualization-common.yaml
+  $import: mapper-visualization-common.yaml

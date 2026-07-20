@@ -100,8 +100,8 @@ find_package(mola_input_rawlog) # optional
 find_package(mola_input_rosbag2) # optional
 
 mola_add_executable(
-  TARGET  mola-mapper-3d-cli
-  SOURCES apps/mola-mapper-3d-cli.cpp
+  TARGET  mola-mapper-cli
+  SOURCES apps/mola-mapper-cli.cpp
   LINK_LIBRARIES
   ${PROJECT_NAME}
   mrpt::maps
@@ -109,19 +109,19 @@ mola_add_executable(
 )
 
 if(mola_input_rawlog_FOUND)
-  message(STATUS "mola-mapper-3d-cli: With Rawlog = YES")
-  target_link_libraries(mola-mapper-3d-cli mola::mola_input_rawlog)
-  target_compile_definitions(mola-mapper-3d-cli PRIVATE HAVE_MOLA_INPUT_RAWLOG)
+  message(STATUS "mola-mapper-cli: With Rawlog = YES")
+  target_link_libraries(mola-mapper-cli mola::mola_input_rawlog)
+  target_compile_definitions(mola-mapper-cli PRIVATE HAVE_MOLA_INPUT_RAWLOG)
 else()
-  message(STATUS "mola-mapper-3d-cli: With Rawlog = NO")
+  message(STATUS "mola-mapper-cli: With Rawlog = NO")
 endif()
 
 if(mola_input_rosbag2_FOUND)
-  message(STATUS "mola-mapper-3d-cli: With rosbag2 = YES")
-  target_link_libraries(mola-mapper-3d-cli mola::mola_input_rosbag2)
-  target_compile_definitions(mola-mapper-3d-cli PRIVATE HAVE_MOLA_INPUT_ROSBAG2)
+  message(STATUS "mola-mapper-cli: With rosbag2 = YES")
+  target_link_libraries(mola-mapper-cli mola::mola_input_rosbag2)
+  target_compile_definitions(mola-mapper-cli PRIVATE HAVE_MOLA_INPUT_ROSBAG2)
 else()
-  message(STATUS "mola-mapper-3d-cli: With rosbag2 = NO")
+  message(STATUS "mola-mapper-cli: With rosbag2 = NO")
 endif()
 
 # Install files:

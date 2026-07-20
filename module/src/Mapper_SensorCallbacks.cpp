@@ -13,7 +13,7 @@
 */
 
 /**
- * @file   Mapper3D_SensorCallbacks.cpp
+ * @file   Mapper_SensorCallbacks.cpp
  * @brief  Dispatch of incoming raw observations to the proper fuse_*() method.
  * @author Jose Luis Blanco Claraco
  * @date   2026

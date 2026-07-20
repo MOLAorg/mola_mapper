@@ -1,7 +1,7 @@
 # Unit tests:
 mola_add_test(
-  TARGET  test-mapper3d-basic
-  SOURCES test-mapper3d-basic.cpp
+  TARGET  test-mapper-basic
+  SOURCES test-mapper-basic.cpp
   LINK_LIBRARIES
     mola::mola_mapper
 )

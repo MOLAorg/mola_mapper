@@ -54,7 +54,7 @@ See: https://docs.mola-slam.org/latest/mola_mapper.html
 ```
 module/include/mola_mapper/   Public headers (Mapper, Parameters, WorldModelState)
 module/src/                      Implementation (split by concern)
-apps/                            mola-mapper-3d-cli (offline front-end)
+apps/                            mola-mapper-cli (offline front-end)
 params/                          Default YAML configuration
 mola-cli-launchs/                mola-cli launch files
 ros2-launchs/                    ROS 2 launch files

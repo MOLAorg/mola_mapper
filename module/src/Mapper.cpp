@@ -529,7 +529,7 @@ void Mapper::getDiagnostics(std::vector<mola::DiagnosticStatusMsg> & status)
       continue;
     }
     // T_map_to_odom_i as translation + rotation magnitude (LIO drift is mostly
-    // z/tilt, so the rotation term is the informative one; see Mapper3D_GUI).
+    // z/tilt, so the rotation term is the informative one; see Mapper_GUI).
     const double cosAngle =
       std::clamp((itF->second.mean.getRotationMatrix().trace() - 1.0) * 0.5, -1.0, 1.0);
     msg.values.push_back(

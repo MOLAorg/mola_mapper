@@ -1652,6 +1652,24 @@ NavState Mapper::get_latest_state_and_covariance(KeyFrameID idx) const
 std::optional<NavState> Mapper::estimated_navstate(
   const mrpt::Clock::time_point & timestamp, const std::string & frame_id)
 {
+  // This is queried at high rate by front ends from their own threads, and its
+  // [[nodiscard]] std::optional<NavState> signature already promises a graceful
+  // "not ready yet" for a transiently under-constrained / not-yet-solved graph.
+  // Letting an exception escape instead would kill the calling module's thread
+  // and take down fusion for the rest of the run.
+  try {
+    return estimated_navstate_impl(timestamp, frame_id);
+  } catch (const std::exception & e) {
+    MRPT_LOG_THROTTLE_ERROR_STREAM(
+      2.0, "[estimated_navstate] Returning no estimate after exception:\n"
+             << e.what());
+    return {};
+  }
+}
+
+std::optional<NavState> Mapper::estimated_navstate_impl(
+  const mrpt::Clock::time_point & timestamp, const std::string & frame_id)
+{
   const ProfilerEntry tle(profiler_, "estimated_navstate");
   // 1) Ensure cached estimates are up to date. With the background optimizer
   // thread, the caches are refreshed off the query path (so this returns
@@ -1690,6 +1708,18 @@ std::optional<NavState> Mapper::estimated_navstate(
   if (!closestFrameIdx.has_value()) {
     return {};
   }
+
+  // A keyframe exists in time_to_kf_id as soon as it is CREATED, but its state
+  // only lands in last_estimated_states after a solve commits. With the
+  // background optimizer that window is routinely open, so treat it as the
+  // ordinary "not ready yet" case rather than letting the lookup below throw.
+  if (state_.last_estimated_states.count(*closestFrameIdx) == 0) {
+    MRPT_LOG_THROTTLE_DEBUG_FMT(
+      5.0, "[estimated_navstate] Keyframe %u not solved yet.",
+      static_cast<unsigned>(*closestFrameIdx));
+    return {};
+  }
+
   // NOTE: the "closest keyframe too far in time" check is NOT applied globally
   // here. The frame-local odometry path (below) anchors on the requested
   // source's OWN fresh raw pose (last_raw_pose_by_source), not on this

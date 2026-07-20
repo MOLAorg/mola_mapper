@@ -578,7 +578,14 @@ private:
   void publish_high_rate_pose();
 
   /// Returns the optimized NavState (pose+twist+covariances) of a keyframe.
+  /// Throws if `idx` has no solved estimate yet; callers must handle that.
   [[nodiscard]] NavState get_latest_state_and_covariance(KeyFrameID idx) const;
+
+  /// Body of estimated_navstate(). Kept separate so the public entry point can
+  /// turn any unexpected failure into the "not ready yet" nullopt its signature
+  /// already promises, instead of letting it escape into the caller's thread.
+  [[nodiscard]] std::optional<NavState> estimated_navstate_impl(
+    const mrpt::Clock::time_point & timestamp, const std::string & frame_id);
 
   /// Returns the (before, after) keyframe iterators bracketing timestamp `t`.
   [[nodiscard]] pair_nearby_frame_iterators_t find_before_after(

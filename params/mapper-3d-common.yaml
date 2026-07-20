@@ -54,8 +54,11 @@ sensor_keyframe_min_period: ${MOLA_MAPPER3D_SENSOR_KF_PERIOD|0.5}
 keyframe_creation_source: "${MOLA_MAPPER3D_KF_CREATION|KeyframeCreationSource::SharedMapOnly}"
 sensor_clock_min_period_s: ${MOLA_MAPPER3D_SENSOR_KF_CLOCK_S|0.5}
 
-sigma_random_walk_acceleration_linear: ${MOLA_SIGMA_RW_LINACC|1.0}
-sigma_random_walk_acceleration_angular: ${MOLA_SIGMA_RW_ANGACC|10.0}
+# Moderate: a loose angular sigma lets the newest keyframe's yaw rate swing
+# between solves and rotate the predicted pose. Paired with the predict-twist
+# low-pass below. Loosen for platforms with genuinely high acceleration.
+sigma_random_walk_acceleration_linear: ${MOLA_SIGMA_RW_LINACC|0.5}
+sigma_random_walk_acceleration_angular: ${MOLA_SIGMA_RW_ANGACC|1.0}
 sigma_integrator_position: 0.10
 sigma_integrator_orientation: 1.0
 

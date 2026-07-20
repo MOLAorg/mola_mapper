@@ -142,7 +142,13 @@ public:
   /// (wheels + IMU + GNSS without LIO/VIO).
   double sensor_clock_min_period_s = 0.5;  // [s]
 
-  double sigma_random_walk_acceleration_linear = 1.0;   // [m/s^2]
+  /// Acceleration random-walk sigmas of the kinematic (constant-velocity)
+  /// factors, and of the twist/pose covariance growth in the short-term
+  /// prediction. Moderate by default: a loose angular sigma lets the newest
+  /// keyframe's yaw rate swing between solves, which rotates the predicted
+  /// pose. Loosen only for platforms with genuinely high linear/angular
+  /// acceleration.
+  double sigma_random_walk_acceleration_linear = 0.5;   // [m/s^2]
   double sigma_random_walk_acceleration_angular = 1.0;  // [rad/s^2]
   double sigma_integrator_position = 0.10;              // [m]
   double sigma_integrator_orientation = 0.10;           // [rad]

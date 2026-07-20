@@ -68,3 +68,10 @@ mola_add_test(
   LINK_LIBRARIES
     mola::mola_mapper
 )
+
+mola_add_test(
+  TARGET  test-relocalize-georef
+  SOURCES test-relocalize-georef.cpp
+  LINK_LIBRARIES
+    mola::mola_mapper
+)

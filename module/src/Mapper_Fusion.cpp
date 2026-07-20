@@ -1915,6 +1915,55 @@ std::optional<mola::Georeferencing> Mapper::current_georeferencing() const
   return state_.geo_reference;
 }
 
+void Mapper::set_geo_reference(const mola::Georeferencing & georef)
+{
+  bool rebuilt = false;
+  {
+    auto lck = mrpt::lockHelper(stateMutex_);
+
+    MRPT_LOG_INFO_STREAM(
+      "[set_geo_reference] Anchoring T_enu_to_map to a fixed, known value: "
+      << georef.T_enu_to_map.mean.asString());
+
+    params_.fixed_geo_reference = georef;
+
+    if (state_.time_to_kf_id.empty()) {
+      // No keyframes yet (the usual case: the front end loads the map before
+      // any fusion starts). Rebuild the graph from scratch so T_enu_to_map is
+      // created with the tight prior directly. state_.clear() first: the
+      // pending newValues/newFactors still hold the symbol_T_enu_to_map entry
+      // from the initialize()-time reinitialize_gtsam_locked(), and inserting
+      // that key a second time would throw on the next solve.
+      state_.clear();
+      reinitialize_gtsam_locked();
+      reset_sensor_anchors_locked();
+      rebuilt = true;
+    } else {
+      // The central map is shared, persistent state and must survive this call,
+      // so do not wipe it. Pin the EXISTING T_enu_to_map variable with an extra
+      // prior instead: that removes the gauge freedom without discarding the
+      // keyframes.
+      gtsam::Pose3 enu2map;
+      gtsam::Matrix6 enu2map_cov;
+      mrpt::gtsam_wrappers::to_gtsam_se3_cov6(georef.T_enu_to_map, enu2map, enu2map_cov);
+      state_.gtsam->newFactors.addPrior(symbol_T_enu_to_map, enu2map, enu2map_cov);
+
+      state_.geo_reference = georef;
+      state_.last_estimated_frames[REFERENCE_FRAME_ID] = georef.T_enu_to_map;
+
+      MRPT_LOG_WARN_FMT(
+        "[set_geo_reference] Called with %zu keyframes already in the map: pinning the existing "
+        "T_enu_to_map with an additional prior instead of rebuilding.",
+        state_.time_to_kf_id.size());
+    }
+  }
+
+  // Outside the lock: the optimizer takes stateMutex_ itself.
+  if (!rebuilt) {
+    notify_optimizer();
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Keyframe-neighbor helpers
 // ---------------------------------------------------------------------------

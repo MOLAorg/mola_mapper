@@ -134,6 +134,15 @@ public:
   [[nodiscard]] std::optional<NavState> estimated_navstate(
     const mrpt::Clock::time_point & timestamp, const std::string & frame_id) override;
 
+  /** Anchors T_enu_to_map to a known, fixed value, instead of leaving it a free
+   * variable. Called by a localization front end once a geo-referenced map is
+   * loaded (relocalize mode). Without this, T_enu_to_map keeps its weak
+   * construction-time prior, and since every gravity/attitude factor only
+   * measures rotation RELATIVE to it, the system's absolute rotation stays a
+   * genuine gauge freedom that the solver cannot resolve.
+   */
+  void set_geo_reference(const mola::Georeferencing & georef) override;
+
   // --- Diagnostics / convergence ---
   [[nodiscard]] bool has_converged_localization(
     mrpt::poses::CPose3DPDFGaussian & pose_in_map) const override;

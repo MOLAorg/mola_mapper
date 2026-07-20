@@ -265,6 +265,20 @@ wholesale rather than patching, so overriding one field used to require
 duplicating the whole filter step verbatim. Use `$define` when the setting has
 a hook; fall back to a sibling override (at the right nesting level) when it
 does not, and verify the result with `mola-yaml-parser` on the merged config.
+The same pattern simplifies `params/loop-closure-f2f-mapper.yaml` and
+`params/loop-closure-f2f-mapper-oxford-spires.yaml`: every scalar retune is
+`$define`d instead of restated as a `params:` key, INCLUDING the one
+(`threshold_sigma_initial`/`LC_ICP_INITIAL_SIGMA`) that both files happen to
+retune -- safe because mola_yaml (MOLAorg/mola#182) makes an outer file's
+`$define` win over a more deeply imported file's own `$define` for the same
+variable name. Before that fix, nested `$define` blocks for the SAME name did
+NOT compose across `$import` levels -- the more deeply imported file's own
+`$define` silently won, discarding the outer file's override (the opposite of
+the documented `environment > $define > inline default` priority, which only
+ever held within a single `$define` scope). If a launcher needs this fix and
+mola_yaml has not been rebuilt/released with it yet, fall back to an explicit
+`params:` key at at least one of the levels (a plain sibling-key override
+always wins regardless of nesting) and verify with `mola-yaml-parser`.
 
 ## Real-dataset runs
 

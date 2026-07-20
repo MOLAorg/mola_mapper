@@ -106,14 +106,14 @@ modules:
       base_link_frame_id: base_link
 
       sensors:
-        - topic: /hesai/pandar   # Hesai PandarXT-32, ~10 Hz
+        - topic: /hesai/pandar # Hesai PandarXT-32, ~10 Hz
           type: CObservationPointCloud
           sensorLabel: lidar
           # Hesai is mounted inverted (yaw=180 deg) and lifted 12.4 cm above base_link:
           fixed_sensor_pose: "0.0 0.0 0.124 180 0 0" # 'x y z yaw_deg pitch_deg roll_deg'
           use_fixed_sensor_pose: true
 
-        - topic: /alphasense_driver_ros/imu   # Alphasense IMU, ~200 Hz
+        - topic: /alphasense_driver_ros/imu # Alphasense IMU, ~200 Hz
           type: CObservationIMU
           sensorLabel: imu
           fixed_sensor_pose: "-0.018 0.006 0.058 90 0 0" # 'x y z yaw_deg pitch_deg roll_deg'
@@ -136,6 +136,7 @@ modules:
     $define:
       MOLA_DESKEW_METHOD: "MotionCompensationMethod::IMU"
       MOLA_LO_INITIAL_LOCALIZATION_METHOD: "InitLocalization::PitchAndRollFromIMU"
+      MOLA_LOCAL_MAP_MAX_SIZE: "${MOLA_LOCAL_MAP_MAX_SIZE|20.0}" # smaller local LIO window than default since we have loop closure
 
     $import: "${MOLA_ODOMETRY_PIPELINE_YAML|$(ros2 pkg prefix mola_lidar_odometry)/share/mola_lidar_odometry/pipelines/lidar3d-default.yaml}"
 

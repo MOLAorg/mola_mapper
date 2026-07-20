@@ -180,6 +180,12 @@ public:
 
   /** @} */
 
+  // ExecutableBase: expose the loop-closure engine's own logger (a separate
+  // mrpt::system::COutputLogger instance, since it runs on its own background
+  // thread) so its output gets the same console capture as the mapper itself.
+  [[nodiscard]] std::vector<std::pair<ChildLoggerName, mrpt::system::COutputLogger *>>
+  child_loggers() const override;
+
 private:
   Parameters params_;
   bool params_loaded_ = false;

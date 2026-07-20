@@ -272,6 +272,15 @@ void Mapper::finalize_loop_closures()
   MRPT_LOG_INFO_STREAM("[loop_closure] finalize done: " << total << " edge(s) added");
 }
 
+std::vector<std::pair<Mapper::ChildLoggerName, mrpt::system::COutputLogger *>>
+Mapper::child_loggers() const
+{
+  if (!lc_engine_) {
+    return {};
+  }
+  return {{"loop_closure", lc_engine_.get()}};
+}
+
 bool Mapper::merge_loop_closure_edge_locked(
   KeyFrameID from, KeyFrameID to, const mrpt::poses::CPose3DPDFGaussian & relPose)
 {

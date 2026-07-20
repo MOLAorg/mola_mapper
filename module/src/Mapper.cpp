@@ -439,6 +439,16 @@ void Mapper::publish_high_rate_pose()
   advertiseUpdatedLocalization(lu);
 }
 
+void Mapper::note_observation_stamp(const mrpt::Clock::time_point & t)
+{
+  const int64_t ticks = t.time_since_epoch().count();
+  int64_t prev = last_observation_stamp_ticks_.load(std::memory_order_relaxed);
+  while (ticks > prev && !last_observation_stamp_ticks_.compare_exchange_weak(
+                           prev, ticks, std::memory_order_relaxed)) {
+    // CAS retried; `prev` refreshed by compare_exchange_weak.
+  }
+}
+
 std::optional<mrpt::Clock::time_point> Mapper::get_current_extrapolated_stamp_locked() const
 {
   std::optional<mrpt::Clock::time_point> stamp;
@@ -448,6 +458,17 @@ std::optional<mrpt::Clock::time_point> Mapper::get_current_extrapolated_stamp_lo
     (void)id;
     if (!stamp.has_value() || raw.stamp > *stamp) {
       stamp = raw.stamp;
+    }
+  }
+  // Newest high-rate raw observation (IMU/wheels/GNSS). In a
+  // LIO+SharedKeyframeMap setup these are the mapper's ONLY dense inputs, so
+  // this is what advances the extrapolation instant between the sparse
+  // keyframes (fuse_pose() odometry sources are usually absent there):
+  const int64_t obsTicks = last_observation_stamp_ticks_.load(std::memory_order_relaxed);
+  if (obsTicks != kNoObsStamp) {
+    const mrpt::Clock::time_point obsStamp{mrpt::Clock::duration{obsTicks}};
+    if (!stamp.has_value() || obsStamp > *stamp) {
+      stamp = obsStamp;
     }
   }
   // Fall back to (or advance past) the newest keyframe stamp:

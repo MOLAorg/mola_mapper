@@ -44,6 +44,7 @@
 #include <array>
 #include <atomic>
 #include <condition_variable>
+#include <limits>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -206,6 +207,17 @@ private:
   std::mutex solve_mutex_;
   // Throttle anchor for the high-rate publisher (wall-clock).
   std::optional<mrpt::Clock::time_point> last_publish_wallclock_;
+
+  // Freshest raw-observation timestamp (IMU/wheels/GNSS), stored as
+  // mrpt::Clock tick count. Tracked so the high-rate publisher and the
+  // camera-follow can extrapolate the {map} pose to the current data instant
+  // BETWEEN the sparse keyframes: the mapper's only dense inputs in a
+  // LIO+SharedKeyframeMap setup are the high-rate IMU/wheels, so the newest
+  // keyframe stamp alone advances only at the keyframe cadence. Atomic +
+  // monotonic (a late/out-of-order arrival never drags it backwards), mirroring
+  // the smoother's last_observation_stamp. Sentinel = "nothing seen yet".
+  static constexpr int64_t kNoObsStamp = std::numeric_limits<int64_t>::min();
+  std::atomic<int64_t> last_observation_stamp_ticks_{kNoObsStamp};
 
   // --- Background loop-closure thread (loop_closure_enabled) ---
   // The LC detector (mola_sm_loop_closure) runs OFF the query/solve path: the
@@ -597,6 +609,11 @@ private:
   /// get_current_extrapolated_stamp(). Caller must hold stateMutex_.
   [[nodiscard]] std::optional<mrpt::Clock::time_point> get_current_extrapolated_stamp_locked()
     const;
+
+  /// Records the freshest raw-observation timestamp into
+  /// last_observation_stamp_ticks_ (monotonic; older stamps are ignored).
+  /// Lock-free; safe to call from any sensor callback.
+  void note_observation_stamp(const mrpt::Clock::time_point & t);
 
   /// Returns the optimized NavState (pose+twist+covariances) of a keyframe.
   /// Throws if `idx` has no solved estimate yet; callers must handle that.

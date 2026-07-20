@@ -35,6 +35,12 @@ void Mapper::onNewObservation(const CObservation::ConstPtr & o)
     return;
   }
 
+  // Track the freshest data instant across ALL incoming observations, so the
+  // high-rate publisher / camera-follow can extrapolate the {map} pose to it
+  // between the sparse keyframes (the high-rate IMU/wheels are the mapper's
+  // only dense inputs in a LIO+SharedKeyframeMap setup).
+  note_observation_stamp(o->timestamp);
+
   // Wheel odometry:
   if (auto odo = std::dynamic_pointer_cast<const mrpt::obs::CObservationOdometry>(o); odo) {
     if (std::regex_match(odo->sensorLabel, odometry_labels_re_)) {

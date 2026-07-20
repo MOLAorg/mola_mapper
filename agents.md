@@ -83,10 +83,15 @@ docs/call-graph.md               Mermaid diagram tracing every public-API method
   extrapolates the latest anchor with the kinematic model and publishes via
   `advertiseUpdatedLocalization()` at `high_rate_pose_publish_rate_hz`, gated
   on a subscriber existing. It queries `estimated_navstate()` at
-  `get_current_extrapolated_stamp_locked()` (newest raw source anchor, else
-  newest keyframe), which advances between keyframes as dense `fuse_pose()`
-  readings arrive - mirroring the smoother's `get_current_extrapolated_stamp()`.
-  The GUI "camera follows vehicle" tracks that SAME freshest-instant estimate
+  `get_current_extrapolated_stamp_locked()` = the freshest of (newest raw
+  `fuse_pose()` anchor, newest raw-observation stamp, newest keyframe). The
+  raw-observation stamp (`note_observation_stamp()`, fed from EVERY
+  `onNewObservation`) is the one that advances between keyframes in a
+  LIO+SharedKeyframeMap setup: there the mapper's only dense inputs are the
+  high-rate IMU/wheels (no dense odometry `fuse_pose()` source), so the newest
+  keyframe stamp alone advances only at the keyframe cadence. This mirrors the
+  smoother's `last_observation_stamp` / `get_current_extrapolated_stamp()`. The
+  GUI "camera follows vehicle" tracks that SAME freshest-instant estimate
   (queried independently at the viz rate, so it works with no external
   subscriber), rendered in the selected viz frame, instead of jumping once per
   keyframe.

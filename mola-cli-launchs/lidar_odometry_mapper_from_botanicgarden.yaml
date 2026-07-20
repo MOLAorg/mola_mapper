@@ -55,6 +55,13 @@
 # Optional: export BOTANICGARDEN_GT_BAG=$HOME/datasets/botanic/gt_1018_00_qnew.bag
 #   to also replay /gt_poses (not consumed by mapper; for manual comparison
 #   only). GUI is on by default (MOLA_WITH_GUI=false for headless).
+#
+# LOOP CLOSURE is ON by default here: the BotanicGarden sequences loop back
+# through the garden paths, so the mapper's background loop-closure thread
+# (mola_sm_loop_closure F2F engine) can cancel accumulated LiDAR-odometry
+# drift. Disable with MOLA_MAPPER_LOOP_CLOSURE=false. The Velodyne VLP-16
+# carries per-point timestamps (confirmed on the recorded PointCloud2 fields),
+# so the LC pipeline deskews normally (no ignore-no-timestamps flag needed).
 # -----------------------------------------------------------------------------
 
 modules:
@@ -143,6 +150,14 @@ modules:
       # it the graph floats and iSAM2 throws IndeterminantLinearSystemException
       # (see header). estimate_geo_reference stays false (the common default).
       link_first_pose_to_reference_origin_sigma: ${MOLA_LINK_FIRST_POSE_SIGMA|1e-6}
+
+      # Loop closure ON by default (see header). Same thin mola_mapper wrapper
+      # the KITTI/MulRan launchers use: it $imports the shared f2f GICP pipeline
+      # from mola_sm_loop_closure and only widens the ICP convergence basin so
+      # real (drifted) loops close. Runs on a background thread off the
+      # query/solve path; accepted edges merge as robust BetweenFactors.
+      loop_closure_enabled: ${MOLA_MAPPER_LOOP_CLOSURE|true}
+      loop_closure_pipeline_file: "${MOLA_MAPPER_LC_PIPELINE|$(ros2 pkg prefix mola_mapper)/share/mola_mapper/params/loop-closure-f2f-mapper.yaml}"
 
       # ~400 Hz IMU + ~200 Hz wheels: aggregate the high-rate streams into
       # bounded-rate shared keyframes + relative edges (see header).

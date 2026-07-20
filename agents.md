@@ -177,8 +177,12 @@ docs/call-graph.md               Mermaid diagram tracing every public-API method
   `$import`s the package's f2f pipeline and overrides ONLY the ICP registration
   core (point-to-point instead of cov2cov; wider initial pairing sigma), so
   mola_sm_loop_closure keeps its own defaults. Both are needed for real loops to
-  pass acceptance at all. The KITTI, MulRan and Oxford Spires launchers enable LC
-  by default and point at it.
+  pass acceptance at all. The KITTI, MulRan, Oxford Spires, BotanicGarden and
+  ConSLAM launchers enable LC by default and point at it. BotanicGarden and
+  ConSLAM both use a Velodyne VLP-16 with per-point timestamps (confirmed on
+  the recorded PointCloud2 fields), so they use the shared, non-widened
+  pipeline (`loop-closure-f2f-mapper.yaml`), same as KITTI/MulRan; only Oxford
+  Spires' dense Hesai needs the widened-final-sigma variant (see below).
 
 - Dense high-resolution LiDARs need a wider ICP FINAL pairing sigma too. The base
   pipeline evaluates ICP quality as the paired-point ratio at the final annealed
@@ -190,19 +194,32 @@ docs/call-graph.md               Mermaid diagram tracing every public-API method
   `threshold_sigma_final` to 0.3 m (env `LC_ICP_FINAL_SIGMA`). This is a
   registration-resolution setting for a dense sensor, NOT a change to the
   `min_icp_goodness` acceptance level; KITTI/MulRan keep 0.05 m. Validated on
-  observatory-quarter-01 (real-time, zero drops): 5 loops closed, APE RMSE 0.47 m
-  vs 1.53 m with LC off. Note the real-time pipeline is non-deterministic (async
-  optimizer + LC threads, scan drops under time-warp), so the absolute APE varies
-  run-to-run (~0.25-0.5 m LC-on in good runs); LC helps in every fair
-  same-playback comparison. Its default also restricts LC candidates to nearby
-  revisits (`max_distance_for_lc_candidate` 15 m) for a real-time accuracy/compute
-  balance; far pairs mostly add cost since single-scan ICP only bridges its basin.
+  observatory-quarter-01 (real-time, zero drops, under the prior pickier
+  candidate defaults below): 5 loops closed, APE RMSE 0.47 m vs 1.53 m with LC
+  off. Note the real-time pipeline is non-deterministic (async optimizer + LC
+  threads, scan drops under time-warp), so the absolute APE varies run-to-run
+  (~0.25-0.5 m LC-on in good runs); LC helps in every fair same-playback
+  comparison.
+
+- Candidate generation for Oxford Spires defaults to a nearby-node,
+  map-refinement-friendly setup rather than the pickier KITTI/MulRan-style
+  values: `lc_candidate_strategy: PROXIMITY_ONLY` (env `LC_SELECTION_METHOD`,
+  vs. the shared pipeline's `MULTI_OBJECTIVE`), `min_frames_between_lc: 1` (env
+  `MIN_FRAMES_BETWEEN_LC`, vs. 20), so topologically close keyframes -- e.g.
+  adjacent legs of a path -- are eligible as candidates, not just far-away-in-
+  time revisits, and `max_distance_for_lc_candidate: 20 m` (env
+  `MAX_LC_DISTANCE`, up from 15 m). Fall back to
+  `LC_SELECTION_METHOD=MULTI_OBJECTIVE MIN_FRAMES_BETWEEN_LC=20
+  MAX_LC_DISTANCE=15` for a lower-compute, real-time-only run (single-scan ICP
+  only bridges its own convergence basin, so a wide-open candidate search costs
+  more without necessarily closing more real loops online; the finalize cascade
+  is what recovers far genuine loops as drift shrinks).
 
 - LC can also serve as an offline map-refinement stage: a dense keyframe graph
-  plus aggressive nearby-candidate generation yields thousands of edges and the
-  best accuracy, but is much heavier (OFF by default, enabled via the env-var
-  bundle documented in the Oxford Spires launcher header). Denser keyframes or
-  denser candidates ALONE regress; both together win.
+  plus aggressive candidate generation (now the Oxford Spires default) yields
+  thousands of edges and the best accuracy, but is much heavier (enabled via
+  the env-var bundle documented in the Oxford Spires launcher header). Denser
+  keyframes or denser candidates ALONE regress; both together win.
 
 - Online LC scans alone close few loops: a pair only closes once BOTH endpoints
   exist AND drift is small enough, which for big revisits happens near the end of

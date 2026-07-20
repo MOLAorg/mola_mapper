@@ -40,6 +40,14 @@
 # MOLA_MAPPER_LOOP_CLOSURE=false. The Hesai PandarXT-32 provides per-point
 # timestamps, so the LC pipeline deskews normally (no ignore-no-timestamps flag).
 #
+# Candidate generation defaults to a nearby-node, map-refinement-friendly setup
+# (see params/loop-closure-f2f-mapper-oxford-spires.yaml): proximity-only
+# selection, no minimum trajectory-index separation (topologically close
+# keyframes are eligible, not just far-away-in-time revisits), 20 m search
+# radius. Env-overridable: LC_SELECTION_METHOD, MIN_FRAMES_BETWEEN_LC,
+# MAX_LC_DISTANCE. Fall back to the pickier KITTI/MulRan-style settings
+# (MULTI_OBJECTIVE / 20 / 15) for a lower-compute, real-time-only run.
+#
 # Recommended env vars (defaults already set for Oxford Spires below):
 #   MOLA_DESKEW_METHOD=MotionCompensationMethod::IMU      (IMU-based deskew)
 #   MOLA_LO_INITIAL_LOCALIZATION_METHOD=InitLocalization::PitchAndRollFromIMU
@@ -49,23 +57,17 @@
 #   MOLA_MAPPER_LOOP_CLOSURE=false  to disable loop closure
 #   MOLA_MAPPER_TUM_TRAJECTORY_OUTPUT=/path.tum  to dump the trajectory
 #
-# The defaults above target real-time operation: a good trajectory at low
-# compute (loop-closure candidates are restricted to nearby revisits, see
-# params/loop-closure-f2f-mapper-oxford-spires.yaml).
-#
-# OPTIONAL OFFLINE REFINEMENT MODE (slower, denser, more accurate):
-# loop closure can also be used as a map-refinement stage. It pays off only when
+# OPTIONAL OFFLINE REFINEMENT MODE (slower, denser, more accurate): loop
+# closure can also be used as a map-refinement stage. It pays off only when
 # BOTH the keyframe graph is dense AND loop-closure candidate generation is
-# aggressive (either alone regresses). It is much heavier (thousands of ICP
-# evaluations, mostly in the end-of-run finalize pass), so it is OFF by default
-# and enabled by exporting this env-var bundle:
+# aggressive (either alone regresses); the latter is now the default above, so
+# only the keyframe density and refinement-round budget remain opt-in (much
+# heavier: thousands of ICP evaluations, mostly in the end-of-run finalize
+# pass):
 #   # denser LidarOdometry keyframes (the constraint-graph nodes):
 #   MOLA_SIMPLEMAP_MIN_XYZ=1.5  MOLA_SIMPLEMAP_MIN_ROT=8
-#   # aggressive nearby-loop candidate generation:
-#   MIN_FRAMES_BETWEEN_LC=1  MAX_LC_CANDIDATES=400
-#   LC_SELECTION_METHOD=PROXIMITY_ONLY  MAX_LC_DISTANCE=20
-#   # more end-of-run refinement rounds:
-#   MOLA_MAPPER_LC_FINALIZE_ROUNDS=15  MAX_LC_OPTIMIZATION_ROUNDS=15
+#   # more candidates per scan, more end-of-run refinement rounds:
+#   MAX_LC_CANDIDATES=400  MOLA_MAPPER_LC_FINALIZE_ROUNDS=15  MAX_LC_OPTIMIZATION_ROUNDS=15
 # On observatory-quarter-01 this lifts the constraint graph to thousands of
 # loop-closure edges and the best measured accuracy of the dataset.
 # -----------------------------------------------------------------------------

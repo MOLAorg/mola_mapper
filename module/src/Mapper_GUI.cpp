@@ -22,6 +22,7 @@
 
 #include <mola_mapper/Mapper.h>
 #include <mrpt/core/lock_helper.h>
+#include <mrpt/opengl/CCylinder.h>
 #include <mrpt/opengl/CGridPlaneXY.h>
 #include <mrpt/opengl/CSetOfLines.h>
 #include <mrpt/opengl/CSetOfObjects.h>
@@ -47,10 +48,16 @@ namespace
 constexpr std::array<float, 7> kKeyframeCornerScalePresets{0.0f, 0.1f, 0.2f, 0.3f,
                                                            0.5f, 1.0f, 2.0f};
 constexpr std::array<float, 6> kKeyframeSphereRadiusPresets{0.0f, 0.1f, 0.2f, 0.3f, 0.5f, 1.0f};
-// Fixed pixel width for the two combo boxes above, so their (short) option
-// labels don't stretch to fill the sub-window as it is resized (ImGui's
-// default combo width tracks the available content width).
+constexpr std::array<float, 6> kEdgeCylinderRadiusPresets{0.02f, 0.05f, 0.1f, 0.2f, 0.3f, 0.5f};
+// Fixed pixel width for the combo boxes above, so their (short) option labels
+// don't stretch to fill the sub-window as it is resized (ImGui's default
+// combo width tracks the available content width).
 constexpr int kComboFixedWidthPx = 90;
+
+// Graph edges render as CCylinder (thin tubes), visible even at a distance,
+// unlike GL lines. Few radial slices and no end caps keep the per-edge
+// triangle count low: a dense keyframe graph can have thousands of edges.
+constexpr uint32_t kEdgeCylinderSlices = 6;
 
 // mola::gui::ComboBox::fixed_width was added after this file's minimum
 // supported mola_kernel; detect it at compile time (rather than pinning a
@@ -89,6 +96,30 @@ int closestPresetIndex(const std::array<float, N> & presets, float value)
     }
   }
   return best;
+}
+
+// A CCylinder's local Z axis runs from its base (at the object's origin) to
+// its top (at height `len`). Orient it so that axis points from `a` to `b`:
+// pitch = acos(nz), yaw = atan2(ny, nx) for the unit direction (nx,ny,nz),
+// derived from MRPT's R = Rz(yaw)*Ry(pitch)*Rx(roll) convention applied to
+// local Z (roll is a free rotation about the cylinder's own axis, so 0 is
+// fine). Returns nullptr for a degenerate (near-zero-length) edge.
+mrpt::opengl::CCylinder::Ptr makeEdgeCylinder(
+  const mrpt::math::TPoint3D & a, const mrpt::math::TPoint3D & b, float radius)
+{
+  const mrpt::math::TPoint3D d = b - a;
+  const double len = d.norm();
+  if (len < 1e-6) {
+    return nullptr;
+  }
+  const double pitch = std::acos(std::clamp(d.z / len, -1.0, 1.0));
+  const double yaw = std::atan2(d.y, d.x);
+
+  auto glCyl =
+    mrpt::opengl::CCylinder::Create(radius, radius, static_cast<float>(len), kEdgeCylinderSlices);
+  glCyl->setHasBases(false, false);
+  glCyl->setPose(mrpt::poses::CPose3D(a.x, a.y, a.z, yaw, pitch, 0.0));
+  return glCyl;
 }
 }  // namespace
 
@@ -236,16 +267,20 @@ void Mapper::updateVisualization()
     visualizer_->update_3d_object("mapper/keyframes", glKfs);
   }
 
-  // --- Graph edges ---
+  // --- Graph edges (rendered as thin CCylinder tubes, not GL lines: lines are
+  //     barely visible at typical zoom levels / with anti-aliasing off) ---
   {
     auto glEdges = mrpt::opengl::CSetOfObjects::Create();
     if (viz_show_edges_.load()) {
-      auto glLines = mrpt::opengl::CSetOfLines::Create();
-      glLines->setColor_u8(0x40, 0x80, 0xff, 0x80);  // translucent blue
+      const float edgeRadius = viz_edge_cylinder_radius_.load();
       for (const auto & [a, b] : edges) {
-        glLines->appendLine(a, b);
+        auto glCyl = makeEdgeCylinder(a, b, edgeRadius);
+        if (!glCyl) {
+          continue;
+        }
+        glCyl->setColor_u8(0x40, 0x80, 0xff, 0xc0);  // translucent blue
+        glEdges->insert(glCyl);
       }
-      glEdges->insert(glLines);
     }
     glEdges->setPose(vizXform);
     visualizer_->update_3d_object("mapper/edges", glEdges);
@@ -489,9 +524,18 @@ void Mapper::internalBuildGUI()
       std::move(cornerScaleCombo),
       std::move(sphereRadiusCombo),
     }});
-    tab.widgets.emplace_back(CheckBox{
-      "Show graph edges", viz_show_edges_.load(),
-      [this](bool checked) { viz_show_edges_.store(checked); }});
+    ComboBox edgeRadiusCombo{
+      "Edge radius",
+      {"0.02 m", "0.05 m", "0.1 m", "0.2 m", "0.3 m", "0.5 m"},
+      closestPresetIndex(kEdgeCylinderRadiusPresets, viz_edge_cylinder_radius_.load()),
+      [this](int index) { viz_edge_cylinder_radius_.store(kEdgeCylinderRadiusPresets.at(index)); }};
+    setComboFixedWidthIfSupported(edgeRadiusCombo, kComboFixedWidthPx);
+    tab.widgets.emplace_back(Row{{
+      CheckBox{
+        "Show graph edges", viz_show_edges_.load(),
+        [this](bool checked) { viz_show_edges_.store(checked); }},
+      std::move(edgeRadiusCombo),
+    }});
     tab.widgets.emplace_back(CheckBox{
       "Show odometry frames", viz_show_odom_frames_.load(),
       [this](bool checked) { viz_show_odom_frames_.store(checked); }});

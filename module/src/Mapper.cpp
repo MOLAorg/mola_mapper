@@ -130,6 +130,7 @@ void Mapper::initialize(const mrpt::containers::yaml & cfg)
     viz_keyframe_corner_scale_.store(viz_params_.getOrDefault<float>("keyframe_corner_size", 0.5f));
     viz_keyframe_sphere_radius_.store(
       viz_params_.getOrDefault<float>("keyframe_sphere_radius", 0.2f));
+    viz_edge_cylinder_radius_.store(viz_params_.getOrDefault<float>("edge_cylinder_radius", 0.05f));
   }
   {
     auto viz = findService<VizInterface>();

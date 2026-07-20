@@ -384,6 +384,12 @@ private:
   /// from the GUI "View" tab combo box.
   std::atomic<float> viz_keyframe_sphere_radius_{0.2f};
 
+  /// Graph-edge (CCylinder) radius, in meters. Defaults from viz_params_
+  /// ("edge_cylinder_radius"); tunable at runtime from the GUI "View" tab
+  /// combo box. Edges (both consecutive-keyframe and loop-closure) render as
+  /// thin cylinders instead of GL lines, which are otherwise barely visible.
+  std::atomic<float> viz_edge_cylinder_radius_{0.05f};
+
   /// Which frame is the origin (0,0,0) of the 3D viz scene: 0 = {map},
   /// 1 = {enu}. Default {enu} so the map is rendered North-oriented via the
   /// (estimated or identity) T_enu_to_map. Selected via the GUI "View" tab.

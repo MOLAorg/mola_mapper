@@ -148,6 +148,7 @@ modules:
     $define:
       MOLA_DESKEW_METHOD: "MotionCompensationMethod::IMU"
       MOLA_LO_INITIAL_LOCALIZATION_METHOD: "InitLocalization::PitchAndRollFromIMU"
+      MOLA_LOCAL_MAP_MAX_SIZE: "${MOLA_LOCAL_MAP_MAX_SIZE|20.0}" # smaller local LIO window than default since we have loop closure
 
     $import: "${MOLA_ODOMETRY_PIPELINE_YAML|$(ros2 pkg prefix mola_lidar_odometry)/share/mola_lidar_odometry/pipelines/lidar3d-default.yaml}"
 

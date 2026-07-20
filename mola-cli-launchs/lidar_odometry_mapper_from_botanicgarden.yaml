@@ -128,7 +128,17 @@ modules:
     type: mola::LidarOdometry
     verbosity_level: "${MOLA_VERBOSITY_MOLA_LO|INFO}"
     raw_data_source: "dataset_input"
-    params: "${MOLA_ODOMETRY_PIPELINE_YAML|$(ros2 pkg prefix mola_lidar_odometry)/share/mola_lidar_odometry/pipelines/lidar3d-default.yaml}"
+
+    # $define binds the variables that the imported
+    # pipeline already exposes as ${VAR|default} hooks, so we retune its own
+    # settings in place instead of restating the blocks that contain them.
+    # Priority is `environment > $define > the pipeline's inline default`.
+    $define:
+      MOLA_DESKEW_METHOD: "MotionCompensationMethod::IMU"
+      MOLA_LO_INITIAL_LOCALIZATION_METHOD: "InitLocalization::PitchAndRollFromIMU"
+      MOLA_LOCAL_MAP_MAX_SIZE: "${MOLA_LOCAL_MAP_MAX_SIZE|20.0}" # smaller local LIO window than default since we have loop closure
+
+    $import: "${MOLA_ODOMETRY_PIPELINE_YAML|$(ros2 pkg prefix mola_lidar_odometry)/share/mola_lidar_odometry/pipelines/lidar3d-default.yaml}"
 
   # =====================
   # mola_mapper (NavStateFilter + SharedKeyframeMap sink + direct IMU/wheels)

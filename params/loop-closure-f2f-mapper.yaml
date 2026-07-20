@@ -40,12 +40,18 @@ $define:
   # mola_sm_loop_closure (MOLA_HAS_KISS_MATCHER); if absent it is ignored.
   USE_KISS_MATCHER: true
   MIN_ICP_QUALITY: 0.55
+
   # WIDER ICP convergence basin. A loop candidate links two keyframes with the
   # accumulated odometry drift between them, so the initial guess is off by
   # several meters; the package default `threshold_sigma_initial: 1.0` m
   # cannot bridge that. Start at 5 m, annealed to the imported
   # threshold_sigma_final. Overridable by an importing file (see header note).
   LC_ICP_INITIAL_SIGMA: 5.0
+  LC_ICP_FINAL_SIGMA: 0.3
+
+  #LC_SELECTION_METHOD: PROXIMITY_ONLY
+  MIN_FRAMES_BETWEEN_LC: 2
+  MAX_LC_DISTANCE: 20.0
 
 $import: $(ros2 pkg prefix mola_sm_loop_closure)/share/mola_sm_loop_closure/pipelines/loop-closure-f2f-lidar3d-gicp.yaml
 

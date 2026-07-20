@@ -40,11 +40,4 @@
 # ignored).
 # ============================================================================
 
-$define:
-  LC_ICP_INITIAL_SIGMA: 1.0
-  LC_ICP_FINAL_SIGMA: 0.3
-  LC_SELECTION_METHOD: PROXIMITY_ONLY
-  MIN_FRAMES_BETWEEN_LC: 1
-  MAX_LC_DISTANCE: 20.0
-
 $import: $(ros2 pkg prefix mola_mapper)/share/mola_mapper/params/loop-closure-f2f-mapper.yaml

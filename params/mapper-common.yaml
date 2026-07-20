@@ -154,22 +154,22 @@ loop_closure_pipeline_file: "${MOLA_MAPPER_LC_PIPELINE|}"
 # How often the LC thread wakes to consider a new scan [s], and the minimum
 # number of new keyframes since the last scan before one actually runs.
 loop_closure_check_period_sec: ${MOLA_MAPPER_LC_PERIOD|5.0}
-loop_closure_min_new_keyframes: ${MOLA_MAPPER_LC_MIN_NEW_KFS|10}
+loop_closure_min_new_keyframes: ${MOLA_MAPPER_LC_MIN_NEW_KFS|3}
 
 # Incremental scans only test candidate pairs that involve a new keyframe; a
 # full scan is forced every N incremental scans to recover loops that only
 # become plausible after re-optimization (0 = never force a full scan).
 loop_closure_incremental: ${MOLA_MAPPER_LC_INCREMENTAL|true}
-loop_closure_full_scan_every_n: ${MOLA_MAPPER_LC_FULL_SCAN_EVERY_N|10}
+loop_closure_full_scan_every_n: ${MOLA_MAPPER_LC_FULL_SCAN_EVERY_N|50}
 
 # After the dataset ends, run up to this many batch loop-closure rounds (each a
 # full scan + synchronous re-optimization) until no new loops are found. Online
 # scans miss loops whose two endpoints only both exist late in the run; this
 # recovers them. 0 disables.
-loop_closure_finalize_rounds: ${MOLA_MAPPER_LC_FINALIZE_ROUNDS|8}
+loop_closure_finalize_rounds: ${MOLA_MAPPER_LC_FINALIZE_ROUNDS|0}
 
 # Huber robust-kernel threshold [sigmas] applied to merged LC edges.
-loop_closure_edge_robust_param: 1.5
+loop_closure_edge_robust_param: 1.0
 
 # --------------------------------------------------------------------------
 # High-rate pose publisher

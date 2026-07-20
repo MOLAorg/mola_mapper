@@ -84,8 +84,12 @@ modules:
     raw_data_source: "dataset_input"
     
     # This includes here a whole block "params: (...)"
-    # with the LIDAR-Odometry pipeline configuration:    
+    # with the LIDAR-Odometry pipeline configuration:
     # (mola_yaml `$import`: imported file is the base; siblings override it):
+    # $define binds the ${VAR|default} hooks the imported pipeline exposes.
+    # The mapper module owns the camera in this integrated launcher.
+    $define:
+      MOLA_GUI_CAMERA_FOLLOWS_VEHICLE: "false"
     $import: "${MOLA_ODOMETRY_PIPELINE_YAML|$(ros2 pkg prefix mola_lidar_odometry)/share/mola_lidar_odometry/pipelines/lidar3d-default.yaml}"
     params:
       visualization:
@@ -153,3 +157,10 @@ modules:
       # vs attitude-off, with geo-ref yaw 95 deg and zero solver errors on DCC01.
       # See ~/plans/lio-mulran-benchmarking.md (P11, 2026-07-01).
       imu_attitude_azimuth_offset_deg: ${MOLA_IMU_ATTITUDE_AZIMUTH_OFFSET|-90.0}
+
+    # Optional visualization: the mapper owns the camera in this integrated
+    # launcher (the LIO module's own camera-follow is turned off above), so it
+    # tracks the vehicle by default (camera_follows_vehicle in the shared viz
+    # defaults). Shared defaults (mola_yaml `$import`: imported file is the base):
+    visualization:
+      $import: ../params/mapper-visualization-common.yaml

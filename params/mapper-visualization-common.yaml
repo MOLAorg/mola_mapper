@@ -19,3 +19,8 @@ update_rate_hz: 5.0
 keyframe_corner_size: 0.5    # XYZ-corner scale (m) at each keyframe pose; 0 = hidden
 keyframe_sphere_radius: 0.2  # position-only sphere marker (m) at each keyframe; 0 = hidden
 edge_cylinder_radius: 0.05   # graph-edge (CCylinder) radius (m); toggled via "Show graph edges"
+
+# The mapper owns the camera in the integrated LIO+mapper launchers (the LIO
+# module's own camera-follow is turned off there), so track the vehicle by
+# default. Env hook so it can be flipped without editing this file.
+camera_follows_vehicle: ${MOLA_MAPPER_CAMERA_FOLLOWS_VEHICLE|true}

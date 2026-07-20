@@ -230,6 +230,11 @@ private:
   std::mutex lc_wakeup_mutex_;
   std::condition_variable lc_wakeup_cv_;
   std::atomic_bool lc_should_exit_{false};
+  // Set by request_loop_closure_scan() (e.g. the GUI "Run LC scan now" button)
+  // to make the LC thread run one immediate FULL scan instead of waiting out the
+  // check period. Consumed and cleared by the thread; never runs analyze()
+  // off-thread, so it cannot race the periodic scan.
+  std::atomic_bool lc_force_scan_{false};
 
   // Progress state carried between scans by the LC thread. Reset when the thread
   // (re)starts on a fresh map.
@@ -250,6 +255,46 @@ private:
     void reset() { *this = LoopClosureScanState{}; }
   };
   LoopClosureScanState lc_scan_;
+
+  // Live loop-closure UI counters, surfaced in the GUI "Loop Closure" tab, the
+  // metric plots and getDiagnostics(). Kept as atomics (not under stateMutex_)
+  // so the viz thread reads them cheaply while a heavy scan runs, and so the
+  // per-candidate on_progress callback can update them without taking a lock.
+  struct LoopClosureUiState
+  {
+    // Cumulative over the run:
+    std::atomic<std::size_t> loops_accepted{0};  // == lc_scan_.merged_pairs.size()
+    std::atomic<std::size_t> candidates_checked{0};
+    std::atomic<std::size_t> scans_completed{0};
+    // Current / most-recent scan:
+    std::atomic<bool> scan_in_progress{false};
+    std::atomic<std::size_t> cur_total{0};  // candidates this scan (queue size)
+    std::atomic<std::size_t> cur_done{0};  // evaluated so far (pending = total - done)
+    std::atomic<std::size_t> last_scan_accepted{0};
+    std::atomic<double> last_scan_seconds{0.0};
+    std::atomic<bool> last_scan_full{false};
+    // Finalize (end-of-run batch) progress:
+    std::atomic<bool> finalize_active{false};
+    std::atomic<std::size_t> finalize_round{0};
+    std::atomic<std::size_t> finalize_rounds_total{0};
+
+    void reset()
+    {
+      loops_accepted = 0;
+      candidates_checked = 0;
+      scans_completed = 0;
+      scan_in_progress = false;
+      cur_total = 0;
+      cur_done = 0;
+      last_scan_accepted = 0;
+      last_scan_seconds = 0.0;
+      last_scan_full = false;
+      finalize_active = false;
+      finalize_round = 0;
+      finalize_rounds_total = 0;
+    }
+  };
+  LoopClosureUiState lc_ui_;
 
   /// Background worker for lazy-load externalization of keyframe point clouds
   /// in saveSimpleMapToFile(), so writing the (potentially large) point cloud
@@ -389,6 +434,9 @@ private:
   // a stale-by-one-frame read only delays a checkbox by one update).
   std::atomic_bool viz_show_keyframes_{true};
   std::atomic_bool viz_show_edges_{true};
+  /// When true, loop-closure edges render in a distinct color/thickness so
+  /// accepted loops stand out from the consecutive-keyframe odometry chain.
+  std::atomic_bool viz_highlight_lc_edges_{true};
   std::atomic_bool viz_show_odom_frames_{true};
   std::atomic_bool viz_camera_follows_vehicle_{false};
   std::atomic_bool viz_show_ground_grid_{true};
@@ -425,8 +473,26 @@ private:
     mola::gui::LiveString::Ptr lbEnu;
     mola::gui::LiveString::Ptr lbDrift;
     mola::gui::LiveString::Ptr lbImu;
+    // Loop-closure tab (only populated when loop_closure_enabled).
+    mola::gui::LiveString::Ptr lbLcLoops;
+    mola::gui::LiveString::Ptr lbLcCandidates;
+    mola::gui::LiveString::Ptr lbLcCurrent;
+    mola::gui::LiveString::Ptr lbLcLast;
   };
   GuiData gui_;
+
+#ifdef MOLA_KERNEL_VIZ_HAS_METRICS
+  /// Loop-closure metric plot channels (mola_viz_imgui "Plots" menu); lazily
+  /// registered once visualizer_ is available. Guarded by the feature macro so
+  /// this module still builds against an older mola_kernel that predates
+  /// register_metric()/push_metric().
+  mola::MetricChannel::Ptr metric_lc_loops_total_;
+  mola::MetricChannel::Ptr metric_lc_queue_depth_;
+  mola::MetricChannel::Ptr metric_lc_candidates_per_scan_;
+  mola::MetricChannel::Ptr metric_lc_scan_time_ms_;
+  mola::MetricChannel::Ptr metric_lc_edge_goodness_;
+  bool lc_metrics_registered_ = false;
+#endif
 
   /// Renders the keyframe tree, graph edges and per-source movable {odom_i}
   /// frames into the visualizer, and creates/updates the GUI sub-window.
@@ -558,6 +624,11 @@ private:
   /// Stops and joins the loop-closure thread if running (no lock held).
   void stop_loop_closure_thread();
 
+  /// Requests one immediate FULL scan by the background LC thread (wakes it
+  /// early). Thread-safe, non-blocking; a no-op when the LC thread is not
+  /// running. Used by the GUI "Run LC scan now" button.
+  void request_loop_closure_scan();
+
   /// Shared shutdown sequence for the loop-closure thread: signals exit,
   /// wakes it, and joins it if running. Resets lc_engine_ only when
   /// resetEngine is true (finalize_loop_closures() keeps the engine alive for
@@ -570,6 +641,11 @@ private:
   /// true, the min-new-keyframes gate and incremental hint are bypassed so the
   /// entire map is re-examined (used by the finalize pass).
   std::size_t run_loop_closure_scan(bool forceFullScan = false);
+
+  /// Lazily registers the loop-closure metric plot channels once visualizer_ is
+  /// available (no-op afterwards, or when built against an older mola_kernel
+  /// without the metrics API). Called at the start of each scan.
+  void register_lc_metrics_if_needed();
 
   /// After the dataset ends, repeatedly runs full loop-closure scans interleaved
   /// with a synchronous re-optimization, until a round finds no new loops or the

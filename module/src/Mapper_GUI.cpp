@@ -153,6 +153,7 @@ void Mapper::updateVisualization()
   // talking to the visualizer (which only enqueues GUI-thread tasks anyway).
   std::vector<std::pair<KeyFrameID, mrpt::poses::CPose3D>> kfPoses;
   std::vector<std::pair<mrpt::math::TPoint3D, mrpt::math::TPoint3D>> edges;
+  std::vector<std::pair<mrpt::math::TPoint3D, mrpt::math::TPoint3D>> lcEdges;
   std::vector<std::pair<std::string, mrpt::poses::CPose3D>> odomFrames;
   std::optional<mrpt::poses::CPose3D> latestVehiclePose;
   std::optional<mrpt::Clock::time_point> freshestStamp;
@@ -183,7 +184,10 @@ void Mapper::updateVisualization()
     // Freshest instant for the camera-follow high-rate query (see below).
     freshestStamp = get_current_extrapolated_stamp_locked();
 
-    // Graph edges (undirected): de-duplicate the (a,b)/(b,a) pairs.
+    // Graph edges (undirected): de-duplicate the (a,b)/(b,a) pairs, and split
+    // loop-closure edges (present in the LC merged-pairs set) from the
+    // consecutive-keyframe odometry chain so they can be drawn distinctly.
+    const bool highlightLc = viz_highlight_lc_edges_.load();
     std::set<std::pair<KeyFrameID, KeyFrameID>> seen;
     for (const auto & [pair, data] : state_.kf_connectivity.edges) {
       (void)data;
@@ -197,7 +201,9 @@ void Mapper::updateVisualization()
       if (itA == state_.last_estimated_states.end() || itB == state_.last_estimated_states.end()) {
         continue;
       }
-      edges.emplace_back(itA->second.pose.translation(), itB->second.pose.translation());
+      const bool isLc = highlightLc && lc_scan_.merged_pairs.count(std::minmax(a, b)) != 0;
+      auto & target = isLc ? lcEdges : edges;
+      target.emplace_back(itA->second.pose.translation(), itB->second.pose.translation());
     }
 
     // Per-source frames: T_map_to_odom_i (skip id 0 = ENU / T_enu_to_map).
@@ -282,7 +288,17 @@ void Mapper::updateVisualization()
         if (!glCyl) {
           continue;
         }
-        glCyl->setColor_u8(0x40, 0x80, 0xff, 0xc0);  // translucent blue
+        glCyl->setColor_u8(0x40, 0x80, 0xff, 0xc0);  // translucent blue (odometry chain)
+        glEdges->insert(glCyl);
+      }
+      // Loop-closure edges: brighter green and thicker, so accepted loops stand
+      // out against the odometry chain (they physically stitch distant legs).
+      for (const auto & [a, b] : lcEdges) {
+        auto glCyl = makeEdgeCylinder(a, b, edgeRadius * 2.0f);
+        if (!glCyl) {
+          continue;
+        }
+        glCyl->setColor_u8(0x00, 0xe0, 0x00, 0xff);  // opaque green (loop closure)
         glEdges->insert(glCyl);
       }
     }
@@ -406,7 +422,7 @@ void Mapper::updateVisualization()
 
   if (gui_.lbKeyframes) {
     gui_.lbKeyframes->set(mrpt::format("Keyframes: %zu", kfPoses.size()));
-    gui_.lbEdges->set(mrpt::format("Graph edges: %zu", edges.size()));
+    gui_.lbEdges->set(mrpt::format("Graph edges: %zu", edges.size() + lcEdges.size()));
     gui_.lbOdomFrames->set(mrpt::format("Odometry frames: %zu", odomFrames.size()));
     gui_.lbGeoref->set(std::string("Geo-referenced: ") + (hasGeoref ? "yes" : "no"));
 
@@ -464,6 +480,32 @@ void Mapper::updateVisualization()
       "IMU factors: grav=%zu att=%zu omega=%zu", imuFactorsGravity, imuFactorsAttitude,
       imuFactorsOmega));
   }
+
+  // --- Loop-closure tab (present only when loop_closure_enabled) ---
+  if (gui_.lbLcLoops) {
+    gui_.lbLcLoops->set(mrpt::format("Loops accepted: %zu", lc_ui_.loops_accepted.load()));
+    gui_.lbLcCandidates->set(mrpt::format(
+      "Candidates checked: %zu over %zu scan(s)", lc_ui_.candidates_checked.load(),
+      lc_ui_.scans_completed.load()));
+
+    if (lc_ui_.finalize_active.load()) {
+      gui_.lbLcCurrent->set(mrpt::format(
+        "Current: finalize round %zu/%zu", lc_ui_.finalize_round.load(),
+        lc_ui_.finalize_rounds_total.load()));
+    } else if (lc_ui_.scan_in_progress.load()) {
+      const std::size_t total = lc_ui_.cur_total.load();
+      const std::size_t done = lc_ui_.cur_done.load();
+      const std::size_t pending = total > done ? total - done : 0;
+      gui_.lbLcCurrent->set(
+        mrpt::format("Current scan: %zu/%zu evaluated, %zu pending", done, total, pending));
+    } else {
+      gui_.lbLcCurrent->set("Current scan: idle");
+    }
+
+    gui_.lbLcLast->set(mrpt::format(
+      "Last scan: +%zu loop(s), %.1f s (%s)", lc_ui_.last_scan_accepted.load(),
+      lc_ui_.last_scan_seconds.load(), lc_ui_.last_scan_full.load() ? "full" : "incremental"));
+  }
 }
 
 void Mapper::internalBuildGUI()
@@ -480,6 +522,12 @@ void Mapper::internalBuildGUI()
   gui_.lbEnu = std::make_shared<LiveString>(" ");
   gui_.lbDrift = std::make_shared<LiveString>(" ");
   gui_.lbImu = std::make_shared<LiveString>(" ");
+  if (params_.loop_closure_enabled) {
+    gui_.lbLcLoops = std::make_shared<LiveString>(" ");
+    gui_.lbLcCandidates = std::make_shared<LiveString>(" ");
+    gui_.lbLcCurrent = std::make_shared<LiveString>(" ");
+    gui_.lbLcLast = std::make_shared<LiveString>(" ");
+  }
 
   WindowDescription desc;
   desc.title = "mola_mapper";
@@ -506,6 +554,26 @@ void Mapper::internalBuildGUI()
     tab.widgets.emplace_back(Label{gui_.lbGnss});
     tab.widgets.emplace_back(Label{gui_.lbEnu});
     tab.widgets.emplace_back(Label{gui_.lbDrift});
+    desc.tabs.emplace_back(std::move(tab));
+  }
+
+  // Loop-closure tab (only when the feature is enabled):
+  if (params_.loop_closure_enabled) {
+    Tab tab;
+    tab.title = "Loop Closure";
+    tab.widgets.emplace_back(Label{gui_.lbLcLoops});
+    tab.widgets.emplace_back(Label{gui_.lbLcCandidates});
+    tab.widgets.emplace_back(Label{gui_.lbLcCurrent});
+    tab.widgets.emplace_back(Label{gui_.lbLcLast});
+    tab.widgets.emplace_back(Separator{});
+    tab.widgets.emplace_back(CheckBox{
+      "Highlight loop edges", viz_highlight_lc_edges_.load(),
+      [this](bool checked) { viz_highlight_lc_edges_.store(checked); }});
+    // Manual trigger: request an immediate full scan by the background LC thread
+    // (never run analyze() from here: the engine is single-thread-per-instance,
+    // so a concurrent scan would race the periodic one).
+    tab.widgets.emplace_back(
+      Button{"Run LC scan now", 0, "", 0, [this]() { request_loop_closure_scan(); }});
     desc.tabs.emplace_back(std::move(tab));
   }
 

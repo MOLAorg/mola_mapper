@@ -131,6 +131,8 @@ void Mapper::initialize(const mrpt::containers::yaml & cfg)
     viz_keyframe_sphere_radius_.store(
       viz_params_.getOrDefault<float>("keyframe_sphere_radius", 0.2f));
     viz_edge_cylinder_radius_.store(viz_params_.getOrDefault<float>("edge_cylinder_radius", 0.05f));
+    viz_camera_follows_vehicle_.store(
+      viz_params_.getOrDefault<bool>("camera_follows_vehicle", viz_camera_follows_vehicle_.load()));
   }
   {
     auto viz = findService<VizInterface>();
@@ -555,6 +557,25 @@ void Mapper::getDiagnostics(std::vector<mola::DiagnosticStatusMsg> & status)
     {"imu_factors", std::to_string(
                       geo_ref_counters_.imu_attitude + geo_ref_counters_.imu_gravity +
                       geo_ref_counters_.imu_omega)});
+
+  // Loop-closure counters (present when the feature is enabled).
+  if (params_.loop_closure_enabled) {
+    msg.values.push_back({"lc_loops_accepted", std::to_string(lc_ui_.loops_accepted.load())});
+    msg.values.push_back(
+      {"lc_candidates_checked", std::to_string(lc_ui_.candidates_checked.load())});
+    msg.values.push_back({"lc_scans", std::to_string(lc_ui_.scans_completed.load())});
+    msg.values.push_back({"lc_scan_in_progress", lc_ui_.scan_in_progress.load() ? "yes" : "no"});
+    const std::size_t total = lc_ui_.cur_total.load();
+    const std::size_t done = lc_ui_.cur_done.load();
+    msg.values.push_back(
+      {"lc_queue_depth", std::to_string(total > done ? total - done : std::size_t{0})});
+    if (lc_ui_.finalize_active.load()) {
+      msg.values.push_back(
+        {"lc_finalize_round", mrpt::format(
+                                "%zu/%zu", lc_ui_.finalize_round.load(),
+                                lc_ui_.finalize_rounds_total.load())});
+    }
+  }
 
   // Geo-referencing transform + per-source odometry-frame drift vs {map}.
   if (const auto itEnu = state_.last_estimated_frames.find(0);

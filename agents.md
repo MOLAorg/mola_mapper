@@ -38,14 +38,17 @@ module/src/
   Mapper.cpp                   Lifecycle: initialize/spinOnce/reset/diagnostics + IMPLEMENTS_MRPT_OBJECT
   Mapper_Fusion.cpp            Keyframe management + factor-graph fusion + estimated_navstate
   Mapper_KeyframeIngestion.cpp SharedKeyframeMap sink: requestInsertKeyframe()
-  Mapper_GUI.cpp               MolaViz/MolaVizImGui viz: KF tree, graph edges, per-source movable
-                                  {odom_i} frames, {enu} geo-ref marker, status/geo-ref/view panel
+  Mapper_GUI.cpp               MolaViz/MolaVizImGui viz: KF tree, graph edges (loop-closure
+                                  edges highlighted green), per-source movable {odom_i} frames,
+                                  {enu} geo-ref marker, status/geo-ref/loop-closure/view panel
   Mapper_SensorCallbacks.cpp   onNewObservation dispatch -> fuse_*()
   Mapper_LoopClosure.cpp         Background LC thread: snapshots the map, runs the
                                   mola_sm_loop_closure detector (analyze()) off-lock,
                                   merges accepted edges as robust BetweenFactors;
                                   plus the end-of-run finalize pass (batch full
-                                  scans + re-optimization until no new loops)
+                                  scans + re-optimization until no new loops). Also
+                                  maintains live LC UI counters (lc_ui_) and an
+                                  on-demand scan request (request_loop_closure_scan())
   ImuGravityFilter.cpp           Robust low-dynamics gravity-direction reducer (pure/testable):
                                   given a window of lever-arm-corrected accel/gyro samples,
                                   rejects motion-contaminated ones, robustly averages the
@@ -184,6 +187,21 @@ docs/call-graph.md               Mermaid diagram tracing every public-API method
   can deskew when the sensor provides per-point timestamps (use a deskew-free
   pipeline for sensors that don't). GNC-in-parallel and the LC-event
   notification to front ends are still open.
+
+- LC is observable at runtime. `analyze()` reports per-scan stats via
+  `LoopClosureAnalyzeOptions::on_progress` (live done/total, so the consumer
+  derives a per-scan pending-queue depth) and `out_stats`
+  (`LoopClosureAnalyzeStats`: candidates generated/evaluated, edges accepted,
+  aborted) — guarded by `MOLA_SM_LOOP_CLOSURE_HAS_ANALYZE_STATS`. The mapper
+  keeps cumulative + current-scan counters in `lc_ui_` (atomics, read lock-free
+  by the viz thread) and surfaces them three ways: a GUI "Loop Closure" tab
+  (loops accepted, candidates checked, current-scan progress / finalize round,
+  last-scan summary, a highlight toggle, and a "Run LC scan now" button that
+  wakes the LC thread via `request_loop_closure_scan()` — never runs `analyze()`
+  off-thread, since the engine is single-thread-per-instance); live metric plots
+  (`mapper/lc_*`, guarded by `MOLA_KERNEL_VIZ_HAS_METRICS`); and `getDiagnostics()`
+  values (`lc_loops_accepted`, `lc_queue_depth`, ...). Accepted loop edges render
+  green (vs the blue odometry chain) in the 3D scene.
 
 - LC pipeline config lives in `params/loop-closure-f2f-mapper.yaml`, which
   `$import`s the package's f2f pipeline and overrides ONLY the ICP registration

@@ -137,6 +137,8 @@ modules:
       MOLA_DESKEW_METHOD: "MotionCompensationMethod::IMU"
       MOLA_LO_INITIAL_LOCALIZATION_METHOD: "InitLocalization::PitchAndRollFromIMU"
       MOLA_LOCAL_MAP_MAX_SIZE: "${MOLA_LOCAL_MAP_MAX_SIZE|20.0}" # smaller local LIO window than default since we have loop closure
+      # The mapper module owns the camera in this integrated launcher.
+      MOLA_GUI_CAMERA_FOLLOWS_VEHICLE: "false"
 
     $import: "${MOLA_ODOMETRY_PIPELINE_YAML|$(ros2 pkg prefix mola_lidar_odometry)/share/mola_lidar_odometry/pipelines/lidar3d-default.yaml}"
 
@@ -175,3 +177,10 @@ modules:
 
       # Publish the extrapolated reference-frame pose at 20 Hz.
       high_rate_pose_publish_rate_hz: ${MOLA_MAPPER_PUBLISH_RATE_HZ|20.0}
+
+    # Optional visualization: the mapper owns the camera in this integrated
+    # launcher (the LIO module's own camera-follow is turned off above), so it
+    # tracks the vehicle by default (camera_follows_vehicle in the shared viz
+    # defaults). Shared defaults (mola_yaml `$import`: imported file is the base):
+    visualization:
+      $import: ../params/mapper-visualization-common.yaml

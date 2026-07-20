@@ -70,6 +70,7 @@ void Mapper::start_loop_closure_thread()
   lc_engine_ = engine;
 
   lc_scan_.reset();
+  lc_ui_.reset();
 
   lc_should_exit_.store(false);
   lc_thread_ = std::thread(&Mapper::loop_closure_thread_loop, this);
@@ -79,6 +80,18 @@ void Mapper::start_loop_closure_thread()
 }
 
 void Mapper::stop_loop_closure_thread() { stop_loop_closure_thread_locked(/*resetEngine=*/true); }
+
+void Mapper::request_loop_closure_scan()
+{
+  if (!lc_thread_.joinable()) {
+    return;  // LC thread not running
+  }
+  {
+    auto lk = mrpt::lockHelper(lc_wakeup_mutex_);
+    lc_force_scan_.store(true);
+  }
+  lc_wakeup_cv_.notify_all();
+}
 
 void Mapper::stop_loop_closure_thread_locked(bool resetEngine)
 {
@@ -104,14 +117,19 @@ void Mapper::loop_closure_thread_loop()
   while (!lc_should_exit_.load()) {
     {
       std::unique_lock<std::mutex> lk(lc_wakeup_mutex_);
-      lc_wakeup_cv_.wait_for(lk, period, [this] { return lc_should_exit_.load(); });
+      lc_wakeup_cv_.wait_for(
+        lk, period, [this] { return lc_should_exit_.load() || lc_force_scan_.load(); });
     }
     if (lc_should_exit_.load()) {
       break;
     }
 
+    // A manual request forces one full scan (bypassing the min-new-keyframes
+    // gate); the periodic wake-up runs the normal incremental/full logic.
+    const bool forceFull = lc_force_scan_.exchange(false);
+
     try {
-      run_loop_closure_scan();
+      run_loop_closure_scan(forceFull);
     } catch (const std::exception & e) {
       MRPT_LOG_ERROR_STREAM("[loop_closure] scan failed: " << e.what());
     }
@@ -145,6 +163,19 @@ std::size_t Mapper::run_loop_closure_scan(bool forceFullScan)
     return 0;
   }
 
+  register_lc_metrics_if_needed();
+  const auto scanT0 = std::chrono::steady_clock::now();
+  lc_ui_.scan_in_progress.store(true);
+  lc_ui_.cur_total.store(0);
+  lc_ui_.cur_done.store(0);
+  // Clear the in-progress flag on any exit path (including if analyze() throws),
+  // so a failed scan never leaves the UI stuck showing "scan in progress".
+  struct InProgressGuard
+  {
+    std::atomic<bool> & flag;
+    ~InProgressGuard() { flag.store(false); }
+  } inProgressGuard{lc_ui_.scan_in_progress};
+
   // 2) Decide incremental vs full scan.
   bool fullScan = forceFullScan || !params_.loop_closure_incremental;
   if (
@@ -163,6 +194,20 @@ std::size_t Mapper::run_loop_closure_scan(bool forceFullScan)
 
   // Abort promptly on shutdown.
   opts.should_abort = [this] { return lc_should_exit_.load(); };
+
+  // Live per-candidate progress: drives the GUI "pending this scan" counter
+  // (queue depth = total - done) and the queue-depth metric plot.
+  mola::LoopClosureAnalyzeStats stats;
+  opts.out_stats = &stats;
+  opts.on_progress = [this](std::size_t done, std::size_t total) {
+    lc_ui_.cur_total.store(total);
+    lc_ui_.cur_done.store(done);
+#ifdef MOLA_KERNEL_VIZ_HAS_METRICS
+    if (metric_lc_queue_depth_) {
+      metric_lc_queue_depth_->push(static_cast<double>(total - done));
+    }
+#endif
+  };
 
   // Exclude already-closed pairs from candidate selection so each scan spends
   // its budget on new loops instead of re-proposing the same ones. merged_pairs
@@ -200,12 +245,35 @@ std::size_t Mapper::run_loop_closure_scan(bool forceFullScan)
     }
     if (added) {
       merged++;
+      lc_ui_.loops_accepted.fetch_add(1);
+#ifdef MOLA_KERNEL_VIZ_HAS_METRICS
+      if (metric_lc_edge_goodness_) {
+        metric_lc_edge_goodness_->push(100.0 * e.quality);
+      }
+#endif
     }
   };
 
   lc_engine_->analyze(snapshot, opts);
 
   lc_scan_.snapshot_size_at_last_scan = snapshot.size();
+
+  // Publish per-scan UI counters + metrics.
+  const double scanSeconds =
+    std::chrono::duration<double>(std::chrono::steady_clock::now() - scanT0).count();
+  lc_ui_.candidates_checked.fetch_add(stats.candidates_evaluated);
+  lc_ui_.scans_completed.fetch_add(1);
+  lc_ui_.last_scan_accepted.store(merged);
+  lc_ui_.last_scan_seconds.store(scanSeconds);
+  lc_ui_.last_scan_full.store(fullScan);
+  lc_ui_.cur_done.store(lc_ui_.cur_total.load());
+#ifdef MOLA_KERNEL_VIZ_HAS_METRICS
+  if (metric_lc_loops_total_) {
+    metric_lc_loops_total_->push(static_cast<double>(lc_ui_.loops_accepted.load()));
+    metric_lc_candidates_per_scan_->push(static_cast<double>(stats.candidates_generated));
+    metric_lc_scan_time_ms_->push(1000.0 * scanSeconds);
+  }
+#endif
 
   if (merged > 0) {
     // Hand the new edges to the optimizer (background thread, or the next
@@ -218,6 +286,22 @@ std::size_t Mapper::run_loop_closure_scan(bool forceFullScan)
   }
 
   return merged;
+}
+
+void Mapper::register_lc_metrics_if_needed()
+{
+#ifdef MOLA_KERNEL_VIZ_HAS_METRICS
+  if (lc_metrics_registered_ || !visualizer_) {
+    return;
+  }
+  metric_lc_loops_total_ = visualizer_->register_metric("mapper/lc_loops_total", "loops");
+  metric_lc_queue_depth_ = visualizer_->register_metric("mapper/lc_queue_depth", "pending");
+  metric_lc_candidates_per_scan_ =
+    visualizer_->register_metric("mapper/lc_candidates_per_scan", "cands");
+  metric_lc_scan_time_ms_ = visualizer_->register_metric("mapper/lc_scan_time_ms", "ms");
+  metric_lc_edge_goodness_ = visualizer_->register_metric("mapper/lc_edge_goodness", "%");
+  lc_metrics_registered_ = true;
+#endif
 }
 
 void Mapper::finalize_loop_closures()
@@ -242,10 +326,14 @@ void Mapper::finalize_loop_closures()
     "[loop_closure] finalize: up to " << params_.loop_closure_finalize_rounds
                                       << " batch full-scan rounds");
 
+  lc_ui_.finalize_active.store(true);
+  lc_ui_.finalize_rounds_total.store(params_.loop_closure_finalize_rounds);
+
   const auto t0 = std::chrono::steady_clock::now();
 
   std::size_t total = 0;
   for (uint32_t round = 0; round < params_.loop_closure_finalize_rounds; round++) {
+    lc_ui_.finalize_round.store(round + 1);
     if (params_.loop_closure_finalize_max_seconds > 0) {
       const std::chrono::duration<double> elapsed = std::chrono::steady_clock::now() - t0;
       if (elapsed.count() >= params_.loop_closure_finalize_max_seconds) {
@@ -268,6 +356,8 @@ void Mapper::finalize_loop_closures()
       "[loop_closure] finalize round " << (round + 1) << ": merged " << merged << " edge(s) (total "
                                        << total << ")");
   }
+
+  lc_ui_.finalize_active.store(false);
 
   MRPT_LOG_INFO_STREAM("[loop_closure] finalize done: " << total << " edge(s) added");
 }

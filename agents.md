@@ -54,6 +54,7 @@ module/src/
   Parameters.cpp                 loadFrom(yaml)
   register.cpp                   MOLA_REGISTER_MODULE(mola::mapper::Mapper)
   GtsamData.h, factor_builders.h Private GTSAM symbol scheme + factor builders (shared by the two fusion TUs)
+  covariance_utils.h             Shared SE(3)-covariance summary (max position / orientation sigma)
 apps/mola-mapper-cli.cpp      Offline front end (skeleton)
 params/mapper.yaml            Default config (no fixed geo-ref; pure-odometry-safe defaults)
 mola-cli-launchs/                Live system YAMLs (KITTI, MulRan, BotanicGarden, Oxford Spires,
@@ -107,6 +108,21 @@ docs/call-graph.md               Mermaid diagram tracing every public-API method
   into the short-term prediction LIO/VIO depend on for ICP initial guesses).
   Falls back to the global conversion only before a source's first
   `fuse_pose()` lands.
+- The extrapolation VELOCITY is low-passed (`predict_twist_filter_enabled`,
+  `predict_twist_filter_time_const`, dt-aware EMA in `TwistLowPass`), on both
+  velocity sources: the newest keyframe's graph `V/W` and each source's
+  `local_twist`. Raw, either one hands a jittery motion prior to LIO, which
+  starts ICP from a bad guess and drops scans under real-time load. A
+  non-advancing timestamp must leave the EMA untouched (the solver re-runs at
+  an unchanged newest-keyframe stamp; refreshing there would wipe the history
+  and pass the raw value through). Paired with moderate
+  `sigma_random_walk_acceleration_*` defaults (0.5 / 1.0): a loose angular
+  sigma lets the boundary keyframe's yaw rate swing and rotate the prediction.
+- `estimated_navstate()` never throws: it degrades to `nullopt`. A keyframe
+  exists in `time_to_kf_id` at CREATION but only in `last_estimated_states`
+  after a solve commits, so the query path routinely sees not-yet-solved
+  keyframes (`get_latest_state_and_covariance()` would throw). The body lives
+  in `estimated_navstate_impl()` so the public entry point can catch.
 - Out-of-order keyframe guard (mandatory): in
   `create_or_get_keyframe_by_timestamp_locked()`, a request older than the
   newest keyframe snaps to the nearest existing keyframe instead of inserting
@@ -120,10 +136,27 @@ docs/call-graph.md               Mermaid diagram tracing every public-API method
   accumulate into inter-keyframe constraints; they never spawn a variable.
   `Auto` mode runs legacy per-call creation until the first
   `requestInsertKeyframe()` lands, then flips to `SharedMapOnly`.
-- Geo-ref convergence (`current_georeferencing()` /
-  `has_converged_localization()`) is gated on both the `T_enu_to_map`
-  estimate AND the latest keyframe's vehicle-pose sigma in `{map}` clearing
-  `convergence_max_position_sigma` / `convergence_max_orientation_sigma_deg`.
+- Geo-ref convergence is MODE-AWARE, and the two modes use different criteria.
+  Live (`estimate_geo_reference: true`): `optimize_and_refresh()` publishes
+  `state_.geo_reference` only once `T_enu_to_map`'s own position+orientation
+  sigmas (plus the latest keyframe's ORIENTATION sigma) clear
+  `convergence_max_position_sigma` / `convergence_max_orientation_sigma_deg`,
+  and `has_converged_localization()` is then sticky on that. It deliberately
+  does NOT gate on the keyframe's ABSOLUTE position sigma: the central map
+  pins a far-away gauge anchor, so that grows with distance and would block
+  convergence forever on long trajectories. Relocalize
+  (`estimate_geo_reference: false` + a fixed geo-ref): the geo-reference is
+  known up front and says nothing about being localized, so
+  `has_converged_localization()` gates on the latest keyframe's own pose
+  sigma. Gating on `estimate_geo_reference` alone made relocalize mode
+  unconditionally "never converged".
+- `set_geo_reference()` (front end loaded a geo-referenced map) MUST be
+  implemented, not inherited: an unpinned `T_enu_to_map` leaves the absolute
+  rotation a gauge freedom (gravity/attitude factors only measure rotation
+  relative to it) and iSAM2 throws. With no keyframes yet it rebuilds the
+  graph (after `state_.clear()`, or the still-pending `symbol_T_enu_to_map`
+  is inserted twice); with keyframes present it pins the existing variable
+  with an extra prior, since the central map must survive the call.
 - `reset()` resets only the short-term per-source integration anchors
   (wheel/IMU/ingestion chains), never the keyframes/graph/geo-ref/diagnostic
   counters — the central map is shared, persistent state and must survive one

@@ -35,9 +35,9 @@ namespace mola::mapper
 inline std::pair<double, double> max_pos_and_orientation_sigma(
   const mrpt::math::CMatrixDouble66 & cov)
 {
-  const double maxPosSigma = std::sqrt(std::max({cov(0, 0), cov(1, 1), cov(2, 2)}));
+  const double maxPosSigma = std::sqrt(std::max({0.0, cov(0, 0), cov(1, 1), cov(2, 2)}));
   const double maxOriSigmaDeg =
-    mrpt::RAD2DEG(std::sqrt(std::max({cov(3, 3), cov(4, 4), cov(5, 5)})));
+    mrpt::RAD2DEG(std::sqrt(std::max({0.0, cov(3, 3), cov(4, 4), cov(5, 5)})));
   return {maxPosSigma, maxOriSigmaDeg};
 }
 

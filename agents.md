@@ -195,22 +195,26 @@ colcon build --packages-select mola_mapper
 colcon test  --packages-select mola_mapper && colcon test-result --verbose
 ```
 
-## `$import` gotcha in `lidar_odom` module overrides
+## Retuning an imported pipeline: prefer `$define`
 
 When a launcher `$import`s `mola_lidar_odometry`'s pipeline YAML into the
-`lidar_odom` module and then overrides a setting via a sibling `params:` map
-(Oxford Spires, ConSLAM), the override must match the imported file's OWN
-nesting: `initial_localization` is a TOP-LEVEL key there (sibling of
-`params:`, not nested inside it), so an override nested under this launcher's
-`params:` silently lands in an unused `params.initial_localization` instead
-of the real block (`$import`'s deep-merge only reaches keys at the same
-nesting level as the imported ones) -- verified with `mola-yaml-parser` on
-the resulting merged config. `observations_deskew_pass` (the deskew method)
-is a YAML sequence, which deep-merge can only replace wholesale, not patch a
-single nested field in, so overriding its `method` requires duplicating that
-filter step verbatim with a different default, at the launcher's top level
-too. Both landed a launcher silently defaulting to `FixedPose` and linear
-deskew regardless of the (ineffective) override.
+`lidar_odom` module, prefer `$define` (mola_yaml) over a sibling override to
+retune it: it binds the `${VAR|default}` hooks the imported file already
+exposes, with priority `environment > $define > the file's inline default`.
+The Oxford Spires and ConSLAM launchers use it for `MOLA_DESKEW_METHOD` and
+`MOLA_LO_INITIAL_LOCALIZATION_METHOD`.
+
+This avoids two traps that both previously landed a launcher silently running
+`FixedPose` and linear deskew. First, a sibling override must match the
+imported file's OWN nesting: `initial_localization` is a TOP-LEVEL key there
+(sibling of `params:`, not inside it), so nesting the override under the
+launcher's `params:` lands it in an unused `params.initial_localization`
+(deep-merge only reaches keys at the same nesting level). Second,
+`observations_deskew_pass` is a YAML sequence, which deep-merge replaces
+wholesale rather than patching, so overriding one field used to require
+duplicating the whole filter step verbatim. Use `$define` when the setting has
+a hook; fall back to a sibling override (at the right nesting level) when it
+does not, and verify the result with `mola-yaml-parser` on the merged config.
 
 ## Real-dataset runs
 

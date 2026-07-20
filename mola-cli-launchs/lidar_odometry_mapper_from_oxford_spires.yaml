@@ -125,46 +125,17 @@ modules:
     verbosity_level: "${MOLA_VERBOSITY_MOLA_LO|INFO}"
     raw_data_source: "dataset_input"
 
-    $import: "${MOLA_ODOMETRY_PIPELINE_YAML|$(ros2 pkg prefix mola_lidar_odometry)/share/mola_lidar_odometry/pipelines/lidar3d-default.yaml}"
-
     # Oxford Spires uses the Alphasense IMU for deskewing and pitch/roll init.
-    # NOTE: `initial_localization` and `observations_deskew_pass` are TOP-LEVEL
-    # keys in the imported pipeline file (siblings of "params:", not nested
-    # inside it), so their overrides must live here at the module's top level
-    # too. Nesting them under "params:" below (as a previous version of this
-    # file did) silently lands them in an unused params.<key> instead of the
-    # real block ($import's deep-merge only reaches keys at the same nesting
-    # level), so the settings had no effect at all.
-    initial_localization:
-      method: "${MOLA_LO_INITIAL_LOCALIZATION_METHOD|InitLocalization::PitchAndRollFromIMU}"
+    # $define binds the variables that the imported pipeline already exposes as
+    # ${VAR|default} hooks, so we retune its own settings in place instead of
+    # restating the blocks that contain them. Priority is
+    # `environment > $define > the pipeline's inline default`, so exporting
+    # either variable on the command line still overrides these.
+    $define:
+      MOLA_DESKEW_METHOD: "MotionCompensationMethod::IMU"
+      MOLA_LO_INITIAL_LOCALIZATION_METHOD: "InitLocalization::PitchAndRollFromIMU"
 
-    # observations_deskew_pass is a YAML sequence, and $import's deep-merge
-    # replaces sequences wholesale (no per-item merge), so the early-deskew
-    # filter step is duplicated here verbatim from lidar3d-default.yaml with
-    # only the method's default switched to IMU-based deskew.
-    observations_deskew_pass:
-      - class_name: mp2p_icp_filters::FilterByRange
-        params:
-          input_pointcloud_layer: "raw"
-          output_layer_between: "raw_range_filtered"
-          range_min: "${MOLA_MINIMUM_RANGE_FILTER|max(1.0, 0.03*ESTIMATED_OBSERVATION_RADIUS)}"
-          range_max: 1.2*ESTIMATED_OBSERVATION_RADIUS
-          metric_l_infinity: true
-
-      - class_name: mp2p_icp_filters::FilterDeskew
-        params:
-          name: "FilterDeskew (early)"
-          input_pointcloud_layer: "raw_range_filtered"
-          output_pointcloud_layer: "deskewed"
-          method: "${MOLA_DESKEW_METHOD|MotionCompensationMethod::IMU}"
-          ignore_accelerometer: "${MOLA_DESKEW_IGNORE_ACCELEROMETER|false}"
-          silently_ignore_no_timestamps: ${MOLA_IGNORE_NO_POINT_STAMPS|true}
-          output_layer_class: "mrpt::maps::CGenericPointsMap"
-          twist: [vx, vy, vz, wx, wy, wz]
-
-      - class_name: mp2p_icp_filters::FilterDeleteLayer
-        params:
-          pointcloud_layer_to_remove: ["raw_range_filtered"]
+    $import: "${MOLA_ODOMETRY_PIPELINE_YAML|$(ros2 pkg prefix mola_lidar_odometry)/share/mola_lidar_odometry/pipelines/lidar3d-default.yaml}"
 
     params:
       visualization:

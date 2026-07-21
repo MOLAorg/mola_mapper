@@ -290,6 +290,12 @@ public:
   double imu_preint_initial_bias_sigma_gyro = 0.01;
   /// Prior sigma on the first keyframe's world-frame velocity [m/s].
   double imu_preint_initial_velocity_sigma = 1.0;
+  /// Velocity prior sigma [m/s] used ONLY on the fallback path, when no IMU
+  /// factor could be built for a keyframe (empty / undercovered window, e.g. an
+  /// IMU dropout) and Vw/B would otherwise be unconstrained. Deliberately loose:
+  /// it exists to keep the graph well-posed, not to inform the solution, so a
+  /// stale velocity seed cannot bias it.
+  double imu_preint_dropout_velocity_sigma = 10.0;
 
   /// Lightweight gyro relative-rotation factor between consecutive keyframes
   /// (Pose3RelativeRotationFactor): constrains only the RELATIVE rotation from

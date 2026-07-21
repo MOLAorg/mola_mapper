@@ -1034,6 +1034,11 @@ void Mapper::emit_imu_factors_for_keyframe_locked(KeyFrameID newKf)
   const mola::imu::TimeStamp tFrom = mrpt::Clock::toDouble(state_.time_to_kf_id.inverse(prevKf));
   const mola::imu::TimeStamp tTo = mrpt::Clock::toDouble(state_.time_to_kf_id.inverse(newKf));
   if (!(tTo > tFrom)) {
+    // Degenerate interval: no IMU factor can be built, so the new keyframe's
+    // Vw/B would be left unconstrained (see add_imu_preint_fallback_priors_locked).
+    if (params_.imu_preintegration_enabled) {
+      add_imu_preint_fallback_priors_locked(newKf);
+    }
     return;
   }
   const auto window = imu_buffer_.window_since(tFrom, tTo);
@@ -1088,7 +1093,12 @@ void Mapper::emit_imu_factors_for_keyframe_locked(KeyFrameID newKf)
   // forward through the gyro-integrated rotation, so keyframes far from any
   // low-dynamics anchor are still leveled (see plan / agents.md "Option B").
   if (params_.imu_preintegration_enabled) {
-    emit_imu_preintegration_factor_locked(prevKf, newKf, tFrom, window);
+    // If no factor could be built (empty / undercovered window, e.g. an IMU
+    // dropout), Vw(newKf)/B(newKf) would have no constraint at all and iSAM2
+    // would throw IndeterminantLinearSystemException, discarding the batch.
+    if (!emit_imu_preintegration_factor_locked(prevKf, newKf, tFrom, window)) {
+      add_imu_preint_fallback_priors_locked(newKf);
+    }
   }
 
   // (5) Lightweight gyro relative-rotation factor: robust over long intervals,
@@ -1107,13 +1117,60 @@ void Mapper::emit_imu_factors_for_keyframe_locked(KeyFrameID newKf)
     geo_ref_counters_.imu_preintegration, geo_ref_counters_.imu_relative_rotation);
 }
 
-void Mapper::emit_imu_preintegration_factor_locked(
+bool Mapper::has_sufficient_interval_coverage_locked(
+  const char * what, KeyFrameID newKf, mola::imu::TimeStamp tFrom, double integratedTime) const
+{
+  const double intervalLen = mrpt::Clock::toDouble(state_.time_to_kf_id.inverse(newKf)) - tFrom;
+  if (intervalLen <= 0) {
+    return true;
+  }
+  if (integratedTime >= params_.imu_integration_min_interval_coverage * intervalLen) {
+    return true;
+  }
+  MRPT_LOG_THROTTLE_WARN_FMT(
+    5.0,
+    "[%s] skipping factor: IMU covers only %.2f s of the %.2f s keyframe interval "
+    "(raise imu_integration_buffer_retention_sec, or check for IMU dropouts)",
+    what, integratedTime, intervalLen);
+  return false;
+}
+
+void Mapper::add_imu_preint_fallback_priors_locked(KeyFrameID kf)
+{
+  // Called whenever no IMU factor could link this keyframe's Vw/B to the
+  // previous ones (empty or undercovered window). initialize_new_frame() always
+  // CREATES Vw/B for every keyframe, so without this the variables would be
+  // completely unconstrained and iSAM2 would throw
+  // IndeterminantLinearSystemException and discard the whole pending batch.
+  // Anchor them loosely instead: the inertial chain is broken here, so the
+  // keyframe is effectively re-initialized. The velocity prior is deliberately
+  // loose so a stale seed cannot bias the solution; the bias is slowly varying,
+  // so anchoring it at the current estimate is physically sound.
+  if (!state_.gtsam->newValues.exists(Vw(kf))) {
+    return;  // variables not created (preintegration was off at creation time)
+  }
+  const auto Vw0 = state_.gtsam->newValues.at<gtsam::Vector3>(Vw(kf));
+  state_.gtsam->newFactors.addPrior(
+    Vw(kf), Vw0, gtsam::noiseModel::Isotropic::Sigma(3, params_.imu_preint_dropout_velocity_sigma));
+
+  const gtsam::imuBias::ConstantBias biasHat(
+    gtsam::Vector3(imu_bias_hat_[0], imu_bias_hat_[1], imu_bias_hat_[2]),
+    gtsam::Vector3(imu_bias_hat_[3], imu_bias_hat_[4], imu_bias_hat_[5]));
+  const gtsam::Vector6 biasSigmas =
+    (gtsam::Vector6() << gtsam::Vector3::Constant(params_.imu_preint_initial_bias_sigma_accel),
+     gtsam::Vector3::Constant(params_.imu_preint_initial_bias_sigma_gyro))
+      .finished();
+  state_.gtsam->newFactors.addPrior(
+    B(kf), biasHat, gtsam::noiseModel::Diagonal::Sigmas(biasSigmas));
+}
+
+bool Mapper::emit_imu_preintegration_factor_locked(
   KeyFrameID prevKf, KeyFrameID newKf, mola::imu::TimeStamp tFrom,
   const mola::imu::LocalVelocityBuffer::SamplesByTime & window)
 {
   // Need accelerometer samples to preintegrate; gyro is looked up per-stamp.
   if (window.a_b.empty()) {
-    return;
+    return false;
   }
 
   // Gravity in the integration frame. Option A (imu_preint_gravity_in_enu):
@@ -1156,22 +1213,14 @@ void Mapper::emit_imu_preintegration_factor_locked(
     ++nIntegrated;
   }
   if (nIntegrated == 0) {
-    return;
+    return false;
   }
 
-  // Coverage guard (see the same check in the relative-rotation factor): a
-  // partially-covered interval yields a delta that does NOT span the gap, which
-  // for a double-integrated position constraint is catastrophic.
-  const double intervalLen = mrpt::Clock::toDouble(state_.time_to_kf_id.inverse(newKf)) - tFrom;
-  if (
-    intervalLen > 0 &&
-    integratedTime < params_.imu_integration_min_interval_coverage * intervalLen) {
-    MRPT_LOG_THROTTLE_WARN_FMT(
-      5.0,
-      "[preint] skipping factor: IMU covers only %.2f s of the %.2f s keyframe interval "
-      "(raise imu_integration_buffer_retention_sec, or check for IMU dropouts)",
-      integratedTime, intervalLen);
-    return;
+  // Coverage guard: a partially-covered interval yields a delta that does NOT
+  // span the gap, which for a double-integrated position constraint is
+  // catastrophic.
+  if (!has_sufficient_interval_coverage_locked("preint", newKf, tFrom, integratedTime)) {
+    return false;
   }
 
   if (params_.imu_preint_gravity_in_enu) {
@@ -1185,6 +1234,7 @@ void Mapper::emit_imu_preintegration_factor_locked(
       T(prevKf), Vw(prevKf), T(newKf), Vw(newKf), B(prevKf), B(newKf), pim);
   }
   geo_ref_counters_.imu_preintegration++;
+  return true;
 }
 
 void Mapper::emit_imu_relative_rotation_factor_locked(
@@ -1218,16 +1268,10 @@ void Mapper::emit_imu_relative_rotation_factor_locked(
 
   // Coverage guard: the delta must actually span the interval. A truncated
   // buffer (or a sensor dropout) yields a delta covering only part of the gap,
-  // which would then be wrongly attributed to the whole interval.
-  const double intervalLen = mrpt::Clock::toDouble(state_.time_to_kf_id.inverse(newKf)) - tFrom;
-  if (
-    intervalLen > 0 &&
-    integratedTime < params_.imu_integration_min_interval_coverage * intervalLen) {
-    MRPT_LOG_THROTTLE_WARN_FMT(
-      5.0,
-      "[relrot] skipping factor: IMU covers only %.2f s of the %.2f s keyframe interval "
-      "(raise imu_integration_buffer_retention_sec, or check for IMU dropouts)",
-      integratedTime, intervalLen);
+  // which would then be wrongly attributed to the whole interval. (No fallback
+  // prior needed here: this factor creates no variables, and the T() poses it
+  // constrains are always tied by the odometry chain.)
+  if (!has_sufficient_interval_coverage_locked("relrot", newKf, tFrom, integratedTime)) {
     return;
   }
 

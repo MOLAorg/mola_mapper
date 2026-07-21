@@ -584,9 +584,23 @@ private:
   /// (tFrom, newKf-stamp]. Assumes the Vw/B variables for both keyframes already
   /// exist (created in initialize_new_frame). Nav frame = {map}; see agents.md.
   /// No-op if imu_preintegration_enabled is false or the window has no accel.
-  void emit_imu_preintegration_factor_locked(
+  /// @returns true if a factor was actually added. When false, the caller MUST
+  /// call add_imu_preint_fallback_priors_locked() or the new keyframe's Vw/B
+  /// stay unconstrained and iSAM2 discards the batch.
+  [[nodiscard]] bool emit_imu_preintegration_factor_locked(
     KeyFrameID prevKf, KeyFrameID newKf, mola::imu::TimeStamp tFrom,
     const mola::imu::LocalVelocityBuffer::SamplesByTime & window);
+
+  /// Shared coverage check for the IMU integrators: true if `integratedTime`
+  /// spans enough of the keyframe interval for the delta to be meaningful.
+  /// Logs a throttled warning (tagged `what`) when it does not.
+  [[nodiscard]] bool has_sufficient_interval_coverage_locked(
+    const char * what, KeyFrameID newKf, mola::imu::TimeStamp tFrom, double integratedTime) const;
+
+  /// Loose priors on Vw(kf)/B(kf) for when no IMU factor could be built for this
+  /// keyframe (empty/undercovered window). Keeps the graph well-posed through
+  /// IMU dropouts instead of letting iSAM2 throw and drop the batch.
+  void add_imu_preint_fallback_priors_locked(KeyFrameID kf);
 
   /// Builds and adds the lightweight gyro RELATIVE-rotation factor between two
   /// keyframes (Pose3RelativeRotationFactor): integrates the interval gyro into

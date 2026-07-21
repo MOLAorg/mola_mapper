@@ -125,6 +125,7 @@ void Parameters::loadFrom(const mrpt::containers::yaml & cfg)
   MCP_LOAD_OPT(cfg, imu_preint_initial_bias_sigma_accel);
   MCP_LOAD_OPT(cfg, imu_preint_initial_bias_sigma_gyro);
   MCP_LOAD_OPT(cfg, imu_preint_initial_velocity_sigma);
+  MCP_LOAD_OPT(cfg, imu_preint_dropout_velocity_sigma);
 
   MCP_LOAD_OPT(cfg, imu_relative_rotation_enabled);
   MCP_LOAD_OPT(cfg, imu_relative_rotation_sigma_deg_per_sqrt_s);

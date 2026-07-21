@@ -15,5 +15,7 @@
 
 $define:
   MOLA_DESKEW_IGNORE_NO_TIMESTAMPS: true
+  MIN_FRAMES_BETWEEN_LC: 50
+  MAX_LC_DISTANCE: 30.0
 
 $import: loop-closure-f2f-mapper.yaml

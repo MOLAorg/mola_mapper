@@ -274,12 +274,11 @@ docs/call-graph.md               Mermaid diagram tracing every public-API method
   pipeline evaluates ICP quality as the paired-point ratio at the final annealed
   threshold (`force_final_pairings_for_quality`, default 0.05 m). On the dense
   Hesai clouds of Oxford Spires, even a correct cross-pass alignment lands few
-  points within 5 cm, so quality collapses to ~0% and every loop is rejected. The
-  Oxford Spires launcher therefore points at `params/loop-closure-f2f-mapper-
-  oxford-spires.yaml`, which `$import`s the shared mapper override and only raises
-  `threshold_sigma_final` to 0.3 m (env `LC_ICP_FINAL_SIGMA`). This is a
-  registration-resolution setting for a dense sensor, NOT a change to the
-  `min_icp_goodness` acceptance level; KITTI/MulRan keep 0.05 m. Validated on
+  points within 5 cm, so quality collapses to ~0% and every loop is rejected.
+  The shared `params/loop-closure-f2f-mapper.yaml` therefore raises
+  `threshold_sigma_final` to 0.3 m (env `LC_ICP_FINAL_SIGMA`) for every
+  launcher. This is a registration-resolution setting for dense sensors, NOT a
+  change to the `min_icp_goodness` acceptance level. Validated on
   observatory-quarter-01 (real-time, zero drops, under the prior pickier
   candidate defaults below): 5 loops closed, APE RMSE 0.47 m vs 1.53 m with LC
   off. Note the real-time pipeline is non-deterministic (async optimizer + LC
@@ -287,16 +286,15 @@ docs/call-graph.md               Mermaid diagram tracing every public-API method
   (~0.25-0.5 m LC-on in good runs); LC helps in every fair same-playback
   comparison.
 
-- Candidate generation for Oxford Spires defaults to a nearby-node,
-  map-refinement-friendly setup rather than the pickier KITTI/MulRan-style
-  values: `lc_candidate_strategy: PROXIMITY_ONLY` (env `LC_SELECTION_METHOD`,
-  vs. the shared pipeline's `MULTI_OBJECTIVE`), `min_frames_between_lc: 1` (env
-  `MIN_FRAMES_BETWEEN_LC`, vs. 20), so topologically close keyframes -- e.g.
-  adjacent legs of a path -- are eligible as candidates, not just far-away-in-
-  time revisits, and `max_distance_for_lc_candidate: 20 m` (env
-  `MAX_LC_DISTANCE`, up from 15 m). Fall back to
-  `LC_SELECTION_METHOD=MULTI_OBJECTIVE MIN_FRAMES_BETWEEN_LC=20
-  MAX_LC_DISTANCE=15` for a lower-compute, real-time-only run (single-scan ICP
+- Candidate generation in the shared pipeline defaults to a nearby-node,
+  map-refinement-friendly setup rather than the pickier upstream values:
+  `min_frames_between_lc: 2` (env `MIN_FRAMES_BETWEEN_LC`, vs. the base
+  pipeline's 20), so topologically close keyframes -- e.g. adjacent legs of a
+  path -- are eligible as candidates, not just far-away-in-time revisits, and
+  `max_distance_for_lc_candidate: 20 m` (env `MAX_LC_DISTANCE`, down from 50 m).
+  `lc_candidate_strategy` stays at the base `MULTI_OBJECTIVE` (env
+  `LC_SELECTION_METHOD`, `PROXIMITY_ONLY` also available). Raise
+  `MIN_FRAMES_BETWEEN_LC` (e.g. 20) for a lower-compute, real-time-only run (single-scan ICP
   only bridges its own convergence basin, so a wide-open candidate search costs
   more without necessarily closing more real loops online; the finalize cascade
   is what recovers far genuine loops as drift shrinks).
@@ -351,11 +349,10 @@ wholesale rather than patching, so overriding one field used to require
 duplicating the whole filter step verbatim. Use `$define` when the setting has
 a hook; fall back to a sibling override (at the right nesting level) when it
 does not, and verify the result with `mola-yaml-parser` on the merged config.
-The same pattern simplifies `params/loop-closure-f2f-mapper.yaml` and
-`params/loop-closure-f2f-mapper-oxford-spires.yaml`: every scalar retune is
-`$define`d instead of restated as a `params:` key, INCLUDING the one
-(`threshold_sigma_initial`/`LC_ICP_INITIAL_SIGMA`) that both files happen to
-retune -- safe because mola_yaml (MOLAorg/mola#182) makes an outer file's
+The same pattern simplifies `params/loop-closure-f2f-mapper.yaml`: every scalar
+retune is `$define`d instead of restated as a `params:` key. If a launcher ever
+needs a dataset-specific override file importing that one and retuning the same
+variable, note that mola_yaml (MOLAorg/mola#182) makes an outer file's
 `$define` win over a more deeply imported file's own `$define` for the same
 variable name. Before that fix, nested `$define` blocks for the SAME name did
 NOT compose across `$import` levels -- the more deeply imported file's own

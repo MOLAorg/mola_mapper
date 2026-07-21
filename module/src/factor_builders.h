@@ -44,12 +44,18 @@
 
 namespace mola::mapper
 {
+using gtsam::symbol_shorthand::B;  // IMU bias (accel+gyro)      (imuBias::ConstantBias)
 using gtsam::symbol_shorthand::F;  // Frames of reference (Pose3):
                                    // F(0): T_enu_to_map
                                    // F(k): T_map_to_odometry_frame_k (k>=1)
 using gtsam::symbol_shorthand::T;  // Keyframe poses             (Pose3)
 using gtsam::symbol_shorthand::V;  // Linear velocity (body)     (Point3)
 using gtsam::symbol_shorthand::W;  // Angular velocity (body)    (Point3)
+
+/// World/nav-frame ({map}) linear velocity for the IMU-preintegration factor
+/// (`gtsam::Vector3`). DISTINCT from the body-frame kinematic velocity V(i):
+/// the two models must not alias the same key. Uses symbol char 'u'.
+inline gtsam::Key Vw(std::uint64_t i) { return gtsam::Symbol('u', i); }
 
 inline const gtsam::Key symbol_T_enu_to_map = F(0);
 inline const gtsam::Key symbol_T_map_to_odom_i_base = F(0);  // odom[k] = base + k (k>=1)

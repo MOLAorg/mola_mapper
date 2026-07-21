@@ -114,6 +114,25 @@ void Parameters::loadFrom(const mrpt::containers::yaml & cfg)
   MCP_LOAD_OPT(cfg, imu_gravity_sigma_floor_deg);
   MCP_LOAD_OPT(cfg, imu_gravity_sigma_ceil_deg);
 
+  MCP_LOAD_OPT(cfg, imu_preintegration_enabled);
+  MCP_LOAD_OPT(cfg, imu_preint_gravity_in_enu);
+  MCP_LOAD_OPT(cfg, imu_preint_accel_noise_sigma);
+  MCP_LOAD_OPT(cfg, imu_preint_gyro_noise_sigma);
+  MCP_LOAD_OPT(cfg, imu_preint_accel_bias_rw_sigma);
+  MCP_LOAD_OPT(cfg, imu_preint_gyro_bias_rw_sigma);
+  MCP_LOAD_OPT(cfg, imu_preint_integration_sigma);
+  MCP_LOAD_OPT(cfg, imu_preint_gravity_magnitude);
+  MCP_LOAD_OPT(cfg, imu_preint_initial_bias_sigma_accel);
+  MCP_LOAD_OPT(cfg, imu_preint_initial_bias_sigma_gyro);
+  MCP_LOAD_OPT(cfg, imu_preint_initial_velocity_sigma);
+  MCP_LOAD_OPT(cfg, imu_preint_dropout_velocity_sigma);
+
+  MCP_LOAD_OPT(cfg, imu_relative_rotation_enabled);
+  MCP_LOAD_OPT(cfg, imu_relative_rotation_sigma_deg_per_sqrt_s);
+  MCP_LOAD_OPT(cfg, imu_relative_rotation_sigma_floor_deg);
+  MCP_LOAD_OPT(cfg, imu_integration_buffer_retention_sec);
+  MCP_LOAD_OPT(cfg, imu_integration_min_interval_coverage);
+
   // Geo-referencing
   // -----------------------------------------------------
   MCP_LOAD_OPT(cfg, estimate_geo_reference);

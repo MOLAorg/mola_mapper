@@ -26,12 +26,15 @@
 
 #include <gtsam/geometry/Rot3.h>
 #include <gtsam/linear/NoiseModel.h>
+#include <gtsam/navigation/CombinedImuFactor.h>
+#include <gtsam/navigation/ImuBias.h>
 #include <gtsam/slam/BetweenFactor.h>
 #include <gtsam/slam/PriorFactor.h>
 #include <mola_gtsam_factors/FactorGnssMapEnu.h>
 #include <mola_gtsam_factors/MeasuredGravityFactor.h>
 #include <mola_gtsam_factors/Pose3RotationFactor.h>
 #include <mola_mapper/Mapper.h>
+#include <mrpt/core/bits_math.h>
 #include <mrpt/core/format.h>
 #include <mrpt/core/get_env.h>
 #include <mrpt/core/lock_helper.h>
@@ -49,6 +52,8 @@
 #include <numeric>
 
 #include "GtsamData.h"
+#include "MapFramePreintegratedImuFactor.h"
+#include "Pose3RelativeRotationFactor.h"
 #include "covariance_utils.h"
 #include "factor_builders.h"
 
@@ -70,6 +75,28 @@ constexpr double PLANAR_Z_SIGMA = 1e-4;
 // gtsam::IndeterminantLinearSystemException in iSAM2's incremental Cholesky.
 constexpr double MIN_POSE_SIGMA_LIN = 1e-3;  // [m]
 constexpr double MIN_POSE_SIGMA_ANG = 1e-4;  // [rad]
+
+/// Builds the GTSAM combined-preintegration parameters from the mapper config.
+/// Nav frame = {map}; the gravity vector is expressed in {map} by rotating the
+/// {enu} down-vector (0,0,-g) through the current T_enu_to_map rotation. With
+/// F0 ~ identity ({map} == {enu}, the pure-IMU leveling regime) this reduces to
+/// (0,0,-g), the "Option B" assumption (see plan / agents.md).
+boost::shared_ptr<gtsam::PreintegrationCombinedParams> make_imu_preint_params(
+  const Parameters & p, const gtsam::Rot3 & R_enu_to_map)
+{
+  const double g = p.imu_preint_gravity_magnitude;
+  const gtsam::Vector3 gravity_map = R_enu_to_map * gtsam::Vector3(0, 0, -g);
+
+  auto params = boost::make_shared<gtsam::PreintegrationCombinedParams>(gravity_map);
+  params->setAccelerometerCovariance(gtsam::I_3x3 * mrpt::square(p.imu_preint_accel_noise_sigma));
+  params->setGyroscopeCovariance(gtsam::I_3x3 * mrpt::square(p.imu_preint_gyro_noise_sigma));
+  params->setIntegrationCovariance(gtsam::I_3x3 * mrpt::square(p.imu_preint_integration_sigma));
+  params->setBiasAccCovariance(gtsam::I_3x3 * mrpt::square(p.imu_preint_accel_bias_rw_sigma));
+  params->setBiasOmegaCovariance(gtsam::I_3x3 * mrpt::square(p.imu_preint_gyro_bias_rw_sigma));
+  // Small nonzero initial-bias covariance keeps the combined factor well-posed.
+  params->setBiasAccOmegaInit(gtsam::I_6x6 * 1e-5);
+  return params;
+}
 
 void enforce_planar_pose(mrpt::poses::CPose3D & p)
 {
@@ -363,6 +390,31 @@ void Mapper::initialize_new_frame(
   state_.gtsam->newValues.insert(T(id), pose);
   state_.gtsam->newValues.insert(V(id), linVelocity);
   state_.gtsam->newValues.insert(W(id), angVelocity);
+
+  // IMU-preintegration variables (world-frame velocity Vw + bias B), created for
+  // EVERY keyframe so the CombinedImuFactor chain is well-defined; the first
+  // keyframe also gets priors to make Vw/B observable.
+  if (params_.imu_preintegration_enabled) {
+    const gtsam::Vector3 worldVel = pose.rotation() * linVelocity;
+    const gtsam::imuBias::ConstantBias biasHat(
+      gtsam::Vector3(imu_bias_hat_[0], imu_bias_hat_[1], imu_bias_hat_[2]),
+      gtsam::Vector3(imu_bias_hat_[3], imu_bias_hat_[4], imu_bias_hat_[5]));
+
+    state_.gtsam->newValues.insert(Vw(id), worldVel);
+    state_.gtsam->newValues.insert(B(id), biasHat);
+
+    if (!closest_idx_opt.has_value()) {
+      state_.gtsam->newFactors.addPrior(
+        Vw(id), worldVel,
+        gtsam::noiseModel::Isotropic::Sigma(3, params_.imu_preint_initial_velocity_sigma));
+      const gtsam::Vector6 biasSigmas =
+        (gtsam::Vector6() << gtsam::Vector3::Constant(params_.imu_preint_initial_bias_sigma_accel),
+         gtsam::Vector3::Constant(params_.imu_preint_initial_bias_sigma_gyro))
+          .finished();
+      state_.gtsam->newFactors.addPrior(
+        B(id), biasHat, gtsam::noiseModel::Diagonal::Sigmas(biasSigmas));
+    }
+  }
 
   if (params_.enforce_planar_motion) {
     const auto planar_z_noise = gtsam::noiseModel::Diagonal::Sigmas(gtsam::Vector6(
@@ -982,6 +1034,11 @@ void Mapper::emit_imu_factors_for_keyframe_locked(KeyFrameID newKf)
   const mola::imu::TimeStamp tFrom = mrpt::Clock::toDouble(state_.time_to_kf_id.inverse(prevKf));
   const mola::imu::TimeStamp tTo = mrpt::Clock::toDouble(state_.time_to_kf_id.inverse(newKf));
   if (!(tTo > tFrom)) {
+    // Degenerate interval: no IMU factor can be built, so the new keyframe's
+    // Vw/B would be left unconstrained (see add_imu_preint_fallback_priors_locked).
+    if (params_.imu_preintegration_enabled) {
+      add_imu_preint_fallback_priors_locked(newKf);
+    }
     return;
   }
   const auto window = imu_buffer_.window_since(tFrom, tTo);
@@ -1030,12 +1087,204 @@ void Mapper::emit_imu_factors_for_keyframe_locked(KeyFrameID newKf)
     geo_ref_counters_.imu_omega++;
   }
 
+  // (4) IMU preintegration (the RELATIVE half): a CombinedImuFactor tying the
+  // previous and new keyframe poses/velocities/biases through the double
+  // integral of accel+gyro over the interval. This propagates gravity leveling
+  // forward through the gyro-integrated rotation, so keyframes far from any
+  // low-dynamics anchor are still leveled (see plan / agents.md "Option B").
+  if (params_.imu_preintegration_enabled) {
+    // If no factor could be built (empty / undercovered window, e.g. an IMU
+    // dropout), Vw(newKf)/B(newKf) would have no constraint at all and iSAM2
+    // would throw IndeterminantLinearSystemException, discarding the batch.
+    if (!emit_imu_preintegration_factor_locked(prevKf, newKf, tFrom, window)) {
+      add_imu_preint_fallback_priors_locked(newKf);
+    }
+  }
+
+  // (5) Lightweight gyro relative-rotation factor: robust over long intervals,
+  // propagates the sparse gravity/attitude anchors forward without the fragile
+  // position/velocity double-integral of the full preintegration.
+  if (params_.imu_relative_rotation_enabled) {
+    emit_imu_relative_rotation_factor_locked(prevKf, newKf, tFrom, window);
+  }
+
   MRPT_LOG_THROTTLE_DEBUG_FMT(
     5.0,
     "[fuse_imu] kf=%zu (interval %zu accel / %zu ori samples) factors so far: grav=%zu att=%zu "
-    "omega=%zu",
+    "omega=%zu preint=%zu relrot=%zu",
     static_cast<size_t>(newKf), window.a_b.size(), window.q.size(), geo_ref_counters_.imu_gravity,
-    geo_ref_counters_.imu_attitude, geo_ref_counters_.imu_omega);
+    geo_ref_counters_.imu_attitude, geo_ref_counters_.imu_omega,
+    geo_ref_counters_.imu_preintegration, geo_ref_counters_.imu_relative_rotation);
+}
+
+bool Mapper::has_sufficient_interval_coverage_locked(
+  const char * what, KeyFrameID newKf, mola::imu::TimeStamp tFrom, double integratedTime) const
+{
+  const double intervalLen = mrpt::Clock::toDouble(state_.time_to_kf_id.inverse(newKf)) - tFrom;
+  if (intervalLen <= 0) {
+    return true;
+  }
+  if (integratedTime >= params_.imu_integration_min_interval_coverage * intervalLen) {
+    return true;
+  }
+  MRPT_LOG_THROTTLE_WARN_FMT(
+    5.0,
+    "[%s] skipping factor: IMU covers only %.2f s of the %.2f s keyframe interval "
+    "(raise imu_integration_buffer_retention_sec, or check for IMU dropouts)",
+    what, integratedTime, intervalLen);
+  return false;
+}
+
+void Mapper::add_imu_preint_fallback_priors_locked(KeyFrameID kf)
+{
+  // Called whenever no IMU factor could link this keyframe's Vw/B to the
+  // previous ones (empty or undercovered window). initialize_new_frame() always
+  // CREATES Vw/B for every keyframe, so without this the variables would be
+  // completely unconstrained and iSAM2 would throw
+  // IndeterminantLinearSystemException and discard the whole pending batch.
+  // Anchor them loosely instead: the inertial chain is broken here, so the
+  // keyframe is effectively re-initialized. The velocity prior is deliberately
+  // loose so a stale seed cannot bias the solution; the bias is slowly varying,
+  // so anchoring it at the current estimate is physically sound.
+  if (!state_.gtsam->newValues.exists(Vw(kf))) {
+    return;  // variables not created (preintegration was off at creation time)
+  }
+  const auto Vw0 = state_.gtsam->newValues.at<gtsam::Vector3>(Vw(kf));
+  state_.gtsam->newFactors.addPrior(
+    Vw(kf), Vw0, gtsam::noiseModel::Isotropic::Sigma(3, params_.imu_preint_dropout_velocity_sigma));
+
+  const gtsam::imuBias::ConstantBias biasHat(
+    gtsam::Vector3(imu_bias_hat_[0], imu_bias_hat_[1], imu_bias_hat_[2]),
+    gtsam::Vector3(imu_bias_hat_[3], imu_bias_hat_[4], imu_bias_hat_[5]));
+  const gtsam::Vector6 biasSigmas =
+    (gtsam::Vector6() << gtsam::Vector3::Constant(params_.imu_preint_initial_bias_sigma_accel),
+     gtsam::Vector3::Constant(params_.imu_preint_initial_bias_sigma_gyro))
+      .finished();
+  state_.gtsam->newFactors.addPrior(
+    B(kf), biasHat, gtsam::noiseModel::Diagonal::Sigmas(biasSigmas));
+}
+
+bool Mapper::emit_imu_preintegration_factor_locked(
+  KeyFrameID prevKf, KeyFrameID newKf, mola::imu::TimeStamp tFrom,
+  const mola::imu::LocalVelocityBuffer::SamplesByTime & window)
+{
+  // Need accelerometer samples to preintegrate; gyro is looked up per-stamp.
+  if (window.a_b.empty()) {
+    return false;
+  }
+
+  // Gravity in the integration frame. Option A (imu_preint_gravity_in_enu):
+  // integrate in {enu} with EXACT gravity (0,0,-g); the custom factor composes
+  // F(0) so {map} tilt is handled analytically. Option B: bake gravity in {map}
+  // = R_enu_to_map*(0,0,-g) from the current estimate (only right while {map} is
+  // level).
+  gtsam::Rot3 R_enu_to_map = gtsam::Rot3::Identity();
+  if (!params_.imu_preint_gravity_in_enu && state_.gtsam->estimate.exists(symbol_T_enu_to_map)) {
+    R_enu_to_map = state_.gtsam->estimate.at<gtsam::Pose3>(symbol_T_enu_to_map).rotation();
+  }
+  const auto params = make_imu_preint_params(params_, R_enu_to_map);
+  const gtsam::imuBias::ConstantBias biasHat(
+    gtsam::Vector3(imu_bias_hat_[0], imu_bias_hat_[1], imu_bias_hat_[2]),
+    gtsam::Vector3(imu_bias_hat_[3], imu_bias_hat_[4], imu_bias_hat_[5]));
+
+  gtsam::PreintegratedCombinedMeasurements pim(params, biasHat);
+
+  // Integrate each accel sample over the dt to the previous sample stamp (the
+  // very first dt is measured from the interval start tFrom). Samples exactly on
+  // the previous keyframe stamp already belong to that keyframe's interval, so
+  // the (tFrom, tTo] window convention counts every sample exactly once.
+  mola::imu::TimeStamp tPrevSample = tFrom;
+  std::size_t nIntegrated = 0;
+  double integratedTime = 0;
+  for (const auto & [ta, a] : window.a_b) {
+    const double dt = ta - tPrevSample;
+    tPrevSample = ta;
+    if (dt <= 0 || dt > 1.0) {
+      // Skip non-positive or implausibly large gaps (sensor dropout).
+      continue;
+    }
+    gtsam::Vector3 gyro = gtsam::Vector3::Zero();
+    if (const auto itw = window.w_b.find(ta); itw != window.w_b.end()) {
+      gyro = gtsam::Vector3(itw->second.x, itw->second.y, itw->second.z);
+    }
+    const gtsam::Vector3 acc(a.x, a.y, a.z);
+    pim.integrateMeasurement(acc, gyro, dt);
+    integratedTime += dt;
+    ++nIntegrated;
+  }
+  if (nIntegrated == 0) {
+    return false;
+  }
+
+  // Coverage guard: a partially-covered interval yields a delta that does NOT
+  // span the gap, which for a double-integrated position constraint is
+  // catastrophic.
+  if (!has_sufficient_interval_coverage_locked("preint", newKf, tFrom, integratedTime)) {
+    return false;
+  }
+
+  if (params_.imu_preint_gravity_in_enu) {
+    // Option A: custom factor composing F(0)=T_enu_to_map so gravity is exact
+    // in {enu} regardless of {map} tilt.
+    state_.gtsam->newFactors.emplace_shared<MapFramePreintegratedImuFactor>(
+      symbol_T_enu_to_map, T(prevKf), Vw(prevKf), T(newKf), Vw(newKf), B(prevKf), B(newKf), pim);
+  } else {
+    // Option B: stock GTSAM factor, gravity baked in {map}.
+    state_.gtsam->newFactors.emplace_shared<gtsam::CombinedImuFactor>(
+      T(prevKf), Vw(prevKf), T(newKf), Vw(newKf), B(prevKf), B(newKf), pim);
+  }
+  geo_ref_counters_.imu_preintegration++;
+  return true;
+}
+
+void Mapper::emit_imu_relative_rotation_factor_locked(
+  KeyFrameID prevKf, KeyFrameID newKf, mola::imu::TimeStamp tFrom,
+  const mola::imu::LocalVelocityBuffer::SamplesByTime & window)
+{
+  if (window.w_b.empty()) {
+    return;
+  }
+
+  // Preintegrate the body-frame gyro into deltaRij = prod Exp(w * dt). The first
+  // dt is measured from the interval start tFrom; the (tFrom, tTo] window counts
+  // each sample once. Accumulate the integrated time to size the noise.
+  gtsam::Rot3 deltaR = gtsam::Rot3::Identity();
+  mola::imu::TimeStamp tPrevSample = tFrom;
+  double integratedTime = 0;
+  std::size_t nIntegrated = 0;
+  for (const auto & [tw, w] : window.w_b) {
+    const double dt = tw - tPrevSample;
+    tPrevSample = tw;
+    if (dt <= 0 || dt > 1.0) {
+      continue;
+    }
+    deltaR = deltaR * gtsam::Rot3::Expmap(gtsam::Vector3(w.x, w.y, w.z) * dt);
+    integratedTime += dt;
+    ++nIntegrated;
+  }
+  if (nIntegrated == 0 || integratedTime <= 0) {
+    return;
+  }
+
+  // Coverage guard: the delta must actually span the interval. A truncated
+  // buffer (or a sensor dropout) yields a delta covering only part of the gap,
+  // which would then be wrongly attributed to the whole interval. (No fallback
+  // prior needed here: this factor creates no variables, and the T() poses it
+  // constrains are always tied by the odometry chain.)
+  if (!has_sufficient_interval_coverage_locked("relrot", newKf, tFrom, integratedTime)) {
+    return;
+  }
+
+  // Angular-random-walk noise: sigma = density * sqrt(integrated_time),
+  // clamped from below.
+  const double sigmaDeg = std::max(
+    params_.imu_relative_rotation_sigma_floor_deg,
+    params_.imu_relative_rotation_sigma_deg_per_sqrt_s * std::sqrt(integratedTime));
+  auto noise = gtsam::noiseModel::Isotropic::Sigma(3, mrpt::DEG2RAD(sigmaDeg));
+
+  state_.gtsam->newFactors.emplace_shared<Pose3RelativeRotationFactor>(
+    T(prevKf), T(newKf), deltaR, noise, integratedTime);
+  geo_ref_counters_.imu_relative_rotation++;
 }
 
 void Mapper::trace_imu_factors_locked(const gtsam::Values & estimate)
@@ -1054,6 +1303,40 @@ void Mapper::trace_imu_factors_locked(const gtsam::Values & estimate)
         mrpt::RAD2DEG(Tem.yaw()));
     }
     const auto & fg = state_.gtsam->isam2->getFactorsUnsafe();
+
+    // Gyro relative-rotation residuals: a systematic (non-zero-mean) residual
+    // VECTOR is the signature of an uncorrected gyro bias; zero-mean scatter is
+    // just integration noise. implied_bias = sum(residual) / sum(integrated_time).
+    {
+      gtsam::Vector3 relrotSum = gtsam::Vector3::Zero();
+      double relrotTime = 0;
+      double relrotAbsSum = 0;
+      std::size_t relrotN = 0;
+      for (const auto & f : fg) {
+        const auto * rr = dynamic_cast<const Pose3RelativeRotationFactor *>(f.get());
+        if (rr == nullptr) {
+          continue;
+        }
+        const gtsam::Vector3 e = rr->unwhitenedError(estimate);
+        relrotSum += e;
+        relrotAbsSum += e.norm();
+        relrotTime += rr->integratedTime();
+        relrotN++;
+      }
+      if (relrotN > 0) {
+        const auto n = static_cast<double>(relrotN);
+        const gtsam::Vector3 impliedBias = relrotSum / std::max(relrotTime, 1e-9);
+        MRPT_LOG_WARN_FMT(
+          "[RELROT-TRACE] n=%zu mean|resid|=%.3f deg | mean-resid-VECTOR=(%.3f,%.3f,%.3f) deg "
+          "-> implied gyro bias=(%.4f,%.4f,%.4f) deg/s |b|=%.4f (systematic if |mean-vector| ~ "
+          "mean|resid|)",
+          relrotN, mrpt::RAD2DEG(relrotAbsSum / n), mrpt::RAD2DEG(relrotSum.x() / n),
+          mrpt::RAD2DEG(relrotSum.y() / n), mrpt::RAD2DEG(relrotSum.z() / n),
+          mrpt::RAD2DEG(impliedBias.x()), mrpt::RAD2DEG(impliedBias.y()),
+          mrpt::RAD2DEG(impliedBias.z()), mrpt::RAD2DEG(impliedBias.norm()));
+      }
+    }
+
     std::vector<double> gravDeg;
     double gravChi2 = 0;
     gtsam::Vector3 residSum = gtsam::Vector3::Zero();
@@ -1561,6 +1844,15 @@ void Mapper::optimize_and_refresh()
       it->second.twist = t.twist;
       it->second.pose_cov.reset();
       it->second.twist_cov.reset();
+    }
+    // Refresh the IMU-preintegration bias linearization point from the newest
+    // keyframe's optimized bias, so the next interval preintegrates around the
+    // current best estimate.
+    if (params_.imu_preintegration_enabled && haveKfs && localEstimate.exists(B(latestKfId))) {
+      const auto b = localEstimate.at<gtsam::imuBias::ConstantBias>(B(latestKfId));
+      const auto & ba = b.accelerometer();
+      const auto & bg = b.gyroscope();
+      imu_bias_hat_ = {ba.x(), ba.y(), ba.z(), bg.x(), bg.y(), bg.z()};
     }
     if (haveKfs) {
       const auto it = state_.last_estimated_states.find(latestKfId);

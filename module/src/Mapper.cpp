@@ -111,8 +111,18 @@ void Mapper::initialize(const mrpt::containers::yaml & cfg)
     // keyframe interval and the (possibly longer) gravity-leveling look-back
     // window, which is drained on keyframe close; otherwise its default 0.5 s
     // pruning would evict the early part of a longer window.
-    imu_buffer_.parameters.max_time_window = std::max(
+    double imuRetention = std::max(
       std::max(2.0, params_.time_between_frames_to_warning), params_.imu_gravity_window_sec + 0.5);
+    if (params_.imu_relative_rotation_enabled || params_.imu_preintegration_enabled) {
+      // These integrate the FULL inter-keyframe interval, so a truncated buffer
+      // silently yields a delta covering only part of the gap (which then gets
+      // attributed to the whole interval, corrupting the constraint). On a
+      // distance-gated central map that interval is many seconds, far more than
+      // the warning threshold above. Retaining a generous window is cheap
+      // (a few hundred Hz x tens of seconds is a small map).
+      imuRetention = std::max(imuRetention, params_.imu_integration_buffer_retention_sec);
+    }
+    imu_buffer_.parameters.max_time_window = imuRetention;
 
     state_.clear();
     reinitialize_gtsam_locked();

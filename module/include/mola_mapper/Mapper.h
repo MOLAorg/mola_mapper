@@ -341,6 +341,12 @@ private:
   // math is fed the buffered window and flush()ed on each keyframe close; the
   // internal window timer is not used). Guarded by stateMutex_.
   ImuGravityFilter imu_gravity_filter_;
+  // Bias linearization point for the IMU preintegration (accel xyz, gyro xyz).
+  // Refreshed from the newest keyframe's optimized B(kf) after each solve so the
+  // next interval preintegrates around the current best estimate. GTSAM types
+  // are kept out of this public header, so it is stored as a plain array and
+  // converted in Mapper_Fusion.cpp. Guarded by stateMutex_.
+  std::array<double, 6> imu_bias_hat_{};
 
   // --- Geo-referencing diagnostics counters (guarded by stateMutex_) ---
   struct GeoRefCounters
@@ -350,6 +356,8 @@ private:
     std::size_t imu_attitude = 0;
     std::size_t imu_gravity = 0;
     std::size_t imu_omega = 0;
+    std::size_t imu_preintegration = 0;
+    std::size_t imu_relative_rotation = 0;
     bool georef_converged_announced = false;
   } geo_ref_counters_;
 
@@ -570,6 +578,24 @@ private:
   /// attitude Pose3RotationFactor (always, so IMU azimuth can drive geo-ref),
   /// and an averaged-gyro W prior. No-op until a previous IMU keyframe exists.
   void emit_imu_factors_for_keyframe_locked(KeyFrameID newKf);
+
+  /// Builds and adds the between-keyframe CombinedImuFactor (the RELATIVE half of
+  /// IMU fusion) by preintegrating the buffered accel+gyro over the interval
+  /// (tFrom, newKf-stamp]. Assumes the Vw/B variables for both keyframes already
+  /// exist (created in initialize_new_frame). Nav frame = {map}; see agents.md.
+  /// No-op if imu_preintegration_enabled is false or the window has no accel.
+  void emit_imu_preintegration_factor_locked(
+    KeyFrameID prevKf, KeyFrameID newKf, mola::imu::TimeStamp tFrom,
+    const mola::imu::LocalVelocityBuffer::SamplesByTime & window);
+
+  /// Builds and adds the lightweight gyro RELATIVE-rotation factor between two
+  /// keyframes (Pose3RelativeRotationFactor): integrates the interval gyro into
+  /// deltaRij and constrains R_i^{-1} R_j to it. No position/velocity integral,
+  /// no gravity: robust over long keyframe intervals. No-op if
+  /// imu_relative_rotation_enabled is false or the window has no gyro samples.
+  void emit_imu_relative_rotation_factor_locked(
+    KeyFrameID prevKf, KeyFrameID newKf, mola::imu::TimeStamp tFrom,
+    const mola::imu::LocalVelocityBuffer::SamplesByTime & window);
 
   /// Bounded-rate gravity-leveling emission, driven from the IMU stream (NOT
   /// keyframe creation). Every imu_gravity_window_sec it reduces the recent

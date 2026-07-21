@@ -28,6 +28,13 @@ mola_add_test(
 )
 
 mola_add_test(
+  TARGET  test-imu-preintegration
+  SOURCES test-imu-preintegration.cpp
+  LINK_LIBRARIES
+    mola::mola_mapper
+)
+
+mola_add_test(
   TARGET  test-georef-convergence
   SOURCES test-georef-convergence.cpp
   LINK_LIBRARIES

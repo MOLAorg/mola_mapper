@@ -175,6 +175,14 @@ modules:
       # bounded-rate shared keyframes + relative edges (see header).
       aggregate_high_rate_into_edges: ${MOLA_MAPPER_AGGREGATE|true}
 
+      # IMU preintegration (relative half): a CombinedImuFactor per keyframe
+      # transition. Off by default; enable with MOLA_MAPPER_IMU_PREINT=true. Safe
+      # here because LIO starts LEVEL (InitLocalization::PitchAndRollFromIMU
+      # above), so {map} is gravity-aligned (Option B assumption).
+      imu_preintegration_enabled: ${MOLA_MAPPER_IMU_PREINT|false}
+      imu_preint_accel_noise_sigma: ${MOLA_MAPPER_IMU_PREINT_ACC_SIGMA|0.02}
+      imu_preint_gyro_noise_sigma: ${MOLA_MAPPER_IMU_PREINT_GYR_SIGMA|0.0017}
+
       # Publish the extrapolated reference-frame pose at 20 Hz.
       high_rate_pose_publish_rate_hz: ${MOLA_MAPPER_PUBLISH_RATE_HZ|20.0}
 

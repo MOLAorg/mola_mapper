@@ -180,6 +180,21 @@ modules:
       # aggregate_high_rate_into_edges is not needed here (no wheel odometry).
       high_rate_pose_publish_rate_hz: ${MOLA_MAPPER_PUBLISH_RATE_HZ|20.0}
 
+      # IMU preintegration (relative half): a CombinedImuFactor per keyframe
+      # transition. Off by default; enable with MOLA_MAPPER_IMU_PREINT=true. The
+      # Alphasense is a raw accel+gyro IMU (no AHRS attitude), so unlike an AHRS
+      # dataset this is where preintegration is expected to add leveling. Safe
+      # because LIO starts LEVEL (InitLocalization::PitchAndRollFromIMU above).
+      imu_preintegration_enabled: ${MOLA_MAPPER_IMU_PREINT|false}
+      imu_preint_accel_noise_sigma: ${MOLA_MAPPER_IMU_PREINT_ACC_SIGMA|0.02}
+      imu_preint_gyro_noise_sigma: ${MOLA_MAPPER_IMU_PREINT_GYR_SIGMA|0.0017}
+      # Lightweight gyro relative-rotation factor (robust over long keyframe
+      # intervals, unlike the full preintegration). This is the right IMU factor
+      # for a raw accel+gyro sensor + sparse keyframes: it propagates the sparse
+      # gravity anchors forward to level all keyframes.
+      imu_relative_rotation_enabled: ${MOLA_MAPPER_IMU_RELROT|false}
+      imu_relative_rotation_sigma_deg_per_sqrt_s: ${MOLA_MAPPER_IMU_RELROT_SIGMA|0.5}
+
     # Optional visualization: the mapper owns the camera in this integrated
     # launcher (the LIO module's own camera-follow is turned off above), so it
     # tracks the vehicle by default (camera_follows_vehicle in the shared viz

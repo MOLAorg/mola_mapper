@@ -257,6 +257,67 @@ public:
   double imu_gravity_sigma_floor_deg = 0.5;
   double imu_gravity_sigma_ceil_deg = 5.0;
 
+  /// IMU preintegration (the RELATIVE half): between consecutive keyframes,
+  /// preintegrate accel+gyro into a gtsam CombinedImuFactor tying
+  /// {T,Vw,B}(i)->{T,Vw,B}(j). This propagates a gravity-leveling anchor forward
+  /// through the gyro-integrated rotation, so keyframes far from any stop are
+  /// still leveled (the absolute MeasuredGravityFactor/Pose3RotationFactor stay
+  /// as the sparse anchors). Nav frame = {map} (see plan: "Option B"): correct
+  /// while {map} is gravity-aligned (F0 ~ identity), which REQUIRES LIO to start
+  /// level via IMU initialization in pure-IMU / no-GNSS runs.
+  bool imu_preintegration_enabled = false;
+  /// Nav frame for the preintegration gravity. true (Option A, default): a
+  /// custom factor composes F(0)=T_enu_to_map so gravity is EXACT in {enu}
+  /// regardless of {map} tilt (correct for raw accel+gyro IMUs with no attitude
+  /// anchor, where {map} is not gravity-aligned). false (Option B): stock GTSAM
+  /// CombinedImuFactor with gravity baked as R_enu_to_map*(0,0,-g) in {map};
+  /// cheaper but only correct while {map} is gravity-aligned.
+  bool imu_preint_gravity_in_enu = true;
+  /// Accelerometer white-noise sigma [m/s^2 / sqrt(Hz)] (continuous-time).
+  double imu_preint_accel_noise_sigma = 0.02;
+  /// Gyroscope white-noise sigma [rad/s / sqrt(Hz)] (continuous-time).
+  double imu_preint_gyro_noise_sigma = 0.0017;
+  /// Accelerometer bias random-walk sigma [m/s^3 / sqrt(Hz)].
+  double imu_preint_accel_bias_rw_sigma = 1e-4;
+  /// Gyroscope bias random-walk sigma [rad/s^2 / sqrt(Hz)].
+  double imu_preint_gyro_bias_rw_sigma = 1e-5;
+  /// Integration-uncertainty sigma [m/s^2] folded into the position covariance.
+  double imu_preint_integration_sigma = 1e-3;
+  /// Expected gravity magnitude [m/s^2].
+  double imu_preint_gravity_magnitude = 9.81;
+  /// Prior sigma on the initial IMU bias: accel [m/s^2], gyro [rad/s].
+  double imu_preint_initial_bias_sigma_accel = 0.1;
+  double imu_preint_initial_bias_sigma_gyro = 0.01;
+  /// Prior sigma on the first keyframe's world-frame velocity [m/s].
+  double imu_preint_initial_velocity_sigma = 1.0;
+
+  /// Lightweight gyro relative-rotation factor between consecutive keyframes
+  /// (Pose3RelativeRotationFactor): constrains only the RELATIVE rotation from
+  /// the gyro preintegration (deltaRij = prod Exp(w*dt)), with NO position/
+  /// velocity double-integral and NO gravity term. Robust over the mapper's
+  /// long keyframe intervals, unlike the full CombinedImuFactor; it propagates
+  /// the sparse absolute gravity/attitude anchors forward through the
+  /// gyro-integrated rotation to level the keyframes far from any stop.
+  /// Independent of imu_preintegration_enabled (they can be used separately).
+  bool imu_relative_rotation_enabled = false;
+  /// Angular random-walk noise density [deg/sqrt(s)]: the factor's 3-DOF sigma
+  /// is this times sqrt(interval), modeling integrated gyro white noise.
+  double imu_relative_rotation_sigma_deg_per_sqrt_s = 0.5;
+  /// Lower clamp on the resulting relative-rotation sigma [deg].
+  double imu_relative_rotation_sigma_floor_deg = 0.2;
+
+  /// LocalVelocityBuffer retention [s] used when the relative-rotation or
+  /// preintegration factors are enabled. They integrate the WHOLE inter-keyframe
+  /// interval, which on a distance-gated central map can be tens of seconds, so
+  /// the buffer must not prune the early part of it. Cheap: a few hundred Hz
+  /// times this window is a small map.
+  double imu_integration_buffer_retention_sec = 60.0;
+  /// Minimum fraction of the keyframe interval that must actually be covered by
+  /// integrated IMU samples for the relative-rotation / preintegration factor to
+  /// be emitted. Below this the delta spans only part of the gap and would be a
+  /// corrupted constraint, so the factor is skipped (with a throttled warning).
+  double imu_integration_min_interval_coverage = 0.9;
+
   /** @} */
 
   /** @name Geo-referencing

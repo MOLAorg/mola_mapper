@@ -103,6 +103,44 @@ docs/call-graph.md               Mermaid diagram tracing every public-API method
   global `LocalVelocityBuffer`; the gravity/attitude/gyro factors are built
   ONCE per real keyframe, draining that buffer's window since the previous
   keyframe.
+- IMU preintegration (the RELATIVE half), `imu_preintegration_enabled` (default
+  OFF): on keyframe close, `emit_imu_preintegration_factor_locked()` integrates
+  the interval's accel+gyro into a `gtsam::PreintegratedCombinedMeasurements`
+  and adds a stock `CombinedImuFactor(T,Vw,T,Vw,B,B)` between consecutive
+  keyframes. Adds per-keyframe in-graph variables `Vw(kf)` (world velocity,
+  symbol `'u'`) and `B(kf)` (`imuBias::ConstantBias`, symbol `B`) — DISTINCT
+  from the body-frame kinematic `V/W`. Nav frame = `{map}` ("Option B"): the
+  gravity vector is `R_enu_to_map*(0,0,-g)`, exactly correct while `{map}` is
+  gravity-aligned (F0 ~ identity), which REQUIRES LIO to start level via IMU
+  initialization in pure-IMU / no-GNSS runs. This propagates a gravity anchor
+  forward through the gyro-integrated rotation, so keyframes far from any
+  low-dynamics stop are still leveled; the absolute
+  `MeasuredGravityFactor`/`Pose3RotationFactor` stay as the sparse anchors. The
+  bias linearization point `imu_bias_hat_` (a plain 6-array; GTSAM kept out of
+  the public header) is refreshed from the newest optimized `B(kf)` each solve.
+  Two nav-frame options (`imu_preint_gravity_in_enu`, default true = "Option A"):
+  A uses `MapFramePreintegratedImuFactor` (module/src/, a 7-key custom factor
+  composing `F(0)` so gravity is EXACT in `{enu}` regardless of `{map}` tilt;
+  numerical Jacobians); B uses the stock `gtsam::CombinedImuFactor` with gravity
+  baked in `{map}`. CRITICAL: these factors integrate the WHOLE inter-keyframe
+  interval, which on a distance-gated central map is many seconds, so the
+  `LocalVelocityBuffer` retention is raised to
+  `imu_integration_buffer_retention_sec` (60 s) and a coverage guard
+  (`imu_integration_min_interval_coverage`, 0.9) SKIPS the factor if the
+  integrated time does not span the interval. Without this the buffer's short
+  retention silently yields a partial delta attributed to the whole gap, which
+  corrupts every constraint (this caused a 20 m APE blow-up before it was found).
+  REAL-DATA RESULT (Oxford, raw accel+gyro IMU, no AHRS): full preintegration
+  levels every keyframe to **0.35 deg vs 2.64 deg without it (7.5x)**, horizontal
+  error -32%, yaw -36%; total APE is flat only because the undamped vertical
+  channel regresses (0.565 -> 0.729 m). A lighter gyro-only relative-rotation
+  factor also exists (`Pose3RelativeRotationFactor`,
+  `imu_relative_rotation_enabled`): cheaper, no gravity term, but levels far less
+  (2.20 deg). Keep default OFF until the vertical channel is damped. NOTE the
+  corrected attitude does NOT currently reach LIO (its subscription is gated on
+  `initial_localization.method == FromStateEstimator`, and the continuous
+  `estimated_navstate()` prior is frame-local by design). See
+  `~/plans/900_mola_mapper.md` (IMU preintegration section) for full numbers.
 - High-rate wheels are aggregated the same way when
   `aggregate_high_rate_into_edges` is on: no `{odom_wheels}` frame variable,
   one relative-pose edge per keyframe transition from the net wheel motion.

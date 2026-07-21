@@ -139,6 +139,12 @@ modules:
       MOLA_LOCAL_MAP_MAX_SIZE: "${MOLA_LOCAL_MAP_MAX_SIZE|20.0}" # smaller local LIO window than default since we have loop closure
       # The mapper module owns the camera in this integrated launcher.
       MOLA_GUI_CAMERA_FOLLOWS_VEHICLE: "false"
+      # Loop closure needs BOTH endpoints of a loop to exist as keyframes, but
+      # the keyframe-creation criterion is spatial: revisiting a mapped area
+      # creates none, since the previous pass' keyframes are the nearest
+      # neighbors. This bounds that check to recent keyframes only, so a
+      # revisit does produce the keyframes a loop can close onto.
+      MOLA_SIMPLEMAP_KF_TIME_WINDOW: "${MOLA_SIMPLEMAP_KF_TIME_WINDOW|15.0}" # [s]
 
     $import: "${MOLA_ODOMETRY_PIPELINE_YAML|$(ros2 pkg prefix mola_lidar_odometry)/share/mola_lidar_odometry/pipelines/lidar3d-default.yaml}"
 

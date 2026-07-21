@@ -197,6 +197,16 @@ docs/call-graph.md               Mermaid diagram tracing every public-API method
   accumulate into inter-keyframe constraints; they never spawn a variable.
   `Auto` mode runs legacy per-call creation until the first
   `requestInsertKeyframe()` lands, then flips to `SharedMapOnly`.
+- The mapper does NOT gate keyframe insertion: whatever a front end pushes
+  becomes a keyframe. WHICH poses get pushed is entirely the front end's
+  policy, and in `mola_lidar_odometry` that policy was purely spatial, so
+  revisiting a mapped area created NO keyframes (the previous pass' ones are
+  the nearest neighbors) and loop closure never got the second endpoint of the
+  loop it was supposed to close. Every launcher here therefore `$define`s
+  `MOLA_SIMPLEMAP_KF_TIME_WINDOW: 15.0` [s] (env-overridable), which bounds
+  that check to recent keyframes only. Needs a mola_lidar_odometry with
+  `nearby_keyframe_time_window` support; on an older one the `$define` is
+  simply an unused variable.
 - Geo-ref convergence is MODE-AWARE, and the two modes use different criteria.
   Live (`estimate_geo_reference: true`): `optimize_and_refresh()` publishes
   `state_.geo_reference` only once `T_enu_to_map`'s own position+orientation

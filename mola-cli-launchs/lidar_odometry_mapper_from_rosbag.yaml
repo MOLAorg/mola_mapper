@@ -137,6 +137,11 @@ modules:
       # revisit does produce the keyframes a loop can close onto.
       MOLA_SIMPLEMAP_KF_TIME_WINDOW: "${MOLA_SIMPLEMAP_KF_TIME_WINDOW|15.0}" # [s]
     $import: "${MOLA_ODOMETRY_PIPELINE_YAML|$(ros2 pkg prefix mola_lidar_odometry)/share/mola_lidar_odometry/pipelines/lidar3d-default.yaml}"
+    params:
+      visualization:
+        # mola_mapper draws its own ground grid; disable lidar_odom's to avoid
+        # two overlapping XY grids in the 3D scene.
+        show_ground_grid: false
 
   # =====================
   # mola_mapper (NavStateFilter + SharedKeyframeMap sink + direct IMU/GNSS/odom)

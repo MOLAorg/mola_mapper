@@ -203,8 +203,11 @@ docs/call-graph.md               Mermaid diagram tracing every public-API method
   revisiting a mapped area created NO keyframes (the previous pass' ones are
   the nearest neighbors) and loop closure never got the second endpoint of the
   loop it was supposed to close. Every launcher here therefore `$define`s
-  `MOLA_SIMPLEMAP_KF_TIME_WINDOW: 15.0` [s] (env-overridable), which bounds
-  that check to recent keyframes only. Needs a mola_lidar_odometry with
+  `MOLA_SIMPLEMAP_KF_TIME_WINDOW` (env-overridable), which bounds that check to
+  recent keyframes only: 15 s on the faster vehicle datasets (KITTI, MulRan,
+  generic rosbag), 30 s on the slow-moving ones (Oxford Spires, ConSLAM,
+  BotanicGarden), where the same stretch of path takes longer to traverse.
+  Needs a mola_lidar_odometry with
   `nearby_keyframe_time_window` support; on an older one the `$define` is
   simply an unused variable.
 - Geo-ref convergence is MODE-AWARE, and the two modes use different criteria.

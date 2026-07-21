@@ -144,7 +144,10 @@ modules:
       # creates none, since the previous pass' keyframes are the nearest
       # neighbors. This bounds that check to recent keyframes only, so a
       # revisit does produce the keyframes a loop can close onto.
-      MOLA_SIMPLEMAP_KF_TIME_WINDOW: "${MOLA_SIMPLEMAP_KF_TIME_WINDOW|15.0}" # [s]
+      # 30 s here (vs 15 s on the faster vehicle datasets): this platform moves
+      # slowly, so a given stretch of path takes much longer to traverse and the
+      # window must span more time to cover the same recent path.
+      MOLA_SIMPLEMAP_KF_TIME_WINDOW: "${MOLA_SIMPLEMAP_KF_TIME_WINDOW|30.0}" # [s]
 
     $import: "${MOLA_ODOMETRY_PIPELINE_YAML|$(ros2 pkg prefix mola_lidar_odometry)/share/mola_lidar_odometry/pipelines/lidar3d-default.yaml}"
 

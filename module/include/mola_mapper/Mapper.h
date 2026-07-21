@@ -269,7 +269,7 @@ private:
     // Current / most-recent scan:
     std::atomic<bool> scan_in_progress{false};
     std::atomic<std::size_t> cur_total{0};  // candidates this scan (queue size)
-    std::atomic<std::size_t> cur_done{0};  // evaluated so far (pending = total - done)
+    std::atomic<std::size_t> cur_done{0};   // evaluated so far (pending = total - done)
     std::atomic<std::size_t> last_scan_accepted{0};
     std::atomic<double> last_scan_seconds{0.0};
     std::atomic<bool> last_scan_full{false};

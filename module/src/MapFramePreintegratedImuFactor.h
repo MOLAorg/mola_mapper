@@ -102,10 +102,14 @@ public:
       (*H)[4] = gtsam::numericalDerivative11<gtsam::Vector15, gtsam::Vector3>(
         [&](const gtsam::Vector3 & v) { return residual(F0, Ti, Vwi, Tj, v, Bi, Bj); }, Vwj);
       (*H)[5] = gtsam::numericalDerivative11<gtsam::Vector15, gtsam::imuBias::ConstantBias>(
-        [&](const gtsam::imuBias::ConstantBias & v) { return residual(F0, Ti, Vwi, Tj, Vwj, v, Bj); },
+        [&](const gtsam::imuBias::ConstantBias & v) {
+          return residual(F0, Ti, Vwi, Tj, Vwj, v, Bj);
+        },
         Bi);
       (*H)[6] = gtsam::numericalDerivative11<gtsam::Vector15, gtsam::imuBias::ConstantBias>(
-        [&](const gtsam::imuBias::ConstantBias & v) { return residual(F0, Ti, Vwi, Tj, Vwj, Bi, v); },
+        [&](const gtsam::imuBias::ConstantBias & v) {
+          return residual(F0, Ti, Vwi, Tj, Vwj, Bi, v);
+        },
         Bj);
     }
     return residual(F0, Ti, Vwi, Tj, Vwj, Bi, Bj);

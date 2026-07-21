@@ -88,8 +88,7 @@ boost::shared_ptr<gtsam::PreintegrationCombinedParams> make_imu_preint_params(
   const gtsam::Vector3 gravity_map = R_enu_to_map * gtsam::Vector3(0, 0, -g);
 
   auto params = boost::make_shared<gtsam::PreintegrationCombinedParams>(gravity_map);
-  params->setAccelerometerCovariance(
-    gtsam::I_3x3 * mrpt::square(p.imu_preint_accel_noise_sigma));
+  params->setAccelerometerCovariance(gtsam::I_3x3 * mrpt::square(p.imu_preint_accel_noise_sigma));
   params->setGyroscopeCovariance(gtsam::I_3x3 * mrpt::square(p.imu_preint_gyro_noise_sigma));
   params->setIntegrationCovariance(gtsam::I_3x3 * mrpt::square(p.imu_preint_integration_sigma));
   params->setBiasAccCovariance(gtsam::I_3x3 * mrpt::square(p.imu_preint_accel_bias_rw_sigma));
@@ -1163,10 +1162,10 @@ void Mapper::emit_imu_preintegration_factor_locked(
   // Coverage guard (see the same check in the relative-rotation factor): a
   // partially-covered interval yields a delta that does NOT span the gap, which
   // for a double-integrated position constraint is catastrophic.
-  const double intervalLen =
-    mrpt::Clock::toDouble(state_.time_to_kf_id.inverse(newKf)) - tFrom;
-  if (intervalLen > 0 &&
-      integratedTime < params_.imu_integration_min_interval_coverage * intervalLen) {
+  const double intervalLen = mrpt::Clock::toDouble(state_.time_to_kf_id.inverse(newKf)) - tFrom;
+  if (
+    intervalLen > 0 &&
+    integratedTime < params_.imu_integration_min_interval_coverage * intervalLen) {
     MRPT_LOG_THROTTLE_WARN_FMT(
       5.0,
       "[preint] skipping factor: IMU covers only %.2f s of the %.2f s keyframe interval "
@@ -1220,10 +1219,10 @@ void Mapper::emit_imu_relative_rotation_factor_locked(
   // Coverage guard: the delta must actually span the interval. A truncated
   // buffer (or a sensor dropout) yields a delta covering only part of the gap,
   // which would then be wrongly attributed to the whole interval.
-  const double intervalLen =
-    mrpt::Clock::toDouble(state_.time_to_kf_id.inverse(newKf)) - tFrom;
-  if (intervalLen > 0 &&
-      integratedTime < params_.imu_integration_min_interval_coverage * intervalLen) {
+  const double intervalLen = mrpt::Clock::toDouble(state_.time_to_kf_id.inverse(newKf)) - tFrom;
+  if (
+    intervalLen > 0 &&
+    integratedTime < params_.imu_integration_min_interval_coverage * intervalLen) {
     MRPT_LOG_THROTTLE_WARN_FMT(
       5.0,
       "[relrot] skipping factor: IMU covers only %.2f s of the %.2f s keyframe interval "

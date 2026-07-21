@@ -52,8 +52,8 @@ namespace mola::mapper
  *  \ingroup mola_mapper_grp
  */
 class Pose3RelativeRotationFactor
-  : public gtsam::ExpressionFactorN<
-      gtsam::Rot3 /*return type*/, gtsam::Pose3 /*Ti*/, gtsam::Pose3 /*Tj*/>
+: public gtsam::ExpressionFactorN<
+    gtsam::Rot3 /*return type*/, gtsam::Pose3 /*Ti*/, gtsam::Pose3 /*Tj*/>
 {
 private:
   using This = Pose3RelativeRotationFactor;

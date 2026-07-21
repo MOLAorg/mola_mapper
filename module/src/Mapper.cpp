@@ -581,9 +581,9 @@ void Mapper::getDiagnostics(std::vector<mola::DiagnosticStatusMsg> & status)
       {"lc_queue_depth", std::to_string(total > done ? total - done : std::size_t{0})});
     if (lc_ui_.finalize_active.load()) {
       msg.values.push_back(
-        {"lc_finalize_round", mrpt::format(
-                                "%zu/%zu", lc_ui_.finalize_round.load(),
-                                lc_ui_.finalize_rounds_total.load())});
+        {"lc_finalize_round",
+         mrpt::format(
+           "%zu/%zu", lc_ui_.finalize_round.load(), lc_ui_.finalize_rounds_total.load())});
     }
   }
 

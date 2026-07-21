@@ -257,8 +257,18 @@ docs/call-graph.md               Mermaid diagram tracing every public-API method
   ConSLAM launchers enable LC by default and point at it. BotanicGarden and
   ConSLAM both use a Velodyne VLP-16 with per-point timestamps (confirmed on
   the recorded PointCloud2 fields), so they use the shared, non-widened
-  pipeline (`loop-closure-f2f-mapper.yaml`), same as KITTI/MulRan; only Oxford
+  pipeline (`loop-closure-f2f-mapper.yaml`), same as MulRan; only Oxford
   Spires' dense Hesai needs the widened-final-sigma variant (see below).
+  KITTI scans carry NO per-point timestamps, so its launcher points at
+  `params/loop-closure-f2f-mapper-kitti.yaml`, a thin `$import` of the shared
+  file that additionally `$define`s `MOLA_DESKEW_IGNORE_NO_TIMESTAMPS: true` (a
+  hook exposed by mola_sm_loop_closure's own pipeline): the imported deskew
+  filter throws by default when a cloud lacks per-point timestamps, and this
+  makes it pass such a cloud through unmodified instead. The flag only changes
+  behavior for timestamp-less clouds, so it is harmless if ever imported by a
+  launcher whose sensor does have timestamps, but is kept KITTI-only since
+  that is the one case among the datasets above that needs it. This avoids
+  requiring the user to export the env var by hand.
 
 - Dense high-resolution LiDARs need a wider ICP FINAL pairing sigma too. The base
   pipeline evaluates ICP quality as the paired-point ratio at the final annealed

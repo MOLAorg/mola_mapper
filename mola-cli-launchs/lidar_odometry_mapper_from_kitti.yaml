@@ -15,13 +15,14 @@
 # 05, 06, 07, 08, 09) revisit places, so the mapper's background loop-closure
 # thread (mola_sm_loop_closure engine) can cancel accumulated LiDAR-odometry
 # drift. Disable with MOLA_MAPPER_LOOP_CLOSURE=false. KITTI scans carry NO
-# per-point timestamps, so the loop-closure pipeline must be told to skip its
-# deskew/timestamp-adjust filters: this launcher's usage sets
-# MOLA_DESKEW_IGNORE_NO_TIMESTAMPS=true for that reason.
+# per-point timestamps, so this launcher points at
+# params/loop-closure-f2f-mapper-kitti.yaml, which binds the pipeline's
+# deskew/timestamp-adjust filters to skip themselves instead of erroring out
+# (MOLA_DESKEW_IGNORE_NO_TIMESTAMPS, no user action needed).
 #
 # Usage (loop-closure enabled, headless benchmark):
 #   export KITTI_BASE_DIR=/path/to/kitti_root
-#   KITTI_SEQ=00 MOLA_DESKEW_IGNORE_NO_TIMESTAMPS=true MOLA_WITH_GUI=false \
+#   KITTI_SEQ=00 MOLA_WITH_GUI=false \
 #   MOLA_MAPPER_TUM_TRAJECTORY_OUTPUT=/tmp/kitti00.tum \
 #     mola-cli $(ros2 pkg prefix mola_mapper)/share/mola_mapper/mola-cli-launchs/lidar_odometry_mapper_from_kitti.yaml
 #
@@ -105,14 +106,16 @@ modules:
 
       # Loop closure ON by default (KITTI 00/02/05/06/07/08/09 revisit places).
       # The engine runs on a background thread off the query/solve path and
-      # merges accepted edges as robust BetweenFactors. The pipeline below is a
-      # thin mola_mapper wrapper (params/loop-closure-f2f-mapper.yaml) that
-      # $imports the shared frame-to-frame GICP pipeline from mola_sm_loop_closure
-      # and only widens the ICP convergence basin so real (drifted) loops close;
-      # the package keeps its own defaults. Deskew/timestamp filters are skipped
-      # for KITTI via MOLA_DESKEW_IGNORE_NO_TIMESTAMPS=true (see header).
+      # merges accepted edges as robust BetweenFactors. The pipeline below
+      # (params/loop-closure-f2f-mapper-kitti.yaml) $imports the mola_mapper
+      # wrapper (loop-closure-f2f-mapper.yaml), which in turn $imports the
+      # shared frame-to-frame GICP pipeline from mola_sm_loop_closure and only
+      # widens the ICP convergence basin so real (drifted) loops close; the
+      # package keeps its own defaults. The KITTI-specific layer additionally
+      # binds MOLA_DESKEW_IGNORE_NO_TIMESTAMPS so the deskew/timestamp filters
+      # skip themselves for KITTI's timestamp-less scans (see header).
       loop_closure_enabled: ${MOLA_MAPPER_LOOP_CLOSURE|true}
-      loop_closure_pipeline_file: "${MOLA_MAPPER_LC_PIPELINE|$(ros2 pkg prefix mola_mapper)/share/mola_mapper/params/loop-closure-f2f-mapper.yaml}"
+      loop_closure_pipeline_file: "${MOLA_MAPPER_LC_PIPELINE|$(ros2 pkg prefix mola_mapper)/share/mola_mapper/params/loop-closure-f2f-mapper-kitti.yaml}"
 
     # Optional visualization (MolaViz / MolaVizImGui): keyframe tree + graph
     # edges in {map}, with each odometry source's movable {odom_i} frame node.

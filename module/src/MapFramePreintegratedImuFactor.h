@@ -143,7 +143,11 @@ private:
     const gtsam::NavState state_j(F0.compose(Tj), Rem * Vwj);
 
     gtsam::Vector15 e;
+#if GTSAM_USES_BOOST
+    e.head<9>() = pim_.computeError(state_i, state_j, Bi, boost::none, boost::none, boost::none);
+#else
     e.head<9>() = pim_.computeError(state_i, state_j, Bi, nullptr, nullptr, nullptr);
+#endif
     e.tail<6>() = gtsam::traits<gtsam::imuBias::ConstantBias>::Between(Bj, Bi).vector();
     return e;
   }

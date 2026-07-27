@@ -24,6 +24,7 @@
 #include <gtsam/nonlinear/ExpressionFactor.h>
 #include <gtsam/nonlinear/expressions.h>
 #include <gtsam/slam/expressions.h>
+#include <mola_gtsam_factors/gtsam_detect_version.h>
 
 #include <array>
 
@@ -77,7 +78,12 @@ public:
 
   gtsam::NonlinearFactor::shared_ptr clone() const override
   {
-    return boost::make_shared<This>(*this);
+#if GTSAM_USES_BOOST
+    return boost::static_pointer_cast<gtsam::NonlinearFactor>(
+      gtsam::NonlinearFactor::shared_ptr(new This(*this)));
+#else
+    return std::static_pointer_cast<gtsam::NonlinearFactor>(std::make_shared<This>(*this));
+#endif
   }
 
   /// Measurement expression: R_i^{-1} * R_j (rotation of body from i to j).

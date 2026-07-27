@@ -25,6 +25,7 @@
 #include <gtsam/navigation/NavState.h>
 #include <gtsam/nonlinear/NonlinearFactor.h>
 #include <gtsam/nonlinear/Values.h>
+#include <mola_gtsam_factors/gtsam_detect_version.h>
 
 #include <vector>
 
@@ -74,12 +75,23 @@ public:
 
   gtsam::NonlinearFactor::shared_ptr clone() const override
   {
-    return boost::make_shared<MapFramePreintegratedImuFactor>(*this);
+#if GTSAM_USES_BOOST
+    return boost::static_pointer_cast<gtsam::NonlinearFactor>(
+      gtsam::NonlinearFactor::shared_ptr(new MapFramePreintegratedImuFactor(*this)));
+#else
+    return std::static_pointer_cast<gtsam::NonlinearFactor>(
+      std::make_shared<MapFramePreintegratedImuFactor>(*this));
+#endif
   }
 
   gtsam::Vector unwhitenedError(
     const gtsam::Values & x,
-    boost::optional<std::vector<gtsam::Matrix> &> H = boost::none) const override
+#if GTSAM_USES_BOOST
+    boost::optional<std::vector<gtsam::Matrix> &> H = boost::none
+#else
+    gtsam::OptionalMatrixVecType H = nullptr
+#endif
+  ) const override
   {
     const gtsam::Pose3 F0 = x.at<gtsam::Pose3>(keys()[0]);
     const gtsam::Pose3 Ti = x.at<gtsam::Pose3>(keys()[1]);
@@ -131,7 +143,7 @@ private:
     const gtsam::NavState state_j(F0.compose(Tj), Rem * Vwj);
 
     gtsam::Vector15 e;
-    e.head<9>() = pim_.computeError(state_i, state_j, Bi, boost::none, boost::none, boost::none);
+    e.head<9>() = pim_.computeError(state_i, state_j, Bi, nullptr, nullptr, nullptr);
     e.tail<6>() = gtsam::traits<gtsam::imuBias::ConstantBias>::Between(Bj, Bi).vector();
     return e;
   }

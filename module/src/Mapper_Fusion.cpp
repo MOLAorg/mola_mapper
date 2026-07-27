@@ -33,6 +33,7 @@
 #include <mola_gtsam_factors/FactorGnssMapEnu.h>
 #include <mola_gtsam_factors/MeasuredGravityFactor.h>
 #include <mola_gtsam_factors/Pose3RotationFactor.h>
+#include <mola_gtsam_factors/gtsam_detect_version.h>
 #include <mola_mapper/Mapper.h>
 #include <mrpt/core/bits_math.h>
 #include <mrpt/core/format.h>
@@ -81,13 +82,21 @@ constexpr double MIN_POSE_SIGMA_ANG = 1e-4;  // [rad]
 /// {enu} down-vector (0,0,-g) through the current T_enu_to_map rotation. With
 /// F0 ~ identity ({map} == {enu}, the pure-IMU leveling regime) this reduces to
 /// (0,0,-g), the "Option B" assumption (see plan / agents.md).
+#if GTSAM_USES_BOOST
 boost::shared_ptr<gtsam::PreintegrationCombinedParams> make_imu_preint_params(
+#else
+std::shared_ptr<gtsam::PreintegrationCombinedParams> make_imu_preint_params(
+#endif
   const Parameters & p, const gtsam::Rot3 & R_enu_to_map)
 {
   const double g = p.imu_preint_gravity_magnitude;
   const gtsam::Vector3 gravity_map = R_enu_to_map * gtsam::Vector3(0, 0, -g);
 
+#if GTSAM_USES_BOOST
   auto params = boost::make_shared<gtsam::PreintegrationCombinedParams>(gravity_map);
+#else
+  auto params = std::make_shared<gtsam::PreintegrationCombinedParams>(gravity_map);
+#endif
   params->setAccelerometerCovariance(gtsam::I_3x3 * mrpt::square(p.imu_preint_accel_noise_sigma));
   params->setGyroscopeCovariance(gtsam::I_3x3 * mrpt::square(p.imu_preint_gyro_noise_sigma));
   params->setIntegrationCovariance(gtsam::I_3x3 * mrpt::square(p.imu_preint_integration_sigma));

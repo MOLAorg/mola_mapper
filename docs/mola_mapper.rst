@@ -4,7 +4,7 @@
 3D central SLAM map (Mapper)
 ================================
 
-:octicon:`mark-github` `mola_mapper <https://github.com/MOLAorg/mola_mapper/>`_ is the
+:octicon:`mark-github` `mola_mapper <https://github.com/MOLAorg/mola_mapper/>`__ is the
 **central 3D SLAM back-end** for the MOLA framework.
 It holds **one global, optimized representation of the world** by fusing multiple
 odometry sources (wheel encoders, LiDAR-odometry, visual-odometry), IMU and GNSS
@@ -46,12 +46,12 @@ The relationship between front-ends and Mapper is symmetric: the front-end drive
 short-term motion estimation, while Mapper provides the globally-consistent anchor
 and corrects for drift over time.
 
-.. figure:: imgs/mapper_system_scheme.png
-   :width: 640
-   :alt: Mapper system block diagram
+In short: Mapper receives pose streams from LIO/VIO front-ends and fuses them
+with IMU and GNSS into one optimized world model.
 
-   Mapper receives pose streams from LIO/VIO front-ends and fuses them with IMU
-   and GNSS into one optimized world model.
+.. TODO: restore the block diagram once imgs/mapper_system_scheme.png is added
+   to this repo. The figure was referenced but the image file was never
+   committed, so it rendered as a broken image.
 
 |
 

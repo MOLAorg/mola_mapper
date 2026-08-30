@@ -14,8 +14,21 @@
 # silently never discovered.
 #
 # One entry per package, keyed by the package name, not the repository name:
-# the availability probe derives the .deb name from the key.
+# the availability probe derives the .deb name from the key. An entry may set
+# `always: true` for a dependency whose binary EXISTS but is too old to build
+# against -- apt can install those, so the probe alone would wrongly clear them.
 repositories:
+  mola:
+    # Keyed `mola` but providing mola_kernel, mola_yaml, mola_common and the
+    # rest. Unconditional: this package tracks mola's develop and uses
+    # interfaces that are in no released binary. mola_kernel's
+    # SharedKeyframeMap -- the sink this package IS -- landed 2026-06-25 and is
+    # version 3.2.0 on develop, against 2.9.0 in the apt repo, so a binary
+    # build cannot work regardless of which distro it is tried on.
+    always: true
+    type: git
+    url: https://github.com/MOLAorg/mola.git
+    version: develop
   mola_sm_loop_closure:
     # Released in rosdistro but not always synced to the main `ros2` apt repo
     # for every distro at the same time; it is a hard dependency here, so a

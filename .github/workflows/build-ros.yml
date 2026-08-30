@@ -122,8 +122,12 @@ jobs:
         run: |
           . /opt/ros/*/setup.sh
           env
+          # --packages-up-to: a source dependency may be a repo of many
+          # packages (MOLAorg/mola is), and only the ones this package
+          # actually needs are worth a CI build.
           MAKEFLAGS="-j2" colcon build \
             --base-paths . /tmp/mola_deps \
+            --packages-up-to mola_mapper \
             --symlink-install \
             --parallel-workers 2 \
             --event-handlers console_direct+

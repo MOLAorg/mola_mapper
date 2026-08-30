@@ -12,6 +12,11 @@ the entry KEY (the package name) as `ros-<distro>-<key with _ -> ->`; the probe
 is a dry-run `apt-get install -s`, which resolves the package and its own
 dependencies without touching the system.
 
+An entry may also set `always: true`, for a dependency whose released binary
+EXISTS but is too old to build against. apt can install those, so the probe
+would wrongly clear them; this says "source, regardless". The key is stripped
+before the document is emitted, since vcstool would not know it.
+
 Usage: filter_unavailable_deps.py <dependencies.repos> <ros_distro>
 Writes a .repos document to stdout (an empty `repositories:` map when nothing
 is missing, which `vcs import` accepts as a no-op).
@@ -44,15 +49,20 @@ def main() -> int:
 
     missing = {}
     for name, spec in entries.items():
+        spec = dict(spec or {})
+        always = bool(spec.pop("always", False))
         deb = "ros-{}-{}".format(distro, name.replace("_", "-"))
-        if apt_can_install(deb):
+        if always:
+            print("[deps] {}: pinned to source, building from source".format(name), file=sys.stderr)
+        elif apt_can_install(deb):
             print("[deps] {}: using binary {}".format(name, deb), file=sys.stderr)
+            continue
         else:
             print(
                 "[deps] {}: no installable {}, building from source".format(name, deb),
                 file=sys.stderr,
             )
-            missing[name] = spec
+        missing[name] = spec
 
     yaml.safe_dump({"repositories": missing}, sys.stdout, default_flow_style=False)
     return 0

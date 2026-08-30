@@ -26,11 +26,28 @@
  * The point of running the mapper this way rather than live is REPRODUCIBILITY.
  * A live run is paced by two background threads and by wall-clock scan periods,
  * so replaying the same bag twice need not produce the same map. Here the
- * optimizer and the loop-closure engine both run on this thread, and every
- * loop-closure scan is triggered after a fixed number of keyframes rather than
- * after a number of seconds, so the output is a function of the input alone.
- * The forced settings that guarantee that are applied over the config file
- * (see force_deterministic_settings()) and cannot be overridden from YAML.
+ * optimizer runs on this thread and every loop-closure scan is triggered after
+ * a fixed number of keyframes rather than after a number of seconds. The forced
+ * settings that do that are applied over the config file (see
+ * force_deterministic_settings()) and cannot be overridden from YAML.
+ *
+ * HOW FAR THAT ACTUALLY GETS, measured, because the difference matters to
+ * anyone comparing two runs:
+ *  - With no loop closed, output is BIT-IDENTICAL across runs (verified 3/3 on
+ *    KITTI-04). Ingestion, the graph, the solver, the correction field and the
+ *    writers are all reproducible.
+ *  - With loops closed it is NOT. The loop-closure detector evaluates
+ *    candidates on its own worker pool, sized from hardware_concurrency() and
+ *    not from any thread-count variable this program sets, and the per-pair ICP
+ *    results themselves vary run to run -- the same class of defect
+ *    `mola_lidar_odometry`'s offline path had, fixed there and not here. The
+ *    merge ORDER is no longer part of it (Mapper_LoopClosure.cpp sorts before
+ *    merging), but that was not the whole cause.
+ *    Measured on KITTI-00, three identical runs: APE 0.948 / 0.973 / 0.949 m,
+ *    a 2.7% spread, against 7.07 m for the front end alone. So it is an error
+ *    bar to keep in mind when comparing two loop-closing runs, not an
+ *    instability -- but do not read a <3% difference between two of them as a
+ *    change in the code.
  *
  * Two trajectories come out, and they answer different questions:
  *  - `--output-tum-path` is the optimized KEYFRAME trajectory: one pose per
@@ -47,10 +64,13 @@
 #include <mola_yaml/yaml_helpers.h>
 #include <mrpt/3rdparty/tclap/CmdLine.h>
 #include <mrpt/containers/yaml.h>
+#include <mrpt/core/bits_math.h>
 #include <mrpt/core/exceptions.h>
 #include <mrpt/io/lazy_load_path.h>
 #include <mrpt/maps/CSimpleMap.h>
+#include <mrpt/math/CMatrixFixed.h>
 #include <mrpt/math/TPose3D.h>
+#include <mrpt/math/TTwist3D.h>
 #include <mrpt/obs/CObservation.h>
 #include <mrpt/poses/CPose3D.h>
 #include <mrpt/poses/CPose3DInterpolator.h>
@@ -180,6 +200,26 @@ struct Cli
     "", "lazy-load-output",
     "Externalize the output simplemap's point clouds into a sidecar directory, "
     "so it stays small and loads fast downstream.",
+    cmd};
+
+  TCLAP::SwitchArg argIgnoreInputTwist{
+    "", "ignore-input-twist",
+    "Do not feed the input simplemap's per-keyframe velocities into the graph. "
+    "Diagnostic only: without them the constant-velocity factor between "
+    "keyframes has no velocity observation to agree with and deforms the map "
+    "(measured 7.1 -> 34.1 m APE on KITTI-00).",
+    cmd};
+
+  TCLAP::ValueArg<double> argTwistSigmaLin{
+    "", "twist-sigma-lin", "Sigma [m/s] of the input keyframe velocities.", false, 0.5, "m/s", cmd};
+
+  TCLAP::ValueArg<double> argTwistSigmaAng{
+    "",
+    "twist-sigma-ang",
+    "Sigma [deg/s] of the input keyframe angular velocities.",
+    false,
+    5.0,
+    "deg/s",
     cmd};
 
   TCLAP::ValueArg<std::string> argVerbosity{
@@ -381,6 +421,7 @@ void run_offline_mapping(Cli & cli)
     mrpt::Clock::time_point stamp;
     mrpt::poses::CPose3DPDFGaussian pose;
     mrpt::obs::CSensoryFrame::Ptr sf;
+    std::optional<mrpt::math::TTwist3D> twist;
   };
   std::vector<InputKeyframe> keyframes;
   keyframes.reserve(sm.size());
@@ -400,6 +441,7 @@ void run_offline_mapping(Cli & cli)
     ikf.stamp = *stamp;
     ikf.pose.copyFrom(*kf.pose);
     ikf.sf = kf.sf;
+    ikf.twist = kf.localTwist;
     keyframes.push_back(std::move(ikf));
   }
   if (skippedNoStamp != 0) {
@@ -419,6 +461,30 @@ void run_offline_mapping(Cli & cli)
   const int scanEvery = std::max(0, cli.argLcScanEvery.getValue());
   std::size_t loopsOnline = 0;
 
+  // Per-keyframe velocity, and why it is not optional in practice. The graph
+  // carries a body-frame velocity variable per keyframe, coupled to its
+  // neighbors by a constant-velocity factor. Live, the front end pins those
+  // variables by calling fuse_pose()/fuse_twist() densely between keyframes.
+  // Replaying a simplemap there is no such dense source, so with no velocity
+  // observation the constant-velocity factor stops being a motion model and
+  // becomes a smoothness prior that fights the relative-pose chain wherever
+  // the platform actually accelerates -- 7.1 -> 34.1 m APE on KITTI-00, a
+  // corner-cutting deformation, not a divergence. A simplemap already stores
+  // the front end's own per-keyframe twist, so feed it.
+  const bool useTwist = !cli.argIgnoreInputTwist.getValue();
+  mrpt::math::CMatrixDouble66 twistCov;
+  twistCov.setZero();
+  {
+    const double sl = cli.argTwistSigmaLin.getValue();
+    const double sa = mrpt::DEG2RAD(cli.argTwistSigmaAng.getValue());
+    ASSERTMSG_(sl > 0 && sa > 0, "--twist-sigma-lin/ang must be positive.");
+    for (int i = 0; i < 3; i++) {
+      twistCov(i, i) = sl * sl;
+      twistCov(i + 3, i + 3) = sa * sa;
+    }
+  }
+  std::size_t twistFed = 0;
+
   for (std::size_t i = 0; i < keyframes.size(); i++) {
     const auto & ikf = keyframes[i];
 
@@ -430,6 +496,13 @@ void run_offline_mapping(Cli & cli)
     req.pose_in_source = ikf.pose;
     req.observations = *ikf.sf;
     mapper->requestInsertKeyframe(req);
+
+    // AFTER the insert, and at the same timestamp, so it lands on the keyframe
+    // just created rather than creating one of its own.
+    if (useTwist && ikf.twist.has_value()) {
+      mapper->fuse_twist(ikf.stamp, *ikf.twist, twistCov);
+      twistFed++;
+    }
 
     originalKfPoses[ikf.stamp] = ikf.pose.mean;
 
@@ -447,7 +520,13 @@ void run_offline_mapping(Cli & cli)
   }
 
   std::cout << "[mola-mapper-cli] Ingested " << keyframes.size() << " keyframes ("
-            << mapper->keyframe_count() << " in the central map).\n";
+            << mapper->keyframe_count() << " in the central map), " << twistFed
+            << " with a velocity.\n";
+  if (useTwist && twistFed == 0) {
+    std::cout << "[mola-mapper-cli] WARNING: no keyframe in this simplemap carries a "
+                 "velocity, so the graph's constant-velocity factors have nothing to "
+                 "agree with and may deform the map. Check how the map was written.\n";
+  }
 
   // ---------------------------------------------------------------------
   // 5) Close what is left, then solve

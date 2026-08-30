@@ -337,8 +337,18 @@ docs/call-graph.md               Mermaid diagram tracing every public-API method
   map; the CLI forces `enable_optimizer_thread` and `enable_loop_closure_thread`
   false OVER the config file (a YAML cannot reintroduce a racing path into a run
   whose point is to be reproducible) and triggers each LC scan after a fixed
-  NUMBER OF KEYFRAMES, not after a number of seconds. Measured bit-identical
-  across repeated runs.
+  NUMBER OF KEYFRAMES, not after a number of seconds.
+  **How far that gets, measured:** with no loop closed, bit-identical across
+  runs (3/3 on KITTI-04). With loops closed, NOT: the `mola_sm_loop_closure`
+  detector evaluates candidates on its own `WorkerThreadsPool` sized from
+  `hardware_concurrency()` -- which no thread-count env var here reaches -- and
+  the per-pair ICP results themselves vary. Three identical KITTI-00 runs gave
+  APE 0.948 / 0.973 / 0.949 m, a 2.7% spread against 7.07 m for LO alone. The
+  merge ORDER is no longer part of it (`run_loop_closure_scan()` collects
+  accepted edges and merges them sorted by keyframe id, which also removed a
+  data race on the `merged` counter), but that was not the whole cause. This is
+  the same class of defect `mola_lidar_odometry`'s offline path had; it is
+  fixed there and open here.
   `enable_loop_closure_thread: false` keeps the engine but not the thread: this
   is what makes a synchronous LC path exist at all, since
   `finalize_loop_closures()` early-returns unless `start_loop_closure_thread()`

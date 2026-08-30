@@ -29,8 +29,10 @@
 #include <mrpt/core/lock_helper.h>
 #include <mrpt/poses/gtsam_wrappers.h>
 
+#include <algorithm>
 #include <chrono>
 #include <exception>
+#include <mutex>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -246,34 +248,66 @@ std::size_t Mapper::run_loop_closure_scan(bool forceFullScan)
     }
   }
 
-  // 3) Stream accepted edges into the graph as soon as they are found, mapping
-  //    snapshot frame indices back to keyframe ids. The heavy ICP runs here
-  //    OFF the state lock; only each merge briefly re-takes it. Count only
-  //    edges actually added (a duplicate merge adds nothing).
-  std::size_t merged = 0;
+  // 3) COLLECT accepted edges, then merge them in a canonical order once the
+  //    scan is over.
+  //
+  //    Not merged from the callback, which is where they used to go. The
+  //    detector evaluates candidates on its own worker pool, sized from
+  //    hardware_concurrency(), so on_edge_found fires from whichever thread
+  //    finished first -- an order that varies run to run. That order is
+  //    observable: merge_loop_closure_edge_locked() drops a pair already
+  //    closed, so which of two overlapping proposals wins depends on it, and
+  //    every later scan then starts from a different graph and a different
+  //    exclude_pairs set. Two identical offline runs of KITTI-00 diverged for
+  //    exactly this reason. Sorting by keyframe id before merging removes the
+  //    dependence on thread scheduling without changing what the detector does.
+  //
+  //    Nothing is lost by waiting: notify_optimizer() is only called after
+  //    analyze() returns anyway, so no merge was ever visible to the solver
+  //    mid-scan. It also removes a data race -- `merged` was a plain counter
+  //    incremented from those worker threads.
+  struct AcceptedEdge
+  {
+    KeyFrameID from;
+    KeyFrameID to;
+    mrpt::poses::CPose3DPDFGaussian relative_pose;
+    double quality;
+  };
+  std::vector<AcceptedEdge> accepted;
+  std::mutex acceptedMutex;
+
   opts.on_edge_found = [&](const mola::ProposedLoopEdge & e) {
     if (e.from >= frameIds.size() || e.to >= frameIds.size()) {
       return;
     }
-    const KeyFrameID kfFrom = frameIds[e.from];
-    const KeyFrameID kfTo = frameIds[e.to];
-    bool added = false;
-    {
-      auto lck = mrpt::lockHelper(stateMutex_);
-      added = merge_loop_closure_edge_locked(kfFrom, kfTo, e.relative_pose);
-    }
-    if (added) {
-      merged++;
-      lc_ui_.loops_accepted.fetch_add(1);
-#ifdef MOLA_KERNEL_VIZ_HAS_METRICS
-      if (metric_lc_edge_goodness_) {
-        metric_lc_edge_goodness_->push(100.0 * e.quality);
-      }
-#endif
-    }
+    auto lck = mrpt::lockHelper(acceptedMutex);
+    accepted.push_back({frameIds[e.from], frameIds[e.to], e.relative_pose, e.quality});
   };
 
   lc_engine_->analyze(snapshot, opts);
+
+  std::sort(accepted.begin(), accepted.end(), [](const AcceptedEdge & a, const AcceptedEdge & b) {
+    return std::minmax(a.from, a.to) < std::minmax(b.from, b.to);
+  });
+
+  std::size_t merged = 0;
+  for (const auto & e : accepted) {
+    bool added = false;
+    {
+      auto lck = mrpt::lockHelper(stateMutex_);
+      added = merge_loop_closure_edge_locked(e.from, e.to, e.relative_pose);
+    }
+    if (!added) {
+      continue;
+    }
+    merged++;
+    lc_ui_.loops_accepted.fetch_add(1);
+#ifdef MOLA_KERNEL_VIZ_HAS_METRICS
+    if (metric_lc_edge_goodness_) {
+      metric_lc_edge_goodness_->push(100.0 * e.quality);
+    }
+#endif
+  }
 
   lc_scan_.snapshot_size_at_last_scan = snapshot.size();
 

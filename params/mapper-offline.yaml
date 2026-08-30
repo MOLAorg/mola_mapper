@@ -13,8 +13,10 @@
 #  - The gauge is pinned. There is no GNSS here, so without an anchor the graph
 #    is gauge-free and only relative geometry is determined.
 #  - Nothing sets the background-thread or wall-clock knobs: mola-mapper-cli
-#    forces those itself, after this file, so a run stays reproducible whatever
-#    a config says.
+#    forces those itself, after this file, so no config can reintroduce them.
+#    That makes a run with no loop closed bit-identical; a run that CLOSES loops
+#    still varies by ~3% because the loop-closure detector's own ICP is not
+#    reproducible. See the CLI's header comment for the measurement.
 #
 # Usage:
 #   mola-mapper-cli -c $(ros2 pkg prefix mola_mapper)/share/mola_mapper/params/mapper-offline.yaml \
@@ -27,6 +29,33 @@ $import: mapper-common.yaml
 # Pure-odometry input, no GNSS: pin the first pose or the whole graph is
 # gauge-free. See Parameters.h's link_first_pose_to_reference_origin_sigma.
 link_first_pose_to_reference_origin_sigma: ${MOLA_LINK_FIRST_POSE_SIGMA|1e-6}
+
+# Consecutive-keyframe odometry-edge noise, tightened 10x.
+#
+# The mapper derives each chain edge's noise from the PROPAGATED RELATIVE
+# covariance of the two keyframe pose PDFs. Live, those come from a front end
+# reporting its current uncertainty. In a simplemap they are the front end's
+# ABSOLUTE, accumulated covariances, and differencing two large, almost
+# identical absolute covariances does not recover the small relative one -- it
+# recovers the accumulated one. So every chain edge is created far looser than
+# the relative geometry it encodes actually is, and the rest of the graph
+# (kinematic priors, and any loop-closure edge) is then free to deform the one
+# thing that carries the trajectory.
+#
+# Measured on KITTI-00 and KITTI-04, loop closure OFF, so this isolates how
+# faithfully the graph reproduces its input (raw LO: 7.07 m and 0.674 m APE):
+#   multiplier 1.0 -> 15.04 m / 1.871 m     0.1 -> 4.99 m / 0.683 m
+#   multiplier 0.01 -> 5.36 m / 0.657 m
+# At 1.0 the reconstruction is 2-3x WORSE than its own input. At 0.1 it
+# reproduces KITTI-04 to 1.3% and already improves KITTI-00, since smoothing an
+# accurate relative chain removes noise. Below 0.1 nothing more is gained.
+#
+# With this set, the velocity-smoothness sigmas stop mattering: sweeping
+# sigma_random_walk_acceleration_linear over 0.5..5 moves KITTI-00 by 5% and
+# KITTI-04 by 0.2%. They looked decisive before this was found (0.5 -> 27.7 m,
+# 5 -> 2.45 m) but that was this defect showing through, so mapper-common.yaml's
+# shipped values are kept rather than overridden here.
+odometry_edge_uncertainty_multiplier: ${MOLA_ODOM_EDGE_MULT|0.1}
 
 loop_closure_enabled: ${MOLA_MAPPER_LOOP_CLOSURE|true}
 loop_closure_pipeline_file: "${MOLA_MAPPER_LC_PIPELINE|$(ros2 pkg prefix mola_mapper)/share/mola_mapper/params/loop-closure-f2f-mapper.yaml}"

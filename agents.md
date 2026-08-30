@@ -58,8 +58,9 @@ module/src/
   register.cpp                   MOLA_REGISTER_MODULE(mola::mapper::Mapper)
   GtsamData.h, factor_builders.h Private GTSAM symbol scheme + factor builders (shared by the two fusion TUs)
   covariance_utils.h             Shared SE(3)-covariance summary (max position / orientation sigma)
-apps/mola-mapper-cli.cpp      Offline front end (skeleton)
+apps/mola-mapper-cli.cpp      Offline front end: simplemap -> optimized map
 params/mapper.yaml            Default config (no fixed geo-ref; pure-odometry-safe defaults)
+params/mapper-offline.yaml    mola-mapper-cli defaults (LC + finalize on, gauge pinned)
 mola-cli-launchs/                Live system YAMLs (KITTI, MulRan, BotanicGarden, Oxford Spires,
                                   ConSLAM, generic ROS 2 bag)
 test/                            Unit tests (plain main() + MRPT ASSERT_ macros, run by mola_add_test)
@@ -327,6 +328,33 @@ docs/call-graph.md               Mermaid diagram tracing every public-API method
   without which a scan just re-proposes them and burns its candidate budget.
   Validated on KITTI-00: 8 loops closed (4 online + 4 in finalize, then
   converged), vs 0 loops and 8.95 m absolute pose error with LC off.
+
+- `mola-mapper-cli` is the OFFLINE front end, and it exists for
+  reproducibility. It replays a front end's keyframe simplemap through
+  `requestInsertKeyframe()`, closes loops, optimizes, and writes the corrected
+  map out. A live run is paced by the optimizer thread, the LC thread and a
+  wall-clock scan period, so replaying one dataset twice need not give the same
+  map; the CLI forces `enable_optimizer_thread` and `enable_loop_closure_thread`
+  false OVER the config file (a YAML cannot reintroduce a racing path into a run
+  whose point is to be reproducible) and triggers each LC scan after a fixed
+  NUMBER OF KEYFRAMES, not after a number of seconds. Measured bit-identical
+  across repeated runs.
+  `enable_loop_closure_thread: false` keeps the engine but not the thread: this
+  is what makes a synchronous LC path exist at all, since
+  `finalize_loop_closures()` early-returns unless `start_loop_closure_thread()`
+  created the engine.
+  It writes TWO trajectories. The keyframe one is one pose per keyframe, ~10x
+  sparser than the front end's on a distance-gated map; given the dense
+  front-end trajectory (`--input-trajectory`), it also applies the optimized
+  keyframe poses to it as a LEFT-composed, SLERP-interpolated correction field
+  (`--output-corrected-trajectory`), which keeps the front end's sampling and
+  local detail while picking up the global correction. Score that one against a
+  sensor-rate ground truth; the keyframe one is not comparable with a dense
+  front-end trajectory.
+  This is the job `mapper-lio` in the server's SLAM-eval pipeline
+  (`plans-mola-server`, `run-single-test.sh`'s `run_job_mapper_lio()`), which
+  reuses the `lio` job's LO run verbatim as its first stage so the two rows
+  differ only by the back end.
 
 See `~/plans/900_mola_mapper.md` for the rationale behind each of these (the
 real-data failure modes that drove each design choice), the GNC-bootstrap

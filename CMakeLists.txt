@@ -23,6 +23,12 @@ find_package(mola_common REQUIRED)
 # find dependencies:
 find_package(mrpt-maps REQUIRED)
 find_package(mrpt-tclap REQUIRED)
+# Not linked directly here, but mola_kernel's VizInterface carries mrpt::gui in
+# its interface link libraries, and CMake requires the imported target to exist
+# even when this package only inherits it. It happens to be defined already on
+# distros where another find_package above pulls it in; humble is not one of
+# them, and the job that would have said so had been dying at rosdep instead.
+find_package(mrpt-gui REQUIRED)
 find_package(mola_kernel REQUIRED)
 find_package(mola_yaml REQUIRED)
 find_package(mp2p_icp REQUIRED)

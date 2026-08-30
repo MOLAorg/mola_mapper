@@ -182,6 +182,36 @@ public:
   /// min-new-keyframes gate and the incremental-scan window.
   std::size_t run_loop_closure_scan_now(bool forceFullScan = false);
 
+  /// Ask the background loop-closure thread to run one immediate FULL scan,
+  /// bypassing the check period and the min-new-keyframes gate. Thread-safe and
+  /// NON-BLOCKING; a no-op when the LC thread is not running. Never runs
+  /// analyze() on the caller's thread: the engine is single-thread-per-instance,
+  /// so a second concurrent analyze() would corrupt its state. Pair with
+  /// wait_for_loop_closure_idle() when the result is going to be acted on.
+  void request_loop_closure_scan();
+
+  /// Block until the background loop-closure thread has nothing left to do:
+  /// no scan requested-but-not-started, and none running.
+  ///
+  /// Loop closure is otherwise fire-and-forget -- request_loop_closure_scan()
+  /// returns immediately and the answer lands whenever the thread gets to it --
+  /// which is fine for a GUI button and useless for anything that has to ACT on
+  /// the result: a test asserting on the edges, a caller about to save a map, a
+  /// run being compared against another run. Pair it with
+  /// request_loop_closure_scan() to turn "ask for a scan" into "run a scan".
+  ///
+  /// Returns true if it became idle, false on timeout. Returns true immediately
+  /// when no LC thread is running at all (loop closure disabled, or
+  /// enable_loop_closure_thread false, where the caller owns the schedule
+  /// already) -- there is nothing to wait for, which is not a failure.
+  ///
+  /// Do NOT call this from the LC thread itself, and note it waits for the
+  /// thread to go idle, not for the map to stop changing: with data still
+  /// arriving, the periodic scan will start again right after.
+  ///
+  /// @param timeoutSeconds  0 or negative waits indefinitely.
+  bool wait_for_loop_closure_idle(double timeoutSeconds = 0.0);
+
   /// Batch loop-closure pass over a complete trajectory: repeat full scan +
   /// re-optimization until a round finds nothing new, or
   /// loop_closure_finalize_rounds is exhausted. Online scans only close loops
@@ -279,6 +309,19 @@ private:
   // check period. Consumed and cleared by the thread; never runs analyze()
   // off-thread, so it cannot race the periodic scan.
   std::atomic_bool lc_force_scan_{false};
+
+  // "Is the LC thread doing anything right now?", for wait_for_loop_closure_idle().
+  // Tracks the THREAD, not any scan: run_loop_closure_scan() is also called
+  // synchronously (run_loop_closure_scan_now(), the finalize pass), and a caller
+  // waiting on the background thread should not be blocked by its own call.
+  //
+  // ORDER MATTERS in the thread loop: lc_busy_ is set BEFORE lc_force_scan_ is
+  // cleared. The other way round leaves a window where a request has been
+  // consumed but the scan has not been marked started, and a waiter sampling
+  // both flags there would conclude "idle" and return before its own scan ran.
+  std::atomic_bool lc_busy_{false};
+  std::mutex lc_idle_mutex_;
+  std::condition_variable lc_idle_cv_;
 
   // Progress state carried between scans by the LC thread. Reset when the thread
   // (re)starts on a fresh map.
@@ -717,11 +760,6 @@ private:
 
   /// Stops and joins the loop-closure thread if running (no lock held).
   void stop_loop_closure_thread();
-
-  /// Requests one immediate FULL scan by the background LC thread (wakes it
-  /// early). Thread-safe, non-blocking; a no-op when the LC thread is not
-  /// running. Used by the GUI "Run LC scan now" button.
-  void request_loop_closure_scan();
 
   /// Shared shutdown sequence for the loop-closure thread: signals exit,
   /// wakes it, and joins it if running. Resets lc_engine_ only when

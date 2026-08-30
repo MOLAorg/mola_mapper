@@ -237,6 +237,20 @@ docs/call-graph.md               Mermaid diagram tracing every public-API method
   counters — the central map is shared, persistent state and must survive one
   front end relocalizing.
 
+- Loop closure is FIRE-AND-FORGET unless you say otherwise.
+  `request_loop_closure_scan()` returns immediately and the scan lands whenever
+  the background thread gets to it -- fine for the GUI button it was written
+  for, useless for anything that has to ACT on the result (a test asserting on
+  edges, a caller about to save a map, a run being compared against another).
+  `wait_for_loop_closure_idle(timeoutSeconds)` closes that: it blocks until no
+  scan is requested-but-not-started AND none is running, and returns true
+  immediately when there is no LC thread at all (loop closure off, or
+  `enable_loop_closure_thread` false, where the caller owns the schedule
+  already) -- nothing to wait for is not a failure. `lc_busy_` is set BEFORE
+  `lc_force_scan_` is cleared in the thread loop, deliberately: the other order
+  leaves a window where a waiter sampling both flags concludes "idle" and
+  returns before its own scan ran. Covered by `test-lc-wait-idle`.
+
 - Loop closure is a LIBRARY, not a running module: the `mola_sm_loop_closure`
   F2F engine is linked and driven from a mapper-owned background thread
   (`loop_closure_enabled`, off by default). The thread snapshots the central
@@ -338,17 +352,18 @@ docs/call-graph.md               Mermaid diagram tracing every public-API method
   false OVER the config file (a YAML cannot reintroduce a racing path into a run
   whose point is to be reproducible) and triggers each LC scan after a fixed
   NUMBER OF KEYFRAMES, not after a number of seconds.
-  **How far that gets, measured:** with no loop closed, bit-identical across
-  runs (3/3 on KITTI-04). With loops closed, NOT: the `mola_sm_loop_closure`
-  detector evaluates candidates on its own `WorkerThreadsPool` sized from
-  `hardware_concurrency()` -- which no thread-count env var here reaches -- and
-  the per-pair ICP results themselves vary. Three identical KITTI-00 runs gave
-  APE 0.948 / 0.973 / 0.949 m, a 2.7% spread against 7.07 m for LO alone. The
-  merge ORDER is no longer part of it (`run_loop_closure_scan()` collects
-  accepted edges and merges them sorted by keyframe id, which also removed a
-  data race on the `merged` counter), but that was not the whole cause. This is
-  the same class of defect `mola_lidar_odometry`'s offline path had; it is
-  fixed there and open here.
+  That covers what the mapper owns, and NOT the loop-closure detector, which has
+  its own parallelism: `run_loop_closure_scan()` collects accepted edges and
+  merges them sorted by keyframe id (fixing an observable order dependence and a
+  data race on the `merged` counter), but the detector's per-candidate ICP still
+  varied. So the CLI also turns on the ENGINE's own reproducibility switch,
+  `mola_sm_loop_closure`'s `deterministic`, by binding `LC_DETERMINISTIC=true`
+  in its own process before `initialize()` -- NOT by editing
+  `params/loop-closure-f2f-mapper.yaml`, which the online launchers share and
+  where this must stay off (it is one thread all the way down, and those runs
+  are paced by a real-time clock). `--no-deterministic` takes the fast path.
+  Verified: 3/3 bit-identical on KITTI-07 with it, 3/3 different without; same
+  APE either way (0.3056), ~8x wall clock.
   `enable_loop_closure_thread: false` keeps the engine but not the thread: this
   is what makes a synchronous LC path exist at all, since
   `finalize_loop_closures()` early-returns unless `start_loop_closure_thread()`

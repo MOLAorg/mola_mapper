@@ -31,23 +31,19 @@
  * settings that do that are applied over the config file (see
  * force_deterministic_settings()) and cannot be overridden from YAML.
  *
- * HOW FAR THAT ACTUALLY GETS, measured, because the difference matters to
- * anyone comparing two runs:
- *  - With no loop closed, output is BIT-IDENTICAL across runs (verified 3/3 on
- *    KITTI-04). Ingestion, the graph, the solver, the correction field and the
- *    writers are all reproducible.
- *  - With loops closed it is NOT. The loop-closure detector evaluates
- *    candidates on its own worker pool, sized from hardware_concurrency() and
- *    not from any thread-count variable this program sets, and the per-pair ICP
- *    results themselves vary run to run -- the same class of defect
- *    `mola_lidar_odometry`'s offline path had, fixed there and not here. The
- *    merge ORDER is no longer part of it (Mapper_LoopClosure.cpp sorts before
- *    merging), but that was not the whole cause.
- *    Measured on KITTI-00, three identical runs: APE 0.948 / 0.973 / 0.949 m,
- *    a 2.7% spread, against 7.07 m for the front end alone. So it is an error
- *    bar to keep in mind when comparing two loop-closing runs, not an
- *    instability -- but do not read a <3% difference between two of them as a
- *    change in the code.
+ * That covers everything the mapper itself owns. It does NOT, on its own, cover
+ * the loop-closure detector: that evaluates candidates on its own worker pool
+ * sized from hardware_concurrency(), and underneath a single candidate mp2p_icp
+ * decides both the order of its correspondence list and the summation order of
+ * the Gauss-Newton normal equations with TBB reductions. Before that was
+ * addressed, three identical KITTI-00 runs here gave APE 0.948 / 0.973 / 0.949 m.
+ *
+ * So this program also turns on the engine's own `deterministic` mode
+ * (mola_sm_loop_closure), which pins those runtimes for the duration of a scan.
+ * With it, a loop-closing run is bit-identical across repeats; without it, only
+ * a run that closes no loop is. It costs wall clock -- one thread all the way
+ * down, measured ~8x on KITTI-07 -- which is the trade this program is meant to
+ * make. Pass --no-deterministic to take the fast, non-reproducible path.
  *
  * Two trajectories come out, and they answer different questions:
  *  - `--output-tum-path` is the optimized KEYFRAME trajectory: one pose per
@@ -78,6 +74,7 @@
 #include <mrpt/system/filesystem.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <iostream>
 #include <map>
 #include <optional>
@@ -200,6 +197,13 @@ struct Cli
     "", "lazy-load-output",
     "Externalize the output simplemap's point clouds into a sidecar directory, "
     "so it stays small and loads fast downstream.",
+    cmd};
+
+  TCLAP::SwitchArg argNoDeterministic{
+    "", "no-deterministic",
+    "Let the loop-closure detector use all cores. Much faster, and the run is "
+    "then NOT reproducible: two runs that close loops give different maps. Use "
+    "when the map matters and repeating the exact run does not.",
     cmd};
 
   TCLAP::SwitchArg argIgnoreInputTwist{
@@ -364,6 +368,26 @@ void run_offline_mapping(Cli & cli)
   }
 
   force_deterministic_settings(params);
+
+  // The loop-closure engine's own reproducibility switch. It lives in the LC
+  // PIPELINE yaml, not in the mapper's params, and that file is shared with the
+  // online launchers -- where this must stay off, since it is one thread all the
+  // way down and those runs are paced by a real-time clock. So it is bound here,
+  // per-process, via the ${LC_DETERMINISTIC} hook the pipeline already exposes,
+  // rather than by editing the shared file.
+  //
+  // Set BEFORE initialize(): mola_yaml resolves those hooks when the engine
+  // loads the pipeline, which happens inside Mapper::initialize().
+  //
+  // On by default because that is what this program is for. An explicitly
+  // exported LC_DETERMINISTIC still wins over the default (overwrite=0), while
+  // --no-deterministic wins over both.
+  if (cli.argNoDeterministic.getValue()) {
+    ::setenv("LC_DETERMINISTIC", "false", /*overwrite=*/1);
+    std::cout << "[mola-mapper-cli] Loop closure: parallel (NOT reproducible).\n";
+  } else {
+    ::setenv("LC_DETERMINISTIC", "true", /*overwrite=*/0);
+  }
 
   mrpt::containers::yaml cfg = mrpt::containers::yaml::Map();
   cfg["params"] = params;

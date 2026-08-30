@@ -145,6 +145,10 @@ void Mapper::loop_closure_thread_loop()
       break;
     }
 
+    // Mark busy BEFORE consuming the request, so a waiter can never sample the
+    // gap between the two and conclude the thread is idle -- see lc_busy_.
+    lc_busy_.store(true);
+
     // A manual request forces one full scan (bypassing the min-new-keyframes
     // gate); the periodic wake-up runs the normal incremental/full logic.
     const bool forceFull = lc_force_scan_.exchange(false);
@@ -154,7 +158,40 @@ void Mapper::loop_closure_thread_loop()
     } catch (const std::exception & e) {
       MRPT_LOG_ERROR_STREAM("[loop_closure] scan failed: " << e.what());
     }
+
+    // Clear and announce even if the scan threw: a waiter must not be stranded
+    // by a failed scan.
+    {
+      auto lk = mrpt::lockHelper(lc_idle_mutex_);
+      lc_busy_.store(false);
+    }
+    lc_idle_cv_.notify_all();
   }
+
+  // Leaving the loop (shutdown) is also "no longer busy": a waiter blocked here
+  // while the thread is asked to stop would otherwise wait out its whole
+  // timeout for a thread that is never going to run again.
+  {
+    auto lk = mrpt::lockHelper(lc_idle_mutex_);
+    lc_busy_.store(false);
+  }
+  lc_idle_cv_.notify_all();
+}
+
+bool Mapper::wait_for_loop_closure_idle(double timeoutSeconds)
+{
+  if (!lc_thread_.joinable()) {
+    return true;  // no thread to wait for; the caller owns the schedule
+  }
+
+  std::unique_lock<std::mutex> lk(lc_idle_mutex_);
+  const auto isIdle = [this] { return !lc_force_scan_.load() && !lc_busy_.load(); };
+
+  if (timeoutSeconds <= 0) {
+    lc_idle_cv_.wait(lk, isIdle);
+    return true;
+  }
+  return lc_idle_cv_.wait_for(lk, std::chrono::duration<double>(timeoutSeconds), isIdle);
 }
 
 std::size_t Mapper::run_loop_closure_scan(bool forceFullScan)

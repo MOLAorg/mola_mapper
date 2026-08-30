@@ -232,6 +232,17 @@ public:
   /// keyframe's stored observations.
   [[nodiscard]] mrpt::maps::CSimpleMap current_simple_map() const;
 
+  /// Write the central map to `fil`, optionally externalizing each keyframe's
+  /// point clouds into a sidecar `<fil>_Images` directory (which keeps the
+  /// .simplemap itself small and fast to load downstream).
+  ///
+  /// This is what the `save_simplemap_file` / `generate_lazy_load_scan_files`
+  /// parameters do at shutdown; it is exposed so a batch caller can write the
+  /// map at a point of its own choosing -- and, importantly, still get the
+  /// externalization, which saving `current_simple_map()` directly does not do.
+  /// Returns false and logs on failure.
+  bool save_simple_map(const std::string & fil, bool generateLazyLoadScanFiles = false);
+
   /** @} */
 
   /** @name Introspection (diagnostics / tests)
@@ -322,6 +333,15 @@ private:
   std::atomic_bool lc_busy_{false};
   std::mutex lc_idle_mutex_;
   std::condition_variable lc_idle_cv_;
+
+  // Serializes run_loop_closure_scan() against itself. The engine is
+  // SINGLE-THREAD-PER-INSTANCE and lc_scan_ is plain (non-atomic) state carried
+  // between scans, so two concurrent scans are undefined behavior, not merely a
+  // lost update. That became reachable when run_loop_closure_scan_now() was made
+  // public: a caller can now invoke a scan on its own thread while the
+  // background thread is inside one. Held for the whole scan, so the second
+  // caller waits rather than corrupting the first.
+  std::mutex lc_scan_mutex_;
 
   // Progress state carried between scans by the LC thread. Reset when the thread
   // (re)starts on a fresh map.

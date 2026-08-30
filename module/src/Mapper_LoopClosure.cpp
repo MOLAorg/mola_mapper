@@ -200,6 +200,12 @@ std::size_t Mapper::run_loop_closure_scan(bool forceFullScan)
     return 0;
   }
 
+  // One scan at a time, whichever thread asks. See lc_scan_mutex_: the engine is
+  // single-thread-per-instance and lc_scan_ is plain state carried across scans,
+  // so overlapping calls are undefined behavior. Reachable since
+  // run_loop_closure_scan_now() became public.
+  auto scanLock = mrpt::lockHelper(lc_scan_mutex_);
+
   // 1) Snapshot the central map under the state lock (cheap gate first, to
   //    avoid copying observations when the map barely grew). The finalize pass
   //    re-examines the same (complete) map every round, so it bypasses the

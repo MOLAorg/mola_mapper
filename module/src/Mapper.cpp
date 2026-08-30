@@ -265,6 +265,12 @@ void Mapper::saveSimpleMapToFile()
   if (!params_loaded_ || params_.save_simplemap_file.empty()) {
     return;
   }
+  save_simple_map(params_.save_simplemap_file, params_.generate_lazy_load_scan_files);
+}
+
+bool Mapper::save_simple_map(const std::string & fil, bool generateLazyLoadScanFiles)
+{
+  ASSERTMSG_(!fil.empty(), "save_simple_map(): empty filename");
 
   mrpt::maps::CSimpleMap sm;
   {
@@ -272,12 +278,11 @@ void Mapper::saveSimpleMapToFile()
     sm = state_.as_simple_map();
   }
 
-  const auto & fil = params_.save_simplemap_file;
   MRPT_LOG_INFO_STREAM("Saving simplemap with " << sm.size() << " keyframes to '" << fil << "'...");
 
   std::vector<std::future<void>> pendingDiskIO;
 
-  if (params_.generate_lazy_load_scan_files) {
+  if (generateLazyLoadScanFiles) {
     // Create the default "_Images" directory alongside the output file and
     // externally serialize each keyframe's point clouds there, mirroring
     // mola::LidarOdometry's generate_lazy_load_scan_files feature so the
@@ -344,9 +349,10 @@ void Mapper::saveSimpleMapToFile()
 
   if (!saveOk) {
     MRPT_LOG_ERROR_STREAM("Error saving simplemap to: " << fil);
-    return;
+    return false;
   }
   MRPT_LOG_INFO("Simplemap saved.");
+  return true;
 }
 
 void Mapper::reset()

@@ -60,6 +60,7 @@
 #include <mola_yaml/yaml_helpers.h>
 #include <mrpt/3rdparty/tclap/CmdLine.h>
 #include <mrpt/containers/yaml.h>
+#include <mrpt/core/Clock.h>
 #include <mrpt/core/bits_math.h>
 #include <mrpt/core/exceptions.h>
 #include <mrpt/io/lazy_load_path.h>
@@ -196,7 +197,10 @@ struct Cli
   TCLAP::SwitchArg argLazyLoadOutput{
     "", "lazy-load-output",
     "Externalize the output simplemap's point clouds into a sidecar directory, "
-    "so it stays small and loads fast downstream.",
+    "so the map file stays small. No-op for clouds that are ALREADY stored "
+    "externally, which is the common case: a dataset reader typically points "
+    "each scan at the dataset's own file, and those references are simply "
+    "carried through.",
     cmd};
 
   TCLAP::SwitchArg argNoDeterministic{
@@ -241,7 +245,9 @@ std::optional<mrpt::Clock::time_point> keyframe_timestamp(const mrpt::obs::CSens
 {
   std::optional<mrpt::Clock::time_point> best;
   for (const auto & obs : sf) {
-    if (!obs) {
+    // An observation with no timestamp reads as the epoch, which would always
+    // win the minimum below and hand the whole keyframe a 1970 stamp.
+    if (!obs || obs->timestamp == INVALID_TIMESTAMP) {
       continue;
     }
     if (!best.has_value() || obs->timestamp < *best) {
@@ -362,9 +368,6 @@ void run_offline_mapping(Cli & cli)
   }
   if (cli.argLcFinalizeRounds.getValue() >= 0) {
     params["loop_closure_finalize_rounds"] = cli.argLcFinalizeRounds.getValue();
-  }
-  if (cli.argLazyLoadOutput.getValue()) {
-    params["generate_lazy_load_scan_files"] = true;
   }
 
   force_deterministic_settings(params);
@@ -577,12 +580,21 @@ void run_offline_mapping(Cli & cli)
 
   if (cli.argOutputSimpleMap.isSet() && !cli.argOutputSimpleMap.getValue().empty()) {
     const auto & fil = cli.argOutputSimpleMap.getValue();
-    const auto outMap = mapper->current_simple_map();
-    if (!outMap.saveToFile(fil)) {
+    // Through the mapper rather than CSimpleMap::saveToFile() on
+    // current_simple_map(): the mapper owns what "saving the map" means, and a
+    // caller reaching around it would silently skip anything that path does.
+    //
+    // NOTE --lazy-load-output usually has nothing to do, and that is correct
+    // rather than broken: it externalizes clouds that are still in RAM, and a
+    // dataset reader normally hands each keyframe a cloud that is ALREADY
+    // external (KITTI scans, for instance, reference the dataset's own
+    // velodyne/*.bin). Those references are carried into the output map
+    // untouched, so the sidecar directory can legitimately come out empty.
+    if (!mapper->save_simple_map(fil, cli.argLazyLoadOutput.getValue())) {
       THROW_EXCEPTION_FMT("Could not write output simplemap: '%s'", fil.c_str());
     }
-    std::cout << "[mola-mapper-cli] Wrote optimized simplemap: '" << fil << "' (" << outMap.size()
-              << " keyframes).\n";
+    std::cout << "[mola-mapper-cli] Wrote optimized simplemap: '" << fil << "' ("
+              << mapper->keyframe_count() << " keyframes).\n";
   }
 
   const bool wantCorrected =

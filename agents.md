@@ -58,8 +58,9 @@ module/src/
   register.cpp                   MOLA_REGISTER_MODULE(mola::mapper::Mapper)
   GtsamData.h, factor_builders.h Private GTSAM symbol scheme + factor builders (shared by the two fusion TUs)
   covariance_utils.h             Shared SE(3)-covariance summary (max position / orientation sigma)
-apps/mola-mapper-cli.cpp      Offline front end (skeleton)
+apps/mola-mapper-cli.cpp      Offline front end: simplemap -> optimized map
 params/mapper.yaml            Default config (no fixed geo-ref; pure-odometry-safe defaults)
+params/mapper-offline.yaml    mola-mapper-cli defaults (LC + finalize on, gauge pinned)
 mola-cli-launchs/                Live system YAMLs (KITTI, MulRan, BotanicGarden, Oxford Spires,
                                   ConSLAM, generic ROS 2 bag)
 test/                            Unit tests (plain main() + MRPT ASSERT_ macros, run by mola_add_test)
@@ -236,6 +237,20 @@ docs/call-graph.md               Mermaid diagram tracing every public-API method
   counters — the central map is shared, persistent state and must survive one
   front end relocalizing.
 
+- Loop closure is FIRE-AND-FORGET unless you say otherwise.
+  `request_loop_closure_scan()` returns immediately and the scan lands whenever
+  the background thread gets to it -- fine for the GUI button it was written
+  for, useless for anything that has to ACT on the result (a test asserting on
+  edges, a caller about to save a map, a run being compared against another).
+  `wait_for_loop_closure_idle(timeoutSeconds)` closes that: it blocks until no
+  scan is requested-but-not-started AND none is running, and returns true
+  immediately when there is no LC thread at all (loop closure off, or
+  `enable_loop_closure_thread` false, where the caller owns the schedule
+  already) -- nothing to wait for is not a failure. `lc_busy_` is set BEFORE
+  `lc_force_scan_` is cleared in the thread loop, deliberately: the other order
+  leaves a window where a waiter sampling both flags concludes "idle" and
+  returns before its own scan ran. Covered by `test-lc-wait-idle`.
+
 - Loop closure is a LIBRARY, not a running module: the `mola_sm_loop_closure`
   F2F engine is linked and driven from a mapper-owned background thread
   (`loop_closure_enabled`, off by default). The thread snapshots the central
@@ -327,6 +342,44 @@ docs/call-graph.md               Mermaid diagram tracing every public-API method
   without which a scan just re-proposes them and burns its candidate budget.
   Validated on KITTI-00: 8 loops closed (4 online + 4 in finalize, then
   converged), vs 0 loops and 8.95 m absolute pose error with LC off.
+
+- `mola-mapper-cli` is the OFFLINE front end, and it exists for
+  reproducibility. It replays a front end's keyframe simplemap through
+  `requestInsertKeyframe()`, closes loops, optimizes, and writes the corrected
+  map out. A live run is paced by the optimizer thread, the LC thread and a
+  wall-clock scan period, so replaying one dataset twice need not give the same
+  map; the CLI forces `enable_optimizer_thread` and `enable_loop_closure_thread`
+  false OVER the config file (a YAML cannot reintroduce a racing path into a run
+  whose point is to be reproducible) and triggers each LC scan after a fixed
+  NUMBER OF KEYFRAMES, not after a number of seconds.
+  That covers what the mapper owns, and NOT the loop-closure detector, which has
+  its own parallelism: `run_loop_closure_scan()` collects accepted edges and
+  merges them sorted by keyframe id (fixing an observable order dependence and a
+  data race on the `merged` counter), but the detector's per-candidate ICP still
+  varied. So the CLI also turns on the ENGINE's own reproducibility switch,
+  `mola_sm_loop_closure`'s `deterministic`, by binding `LC_DETERMINISTIC=true`
+  in its own process before `initialize()` -- NOT by editing
+  `params/loop-closure-f2f-mapper.yaml`, which the online launchers share and
+  where this must stay off (it is one thread all the way down, and those runs
+  are paced by a real-time clock). `--no-deterministic` takes the fast path.
+  Verified: 3/3 bit-identical on KITTI-07 with it, 3/3 different without; same
+  APE either way (0.3056), ~8x wall clock.
+  `enable_loop_closure_thread: false` keeps the engine but not the thread: this
+  is what makes a synchronous LC path exist at all, since
+  `finalize_loop_closures()` early-returns unless `start_loop_closure_thread()`
+  created the engine.
+  It writes TWO trajectories. The keyframe one is one pose per keyframe, ~10x
+  sparser than the front end's on a distance-gated map; given the dense
+  front-end trajectory (`--input-trajectory`), it also applies the optimized
+  keyframe poses to it as a LEFT-composed, SLERP-interpolated correction field
+  (`--output-corrected-trajectory`), which keeps the front end's sampling and
+  local detail while picking up the global correction. Score that one against a
+  sensor-rate ground truth; the keyframe one is not comparable with a dense
+  front-end trajectory.
+  This is the job `mapper-lio` in the server's SLAM-eval pipeline
+  (`plans-mola-server`, `run-single-test.sh`'s `run_job_mapper_lio()`), which
+  reuses the `lio` job's LO run verbatim as its first stage so the two rows
+  differ only by the back end.
 
 See `~/plans/900_mola_mapper.md` for the rationale behind each of these (the
 real-data failure modes that drove each design choice), the GNC-bootstrap

@@ -1,7 +1,15 @@
 # Based on GTSAM file (by @ProfFan)
 name: CI Build colcon
 
-on: [ push ]
+on:
+  push:
+    branches: ["develop"]
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+# Minimal GITHUB_TOKEN permissions (principle of least privilege)
+permissions:
+  contents: read
 
 jobs:
   build_docker:
@@ -12,6 +20,9 @@ jobs:
       DEBIAN_FRONTEND: noninteractive
     continue-on-error: ${{ matrix.allow_failure == true }}
     strategy:
+      # Without this, one broken distro cancels the sibling jobs, so a known
+      # failure hides the results that would otherwise be actionable.
+      fail-fast: false
       matrix:
         include:
           # Humble Hawksbill (May 2022 - May 2027)
@@ -20,10 +31,18 @@ jobs:
             ros_distribution: humble
             use_ros_testing: false
 
-          - name: humble testing
-            docker_image: ubuntu:jammy
-            ros_distribution: humble
-            use_ros_testing: true
+          # DISABLED: not our failure and not fixable here. ros-tooling/setup-ros
+          # fetches ros2-testing-apt-source_<ver>.jammy_all.deb from the
+          # ros-infrastructure/ros-apt-source releases, and that asset 404s --
+          # the ros2-testing channel no longer publishes a jammy variant. The
+          # job dies in setup-ros, before any of this repo's code is touched.
+          # mola_lidar_odometry has the same row commented out for the same
+          # reason. Re-enable if upstream starts publishing it again; humble
+          # stable still covers the distro.
+          #- name: humble testing
+          #  docker_image: ubuntu:jammy
+          #  ros_distribution: humble
+          #  use_ros_testing: true
 
           # Jazzy Jalisco (May 2024 - May 2029)
           - name: jazzy stable
@@ -48,7 +67,16 @@ jobs:
           apt-get -y install git curl gnupg2 ca-certificates
           git clone https://$TOKEN@github.com/$GITHUB_REPOSITORY.git --recursive "$GITHUB_WORKSPACE"
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          git checkout $GITHUB_SHA
+          # Check out the exact commit the event points at. On push, GITHUB_SHA
+          # is immutable (GITHUB_REF would track the branch tip, which may have
+          # advanced). On pull_request, GITHUB_SHA is the auto-generated merge
+          # commit (not fetchable by SHA), so fetch GITHUB_REF (refs/pull/N/merge).
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            git fetch origin "$GITHUB_REF"
+          else
+            git fetch origin "$GITHUB_SHA"
+          fi
+          git checkout FETCH_HEAD
           git submodule update --init --recursive
 
       # Pre-built ros:* images have ROS base but need colcon/rosdep tooling.
@@ -66,17 +94,54 @@ jobs:
           required-ros-distributions: ${{ matrix.ros_distribution }}
           use-ros2-testing: ${{ matrix.use_ros_testing }}
 
+      # Some MOLA dependencies are released in rosdistro but reach a given
+      # distro's apt repo later than others, and this package cannot build
+      # without them. Clone exactly those into the workspace so colcon builds
+      # them from source; the ones apt can already provide are left alone.
+      # See dependencies.repos.
+      # Two MOLA dependencies have no released binary that can build this
+      # package, on any distro -- see dependencies.repos for which and why.
+      #
+      # NOTE the clone target is OUTSIDE the workspace. colcon stops descending
+      # once a directory is itself a package, and this repo's package.xml is at
+      # the root, so anything cloned underneath is never discovered -- the build
+      # then fails at find_package() with the source sitting right there. Hence
+      # a sibling directory plus --base-paths below.
+      - name: Fetch source dependencies
+        run: |
+          apt-get update
+          apt-get install -y python3-vcstool
+          mkdir -p /tmp/mola_deps
+          vcs import /tmp/mola_deps < dependencies.repos
+          # vcs import does not initialize submodules, and MOLA repos vendor
+          # third-party code that way (mola_metric_maps' 3rdparty/), which fails
+          # at add_subdirectory() on an empty directory rather than saying so.
+          git config --global --add safe.directory '*'
+          vcs custom /tmp/mola_deps --git --args submodule update --init --recursive
+          ls -la /tmp/mola_deps
+
       - name: Install rosdep dependencies
         run: |
           . /opt/ros/*/setup.sh
           rosdep update
-          rosdep install --from-paths . --ignore-src -r -y
+          # -r: keep installing the rest of the keys instead of stopping at the
+          # first one rosdep can't resolve (e.g. a package not yet released on
+          # this particular distro/channel). Don't fail the step on that either,
+          # so the build/test steps below still run and report their own,
+          # more specific errors instead of the job stopping here.
+          rosdep install --from-paths . /tmp/mola_deps --ignore-src -r -y || \
+            echo "::warning::rosdep install reported missing dependencies; continuing anyway"
 
       - name: Build with colcon
         run: |
           . /opt/ros/*/setup.sh
           env
+          # --packages-up-to: a source dependency may be a repo of many
+          # packages (MOLAorg/mola is), and only the ones this package
+          # actually needs are worth a CI build.
           MAKEFLAGS="-j2" colcon build \
+            --base-paths . /tmp/mola_deps \
+            --packages-up-to mola_mapper \
             --symlink-install \
             --parallel-workers 2 \
             --event-handlers console_direct+
@@ -84,5 +149,13 @@ jobs:
       - name: Run unit tests
         run: |
           . /opt/ros/*/setup.sh
-          colcon test --event-handlers console_direct+
+          # The workspace overlay too, not just the ROS one: the dependencies
+          # imported above are built HERE, so without this the test binaries
+          # fail to load libmola_kernel.so at runtime -- and they fail that way
+          # instantly, which reads like 13 broken tests rather than a missing
+          # library path.
+          . install/setup.sh
+          # This repo's own tests only: the imported dependencies are built
+          # here as a means to an end, not something this CI job is testing.
+          colcon test --packages-select mola_mapper --event-handlers console_direct+
           colcon test-result --verbose

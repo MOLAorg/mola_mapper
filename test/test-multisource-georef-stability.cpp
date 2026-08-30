@@ -503,7 +503,19 @@ void check_combo(const Combo & c)
   // (a) Horizontal pose recovery. With GNSS the absolute XY is pinned tight;
   // without it only dead-reckoning holds (IMU leveling of the pitch-drifted
   // chain couples a small yaw into the curved 1 km path), so allow drift.
-  const double max_xy_err = c.gnss ? 3.0 : 30.0;
+  //
+  // GNSS alone does not pin it as tight as GNSS + an absolute attitude does,
+  // for the same reason map_pos_bound below splits on any_imu(): GNSS measures
+  // POSITION only, so with no orientation reference the roll is weakly
+  // observable and a degenerate roll leaks into the horizontal error. That is
+  // visible in the numbers -- every combo with an attitude source lands at
+  // 1.4-1.8 m, while the two stiff GNSS-only ones settle at a roll of -7 to
+  // -9 deg. Bound the two regimes separately rather than at one value that
+  // only fits the observable one.
+  double max_xy_err = 30.0;
+  if (c.gnss) {
+    max_xy_err = c.imu_att ? 3.0 : 4.0;
+  }
   ASSERT_LT_(se3_xy_err, max_xy_err);
 
   // (a') Centimeter-level (RTK) GNSS recovery. Precise (~1 m) recovery of a

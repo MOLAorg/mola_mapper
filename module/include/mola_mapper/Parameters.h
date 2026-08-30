@@ -367,6 +367,14 @@ public:
   /// map and merges the accepted edges into the live graph.
   bool loop_closure_enabled = false;
 
+  /// If true, the periodic loop-closure scans run on their own background
+  /// thread. Set to false to keep the engine but let the caller decide when
+  /// each scan happens (run_loop_closure_scan_now()): the scan schedule is
+  /// then driven by the data instead of by the wall clock, which is what makes
+  /// an offline run reproducible. The end-of-run finalize pass is synchronous
+  /// either way. Mirrors enable_optimizer_thread.
+  bool enable_loop_closure_thread = true;
+
   /// Path to the loop-closure engine's own YAML (the mola_sm_loop_closure F2F
   /// pipeline: ICP + candidate selection). Env-var substitution is applied.
   /// Required when loop_closure_enabled is true.

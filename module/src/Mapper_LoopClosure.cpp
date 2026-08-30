@@ -29,8 +29,10 @@
 #include <mrpt/core/lock_helper.h>
 #include <mrpt/poses/gtsam_wrappers.h>
 
+#include <algorithm>
 #include <chrono>
 #include <exception>
+#include <mutex>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -73,10 +75,27 @@ void Mapper::start_loop_closure_thread()
   lc_ui_.reset();
 
   lc_should_exit_.store(false);
+
+  // With the thread disabled the engine above is still created and configured:
+  // the caller drives each scan itself (run_loop_closure_scan_now()) and the
+  // end-of-run finalize pass, which is synchronous anyway, still has an engine
+  // to work with. Only the wall-clock-paced scan loop is skipped.
+  if (!params_.enable_loop_closure_thread) {
+    MRPT_LOG_INFO_STREAM(
+      "[loop_closure] engine ready (caller-driven scans), pipeline='"
+      << params_.loop_closure_pipeline_file << "'");
+    return;
+  }
+
   lc_thread_ = std::thread(&Mapper::loop_closure_thread_loop, this);
 
   MRPT_LOG_INFO_STREAM(
     "[loop_closure] started, pipeline='" << params_.loop_closure_pipeline_file << "'");
+}
+
+std::size_t Mapper::run_loop_closure_scan_now(bool forceFullScan)
+{
+  return run_loop_closure_scan(forceFullScan);
 }
 
 void Mapper::stop_loop_closure_thread() { stop_loop_closure_thread_locked(/*resetEngine=*/true); }
@@ -95,15 +114,17 @@ void Mapper::request_loop_closure_scan()
 
 void Mapper::stop_loop_closure_thread_locked(bool resetEngine)
 {
-  if (!lc_thread_.joinable()) {
-    return;
+  // The thread is optional (enable_loop_closure_thread), but the engine is
+  // not: releasing it must not depend on a thread having been spawned, or a
+  // caller-driven configuration would keep a stale engine across initialize().
+  if (lc_thread_.joinable()) {
+    {
+      auto lk = mrpt::lockHelper(lc_wakeup_mutex_);
+      lc_should_exit_.store(true);
+    }
+    lc_wakeup_cv_.notify_all();
+    lc_thread_.join();
   }
-  {
-    auto lk = mrpt::lockHelper(lc_wakeup_mutex_);
-    lc_should_exit_.store(true);
-  }
-  lc_wakeup_cv_.notify_all();
-  lc_thread_.join();
   if (resetEngine) {
     lc_engine_.reset();
   }
@@ -124,6 +145,10 @@ void Mapper::loop_closure_thread_loop()
       break;
     }
 
+    // Mark busy BEFORE consuming the request, so a waiter can never sample the
+    // gap between the two and conclude the thread is idle -- see lc_busy_.
+    lc_busy_.store(true);
+
     // A manual request forces one full scan (bypassing the min-new-keyframes
     // gate); the periodic wake-up runs the normal incremental/full logic.
     const bool forceFull = lc_force_scan_.exchange(false);
@@ -133,7 +158,40 @@ void Mapper::loop_closure_thread_loop()
     } catch (const std::exception & e) {
       MRPT_LOG_ERROR_STREAM("[loop_closure] scan failed: " << e.what());
     }
+
+    // Clear and announce even if the scan threw: a waiter must not be stranded
+    // by a failed scan.
+    {
+      auto lk = mrpt::lockHelper(lc_idle_mutex_);
+      lc_busy_.store(false);
+    }
+    lc_idle_cv_.notify_all();
   }
+
+  // Leaving the loop (shutdown) is also "no longer busy": a waiter blocked here
+  // while the thread is asked to stop would otherwise wait out its whole
+  // timeout for a thread that is never going to run again.
+  {
+    auto lk = mrpt::lockHelper(lc_idle_mutex_);
+    lc_busy_.store(false);
+  }
+  lc_idle_cv_.notify_all();
+}
+
+bool Mapper::wait_for_loop_closure_idle(double timeoutSeconds)
+{
+  if (!lc_thread_.joinable()) {
+    return true;  // no thread to wait for; the caller owns the schedule
+  }
+
+  std::unique_lock<std::mutex> lk(lc_idle_mutex_);
+  const auto isIdle = [this] { return !lc_force_scan_.load() && !lc_busy_.load(); };
+
+  if (timeoutSeconds <= 0) {
+    lc_idle_cv_.wait(lk, isIdle);
+    return true;
+  }
+  return lc_idle_cv_.wait_for(lk, std::chrono::duration<double>(timeoutSeconds), isIdle);
 }
 
 std::size_t Mapper::run_loop_closure_scan(bool forceFullScan)
@@ -227,34 +285,66 @@ std::size_t Mapper::run_loop_closure_scan(bool forceFullScan)
     }
   }
 
-  // 3) Stream accepted edges into the graph as soon as they are found, mapping
-  //    snapshot frame indices back to keyframe ids. The heavy ICP runs here
-  //    OFF the state lock; only each merge briefly re-takes it. Count only
-  //    edges actually added (a duplicate merge adds nothing).
-  std::size_t merged = 0;
+  // 3) COLLECT accepted edges, then merge them in a canonical order once the
+  //    scan is over.
+  //
+  //    Not merged from the callback, which is where they used to go. The
+  //    detector evaluates candidates on its own worker pool, sized from
+  //    hardware_concurrency(), so on_edge_found fires from whichever thread
+  //    finished first -- an order that varies run to run. That order is
+  //    observable: merge_loop_closure_edge_locked() drops a pair already
+  //    closed, so which of two overlapping proposals wins depends on it, and
+  //    every later scan then starts from a different graph and a different
+  //    exclude_pairs set. Two identical offline runs of KITTI-00 diverged for
+  //    exactly this reason. Sorting by keyframe id before merging removes the
+  //    dependence on thread scheduling without changing what the detector does.
+  //
+  //    Nothing is lost by waiting: notify_optimizer() is only called after
+  //    analyze() returns anyway, so no merge was ever visible to the solver
+  //    mid-scan. It also removes a data race -- `merged` was a plain counter
+  //    incremented from those worker threads.
+  struct AcceptedEdge
+  {
+    KeyFrameID from;
+    KeyFrameID to;
+    mrpt::poses::CPose3DPDFGaussian relative_pose;
+    double quality;
+  };
+  std::vector<AcceptedEdge> accepted;
+  std::mutex acceptedMutex;
+
   opts.on_edge_found = [&](const mola::ProposedLoopEdge & e) {
     if (e.from >= frameIds.size() || e.to >= frameIds.size()) {
       return;
     }
-    const KeyFrameID kfFrom = frameIds[e.from];
-    const KeyFrameID kfTo = frameIds[e.to];
-    bool added = false;
-    {
-      auto lck = mrpt::lockHelper(stateMutex_);
-      added = merge_loop_closure_edge_locked(kfFrom, kfTo, e.relative_pose);
-    }
-    if (added) {
-      merged++;
-      lc_ui_.loops_accepted.fetch_add(1);
-#ifdef MOLA_KERNEL_VIZ_HAS_METRICS
-      if (metric_lc_edge_goodness_) {
-        metric_lc_edge_goodness_->push(100.0 * e.quality);
-      }
-#endif
-    }
+    auto lck = mrpt::lockHelper(acceptedMutex);
+    accepted.push_back({frameIds[e.from], frameIds[e.to], e.relative_pose, e.quality});
   };
 
   lc_engine_->analyze(snapshot, opts);
+
+  std::sort(accepted.begin(), accepted.end(), [](const AcceptedEdge & a, const AcceptedEdge & b) {
+    return std::minmax(a.from, a.to) < std::minmax(b.from, b.to);
+  });
+
+  std::size_t merged = 0;
+  for (const auto & e : accepted) {
+    bool added = false;
+    {
+      auto lck = mrpt::lockHelper(stateMutex_);
+      added = merge_loop_closure_edge_locked(e.from, e.to, e.relative_pose);
+    }
+    if (!added) {
+      continue;
+    }
+    merged++;
+    lc_ui_.loops_accepted.fetch_add(1);
+#ifdef MOLA_KERNEL_VIZ_HAS_METRICS
+    if (metric_lc_edge_goodness_) {
+      metric_lc_edge_goodness_->push(100.0 * e.quality);
+    }
+#endif
+  }
 
   lc_scan_.snapshot_size_at_last_scan = snapshot.size();
 

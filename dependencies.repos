@@ -1,0 +1,35 @@
+# MOLA dependencies this package must build FROM SOURCE, imported by CI into a
+# directory beside the workspace (see .github/workflows/build-ros.yml).
+#
+# Not a preference: no released binary of either can build this package.
+#
+#   mola -- provides mola_kernel, mola_yaml, mola_common, mola_pose_list. This
+#     package IS a mola_kernel SharedKeyframeMap sink, and that interface landed
+#     2026-06-25. mola_kernel is 3.2.0 on develop against 2.9.0 in the apt repo,
+#     so the header is simply not there.
+#
+#   mola_sm_loop_closure -- the loop-closure engine is driven through its
+#     detector-only analyze() API (LoopClosureAnalyzeOptions, ProposedLoopEdge),
+#     which no published .deb has: humble's binary exists and is too old, and
+#     jazzy has no binary in the main ros2 repo at all (released in rosdistro as
+#     1.2.2-1 and present in ros2-testing, but not synced).
+#
+# An earlier version of this file probed apt per entry and cloned only what it
+# could not provide. Both entries turned out to be unconditional, so the probe
+# only ever returned the whole file; it was removed rather than kept as
+# machinery with no decision left to make. Re-add something like it if an entry
+# is ever added whose binary would genuinely do.
+#
+# Cloned OUTSIDE this repo and built via colcon --base-paths. Not into a
+# subdirectory: colcon stops descending once a directory is itself a package,
+# and this repo's package.xml is at the root, so a nested clone is silently
+# never discovered.
+repositories:
+  mola:
+    type: git
+    url: https://github.com/MOLAorg/mola.git
+    version: develop
+  mola_sm_loop_closure:
+    type: git
+    url: https://github.com/MOLAorg/mola_sm_loop_closure.git
+    version: develop

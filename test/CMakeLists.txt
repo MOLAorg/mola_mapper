@@ -1,5 +1,12 @@
 # Unit tests:
 mola_add_test(
+  TARGET  test-lc-wait-idle
+  SOURCES test-lc-wait-idle.cpp
+  LINK_LIBRARIES
+    mola::mola_mapper
+)
+
+mola_add_test(
   TARGET  test-mapper-basic
   SOURCES test-mapper-basic.cpp
   LINK_LIBRARIES

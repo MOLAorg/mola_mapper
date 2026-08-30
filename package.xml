@@ -29,6 +29,7 @@
 
   <depend>mrpt_libtclap</depend>
   <depend>mrpt_libmaps</depend>
+  <depend>mrpt_libgui</depend>
 
   <!-- dataset input sources (all are actually optional) -->
   <depend>mola_input_rawlog</depend>

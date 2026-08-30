@@ -104,6 +104,11 @@ jobs:
             dependencies.repos "${{ matrix.ros_distribution }}" > /tmp/missing.repos
           mkdir -p /tmp/mola_deps
           vcs import /tmp/mola_deps < /tmp/missing.repos
+          # vcs import does not initialize submodules, and MOLA repos vendor
+          # third-party code that way (mola_metric_maps' 3rdparty/), which fails
+          # at add_subdirectory() on an empty directory rather than saying so.
+          git config --global --add safe.directory '*'
+          vcs custom /tmp/mola_deps --git --args submodule update --init --recursive
           ls -la /tmp/mola_deps
 
       - name: Install rosdep dependencies

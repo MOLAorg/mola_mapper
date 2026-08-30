@@ -141,7 +141,13 @@ jobs:
       - name: Run unit tests
         run: |
           . /opt/ros/*/setup.sh
-          # This repo's own tests only: anything under _deps/ is a dependency
-          # built from source here, not something this CI job is testing.
+          # The workspace overlay too, not just the ROS one: the dependencies
+          # imported above are built HERE, so without this the test binaries
+          # fail to load libmola_kernel.so at runtime -- and they fail that way
+          # instantly, which reads like 13 broken tests rather than a missing
+          # library path.
+          . install/setup.sh
+          # This repo's own tests only: the imported dependencies are built
+          # here as a means to an end, not something this CI job is testing.
           colcon test --packages-select mola_mapper --event-handlers console_direct+
           colcon test-result --verbose

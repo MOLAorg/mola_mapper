@@ -614,6 +614,29 @@ void Mapper::getDiagnostics(std::vector<mola::DiagnosticStatusMsg> & status)
   status.push_back(std::move(msg));
 }
 
+void Mapper::optimize_now() { optimize_and_refresh(); }
+
+mrpt::poses::CPose3DInterpolator Mapper::estimated_keyframe_trajectory() const
+{
+  mrpt::poses::CPose3DInterpolator traj;
+  auto lck = mrpt::lockHelper(stateMutex_);
+  for (const auto & [t, kfId] : state_.time_to_kf_id.getDirectMap()) {
+    const auto it = state_.last_estimated_states.find(kfId);
+    if (it == state_.last_estimated_states.end()) {
+      // Created but not solved yet: it has no pose to report.
+      continue;
+    }
+    traj.insert(t, it->second.pose);
+  }
+  return traj;
+}
+
+mrpt::maps::CSimpleMap Mapper::current_simple_map() const
+{
+  auto lck = mrpt::lockHelper(stateMutex_);
+  return state_.as_simple_map();
+}
+
 std::set<std::string> Mapper::known_odometry_frame_ids() const
 {
   auto lck = mrpt::lockHelper(stateMutex_);

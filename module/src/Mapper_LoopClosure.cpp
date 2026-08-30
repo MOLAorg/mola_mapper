@@ -73,10 +73,27 @@ void Mapper::start_loop_closure_thread()
   lc_ui_.reset();
 
   lc_should_exit_.store(false);
+
+  // With the thread disabled the engine above is still created and configured:
+  // the caller drives each scan itself (run_loop_closure_scan_now()) and the
+  // end-of-run finalize pass, which is synchronous anyway, still has an engine
+  // to work with. Only the wall-clock-paced scan loop is skipped.
+  if (!params_.enable_loop_closure_thread) {
+    MRPT_LOG_INFO_STREAM(
+      "[loop_closure] engine ready (caller-driven scans), pipeline='"
+      << params_.loop_closure_pipeline_file << "'");
+    return;
+  }
+
   lc_thread_ = std::thread(&Mapper::loop_closure_thread_loop, this);
 
   MRPT_LOG_INFO_STREAM(
     "[loop_closure] started, pipeline='" << params_.loop_closure_pipeline_file << "'");
+}
+
+std::size_t Mapper::run_loop_closure_scan_now(bool forceFullScan)
+{
+  return run_loop_closure_scan(forceFullScan);
 }
 
 void Mapper::stop_loop_closure_thread() { stop_loop_closure_thread_locked(/*resetEngine=*/true); }
@@ -95,15 +112,17 @@ void Mapper::request_loop_closure_scan()
 
 void Mapper::stop_loop_closure_thread_locked(bool resetEngine)
 {
-  if (!lc_thread_.joinable()) {
-    return;
+  // The thread is optional (enable_loop_closure_thread), but the engine is
+  // not: releasing it must not depend on a thread having been spawned, or a
+  // caller-driven configuration would keep a stale engine across initialize().
+  if (lc_thread_.joinable()) {
+    {
+      auto lk = mrpt::lockHelper(lc_wakeup_mutex_);
+      lc_should_exit_.store(true);
+    }
+    lc_wakeup_cv_.notify_all();
+    lc_thread_.join();
   }
-  {
-    auto lk = mrpt::lockHelper(lc_wakeup_mutex_);
-    lc_should_exit_.store(true);
-  }
-  lc_wakeup_cv_.notify_all();
-  lc_thread_.join();
   if (resetEngine) {
     lc_engine_.reset();
   }

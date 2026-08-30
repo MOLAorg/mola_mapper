@@ -167,6 +167,7 @@ void Parameters::loadFrom(const mrpt::containers::yaml & cfg)
   // Loop closure
   // -----------------------------------------------------
   MCP_LOAD_OPT(cfg, loop_closure_enabled);
+  MCP_LOAD_OPT(cfg, enable_loop_closure_thread);
   MCP_LOAD_OPT(cfg, loop_closure_pipeline_file);
   MCP_LOAD_OPT(cfg, loop_closure_check_period_sec);
   MCP_LOAD_OPT(cfg, loop_closure_min_new_keyframes);

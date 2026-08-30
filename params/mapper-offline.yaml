@@ -1,0 +1,42 @@
+# ============================================================================
+# Default parameters for `mola-mapper-cli` (offline simplemap optimization)
+# ============================================================================
+# A FLAT parameter fragment, like params/mapper-common.yaml, which it imports:
+# `mola-mapper-cli -c <this file>` wraps it in the `params:` node the module
+# expects.
+#
+# What differs from a live run, and why:
+#  - Loop closure is ON and the finalize pass is enabled. Offline, the whole
+#    trajectory already exists, so the batch rounds can close loops that an
+#    online scan can never reach (both endpoints must exist AND drift must
+#    already be small, which for a big revisit only happens near the end).
+#  - The gauge is pinned. There is no GNSS here, so without an anchor the graph
+#    is gauge-free and only relative geometry is determined.
+#  - Nothing sets the background-thread or wall-clock knobs: mola-mapper-cli
+#    forces those itself, after this file, so a run stays reproducible whatever
+#    a config says.
+#
+# Usage:
+#   mola-mapper-cli -c $(ros2 pkg prefix mola_mapper)/share/mola_mapper/params/mapper-offline.yaml \
+#     -i lidar_odom.simplemap --output-tum-path keyframes.tum \
+#     --input-trajectory lidar_odom.tum --output-corrected-trajectory corrected.tum
+# ============================================================================
+
+$import: mapper-common.yaml
+
+# Pure-odometry input, no GNSS: pin the first pose or the whole graph is
+# gauge-free. See Parameters.h's link_first_pose_to_reference_origin_sigma.
+link_first_pose_to_reference_origin_sigma: ${MOLA_LINK_FIRST_POSE_SIGMA|1e-6}
+
+loop_closure_enabled: ${MOLA_MAPPER_LOOP_CLOSURE|true}
+loop_closure_pipeline_file: "${MOLA_MAPPER_LC_PIPELINE|$(ros2 pkg prefix mola_mapper)/share/mola_mapper/params/loop-closure-f2f-mapper.yaml}"
+
+# Offline scans are driven per-N-keyframes by the CLI (--lc-scan-every), so the
+# min-new-keyframes gate only has to stop a scan on a map that barely grew.
+loop_closure_min_new_keyframes: ${MOLA_MAPPER_LC_MIN_NEW_KFS|10}
+loop_closure_incremental: ${MOLA_MAPPER_LC_INCREMENTAL|true}
+loop_closure_full_scan_every_n: ${MOLA_MAPPER_LC_FULL_SCAN_EVERY_N|10}
+
+# The batch pass is where an offline run earns its keep: each round's
+# correction brings further candidates into ICP's convergence basin.
+loop_closure_finalize_rounds: ${MOLA_MAPPER_LC_FINALIZE_ROUNDS|8}

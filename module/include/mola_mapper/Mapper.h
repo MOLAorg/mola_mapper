@@ -35,10 +35,12 @@
 #include <mola_mapper/WorldModelState.h>
 #include <mrpt/containers/yaml.h>
 #include <mrpt/core/WorkerThreadsPool.h>
+#include <mrpt/maps/CSimpleMap.h>
 #include <mrpt/obs/CObservationGPS.h>
 #include <mrpt/obs/CObservationIMU.h>
 #include <mrpt/obs/CObservationOdometry.h>
 #include <mrpt/poses/CPose2D.h>
+#include <mrpt/poses/CPose3DInterpolator.h>
 #include <mrpt/poses/CPose3DPDFGaussian.h>
 
 #include <array>
@@ -157,6 +159,48 @@ public:
   // --- SharedKeyframeMap ---
   std::optional<SharedKeyframeMap::KeyFrameID> requestInsertKeyframe(
     const SharedKeyframeMap::KeyframeInsertRequest & req) override;
+
+  /** @} */
+
+  /** @name Offline / batch driving
+   *
+   * A live run is paced by the incoming data and by two background threads, so
+   * the same input replayed twice need not produce the same map. These entry
+   * points let a batch caller own the schedule instead: with
+   * enable_optimizer_thread and enable_loop_closure_thread both false, the
+   * solve and every loop-closure scan happen exactly where the caller asks for
+   * them, and the result depends only on the input.
+   * @{ */
+
+  /// Run one iSAM2 solve now and refresh the cached per-keyframe estimates.
+  /// Only needed when the background optimizer thread is disabled.
+  void optimize_now();
+
+  /// Run one loop-closure scan on the current map, synchronously, on the
+  /// calling thread. Returns the number of edges merged. A no-op when loop
+  /// closure is disabled. `forceFullScan` bypasses both the
+  /// min-new-keyframes gate and the incremental-scan window.
+  std::size_t run_loop_closure_scan_now(bool forceFullScan = false);
+
+  /// Batch loop-closure pass over a complete trajectory: repeat full scan +
+  /// re-optimization until a round finds nothing new, or
+  /// loop_closure_finalize_rounds is exhausted. Online scans only close loops
+  /// near the end of a run (both endpoints must exist and drift must already
+  /// be small); this pass recovers the rest now that the whole trajectory is
+  /// present, each round's optimization shrinking the drift for the next. Runs
+  /// on the calling thread and stops the background threads first. No-op when
+  /// loop_closure_finalize_rounds is 0. Called automatically on destruction;
+  /// call it explicitly to read the results before the object goes away.
+  /// (Mapper_LoopClosure.cpp)
+  void finalize_loop_closures();
+
+  /// The optimized keyframe poses, in {reference_frame}, as a time-indexed
+  /// trajectory. Keyframes with no committed solve yet are omitted.
+  [[nodiscard]] mrpt::poses::CPose3DInterpolator estimated_keyframe_trajectory() const;
+
+  /// The central map as a simplemap: optimized keyframe poses plus each
+  /// keyframe's stored observations.
+  [[nodiscard]] mrpt::maps::CSimpleMap current_simple_map() const;
 
   /** @} */
 
@@ -696,15 +740,6 @@ private:
   /// available (no-op afterwards, or when built against an older mola_kernel
   /// without the metrics API). Called at the start of each scan.
   void register_lc_metrics_if_needed();
-
-  /// After the dataset ends, repeatedly runs full loop-closure scans interleaved
-  /// with a synchronous re-optimization, until a round finds no new loops or the
-  /// round budget is exhausted. Online scans only close loops near the end of the
-  /// run (both endpoints must exist and drift must already be small); this batch
-  /// pass recovers the remaining loops now that the whole trajectory is present
-  /// and each round's optimization shrinks the drift for the next. No-op when
-  /// loop_closure_finalize_rounds is 0. (Mapper_LoopClosure.cpp)
-  void finalize_loop_closures();
 
   /// Adds one accepted loop-closure edge as a robust BetweenFactor(T(from),
   /// T(to)) built from the proposed relative pose + covariance. Returns false

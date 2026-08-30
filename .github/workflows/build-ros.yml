@@ -91,19 +91,20 @@ jobs:
       # without them. Clone exactly those into the workspace so colcon builds
       # them from source; the ones apt can already provide are left alone.
       # See dependencies.repos.
+      # Two MOLA dependencies have no released binary that can build this
+      # package, on any distro -- see dependencies.repos for which and why.
+      #
       # NOTE the clone target is OUTSIDE the workspace. colcon stops descending
       # once a directory is itself a package, and this repo's package.xml is at
       # the root, so anything cloned underneath is never discovered -- the build
       # then fails at find_package() with the source sitting right there. Hence
       # a sibling directory plus --base-paths below.
-      - name: Fetch dependencies apt cannot provide
+      - name: Fetch source dependencies
         run: |
           apt-get update
-          apt-get install -y python3-vcstool python3-yaml
-          python3 .github/scripts/filter_unavailable_deps.py \
-            dependencies.repos "${{ matrix.ros_distribution }}" > /tmp/missing.repos
+          apt-get install -y python3-vcstool
           mkdir -p /tmp/mola_deps
-          vcs import /tmp/mola_deps < /tmp/missing.repos
+          vcs import /tmp/mola_deps < dependencies.repos
           # vcs import does not initialize submodules, and MOLA repos vendor
           # third-party code that way (mola_metric_maps' 3rdparty/), which fails
           # at add_subdirectory() on an empty directory rather than saying so.

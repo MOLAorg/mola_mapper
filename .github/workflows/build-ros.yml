@@ -91,15 +91,20 @@ jobs:
       # without them. Clone exactly those into the workspace so colcon builds
       # them from source; the ones apt can already provide are left alone.
       # See dependencies.repos.
+      # NOTE the clone target is OUTSIDE the workspace. colcon stops descending
+      # once a directory is itself a package, and this repo's package.xml is at
+      # the root, so anything cloned underneath is never discovered -- the build
+      # then fails at find_package() with the source sitting right there. Hence
+      # a sibling directory plus --base-paths below.
       - name: Fetch dependencies apt cannot provide
         run: |
           apt-get update
           apt-get install -y python3-vcstool python3-yaml
           python3 .github/scripts/filter_unavailable_deps.py \
             dependencies.repos "${{ matrix.ros_distribution }}" > /tmp/missing.repos
-          mkdir -p _deps
-          vcs import _deps < /tmp/missing.repos
-          ls -la _deps
+          mkdir -p /tmp/mola_deps
+          vcs import /tmp/mola_deps < /tmp/missing.repos
+          ls -la /tmp/mola_deps
 
       - name: Install rosdep dependencies
         run: |
@@ -110,7 +115,7 @@ jobs:
           # this particular distro/channel). Don't fail the step on that either,
           # so the build/test steps below still run and report their own,
           # more specific errors instead of the job stopping here.
-          rosdep install --from-paths . --ignore-src -r -y || \
+          rosdep install --from-paths . /tmp/mola_deps --ignore-src -r -y || \
             echo "::warning::rosdep install reported missing dependencies; continuing anyway"
 
       - name: Build with colcon
@@ -118,6 +123,7 @@ jobs:
           . /opt/ros/*/setup.sh
           env
           MAKEFLAGS="-j2" colcon build \
+            --base-paths . /tmp/mola_deps \
             --symlink-install \
             --parallel-workers 2 \
             --event-handlers console_direct+

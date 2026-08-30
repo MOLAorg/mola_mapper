@@ -8,6 +8,11 @@
 # distro where the binary exists, and keeps the build green on one where it
 # does not.
 #
+# Cloned into a directory OUTSIDE this repo, and built via colcon --base-paths.
+# Not into a subdirectory: colcon stops descending once a directory is itself a
+# package, and this repo's package.xml is at the root, so a nested clone is
+# silently never discovered.
+#
 # One entry per package, keyed by the package name, not the repository name:
 # the availability probe derives the .deb name from the key.
 repositories:

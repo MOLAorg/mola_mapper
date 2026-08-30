@@ -31,10 +31,18 @@ jobs:
             ros_distribution: humble
             use_ros_testing: false
 
-          - name: humble testing
-            docker_image: ubuntu:jammy
-            ros_distribution: humble
-            use_ros_testing: true
+          # DISABLED: not our failure and not fixable here. ros-tooling/setup-ros
+          # fetches ros2-testing-apt-source_<ver>.jammy_all.deb from the
+          # ros-infrastructure/ros-apt-source releases, and that asset 404s --
+          # the ros2-testing channel no longer publishes a jammy variant. The
+          # job dies in setup-ros, before any of this repo's code is touched.
+          # mola_lidar_odometry has the same row commented out for the same
+          # reason. Re-enable if upstream starts publishing it again; humble
+          # stable still covers the distro.
+          #- name: humble testing
+          #  docker_image: ubuntu:jammy
+          #  ros_distribution: humble
+          #  use_ros_testing: true
 
           # Jazzy Jalisco (May 2024 - May 2029)
           - name: jazzy stable

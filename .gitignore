@@ -20,3 +20,6 @@ CMakeLists.txt.user
 **/.vscode
 .cache
 
+
+# CI: dependencies cloned from source when apt cannot provide them
+_deps

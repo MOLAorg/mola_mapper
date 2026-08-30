@@ -1,0 +1,20 @@
+# MOLA dependencies of this package that may not be installable as a binary
+# .deb on every ROS distro/channel this repo's CI builds.
+#
+# The CI workflow does NOT import these unconditionally: for each entry it
+# first asks apt whether `ros-<distro>-<key with _ replaced by ->` can be
+# installed, and only clones the ones that cannot (see
+# .github/scripts/filter_unavailable_deps.py). So this file costs nothing on a
+# distro where the binary exists, and keeps the build green on one where it
+# does not.
+#
+# One entry per package, keyed by the package name, not the repository name:
+# the availability probe derives the .deb name from the key.
+repositories:
+  mola_sm_loop_closure:
+    # Released in rosdistro but not always synced to the main `ros2` apt repo
+    # for every distro at the same time; it is a hard dependency here, so a
+    # missing binary otherwise fails the whole build.
+    type: git
+    url: https://github.com/MOLAorg/mola_sm_loop_closure.git
+    version: develop

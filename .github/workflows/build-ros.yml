@@ -1,7 +1,15 @@
 # Based on GTSAM file (by @ProfFan)
 name: CI Build colcon
 
-on: [ push ]
+on:
+  push:
+    branches: ["develop"]
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+# Minimal GITHUB_TOKEN permissions (principle of least privilege)
+permissions:
+  contents: read
 
 jobs:
   build_docker:
@@ -12,6 +20,9 @@ jobs:
       DEBIAN_FRONTEND: noninteractive
     continue-on-error: ${{ matrix.allow_failure == true }}
     strategy:
+      # Without this, one broken distro cancels the sibling jobs, so a known
+      # failure hides the results that would otherwise be actionable.
+      fail-fast: false
       matrix:
         include:
           # Humble Hawksbill (May 2022 - May 2027)
@@ -48,7 +59,16 @@ jobs:
           apt-get -y install git curl gnupg2 ca-certificates
           git clone https://$TOKEN@github.com/$GITHUB_REPOSITORY.git --recursive "$GITHUB_WORKSPACE"
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          git checkout $GITHUB_SHA
+          # Check out the exact commit the event points at. On push, GITHUB_SHA
+          # is immutable (GITHUB_REF would track the branch tip, which may have
+          # advanced). On pull_request, GITHUB_SHA is the auto-generated merge
+          # commit (not fetchable by SHA), so fetch GITHUB_REF (refs/pull/N/merge).
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            git fetch origin "$GITHUB_REF"
+          else
+            git fetch origin "$GITHUB_SHA"
+          fi
+          git checkout FETCH_HEAD
           git submodule update --init --recursive
 
       # Pre-built ros:* images have ROS base but need colcon/rosdep tooling.
@@ -66,11 +86,32 @@ jobs:
           required-ros-distributions: ${{ matrix.ros_distribution }}
           use-ros2-testing: ${{ matrix.use_ros_testing }}
 
+      # Some MOLA dependencies are released in rosdistro but reach a given
+      # distro's apt repo later than others, and this package cannot build
+      # without them. Clone exactly those into the workspace so colcon builds
+      # them from source; the ones apt can already provide are left alone.
+      # See dependencies.repos.
+      - name: Fetch dependencies apt cannot provide
+        run: |
+          apt-get update
+          apt-get install -y python3-vcstool python3-yaml
+          python3 .github/scripts/filter_unavailable_deps.py \
+            dependencies.repos "${{ matrix.ros_distribution }}" > /tmp/missing.repos
+          mkdir -p _deps
+          vcs import _deps < /tmp/missing.repos
+          ls -la _deps
+
       - name: Install rosdep dependencies
         run: |
           . /opt/ros/*/setup.sh
           rosdep update
-          rosdep install --from-paths . --ignore-src -r -y
+          # -r: keep installing the rest of the keys instead of stopping at the
+          # first one rosdep can't resolve (e.g. a package not yet released on
+          # this particular distro/channel). Don't fail the step on that either,
+          # so the build/test steps below still run and report their own,
+          # more specific errors instead of the job stopping here.
+          rosdep install --from-paths . --ignore-src -r -y || \
+            echo "::warning::rosdep install reported missing dependencies; continuing anyway"
 
       - name: Build with colcon
         run: |
@@ -84,5 +125,7 @@ jobs:
       - name: Run unit tests
         run: |
           . /opt/ros/*/setup.sh
-          colcon test --event-handlers console_direct+
+          # This repo's own tests only: anything under _deps/ is a dependency
+          # built from source here, not something this CI job is testing.
+          colcon test --packages-select mola_mapper --event-handlers console_direct+
           colcon test-result --verbose

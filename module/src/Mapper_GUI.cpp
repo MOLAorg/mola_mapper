@@ -22,14 +22,14 @@
 
 #include <mola_mapper/Mapper.h>
 #include <mrpt/core/lock_helper.h>
-#include <mrpt/opengl/CCylinder.h>
-#include <mrpt/opengl/CGridPlaneXY.h>
-#include <mrpt/opengl/CSetOfLines.h>
-#include <mrpt/opengl/CSetOfObjects.h>
-#include <mrpt/opengl/CSphere.h>
-#include <mrpt/opengl/CText.h>
-#include <mrpt/opengl/stock_objects.h>
 #include <mrpt/system/datetime.h>
+#include <mrpt/viz/CCylinder.h>
+#include <mrpt/viz/CGridPlaneXY.h>
+#include <mrpt/viz/CSetOfLines.h>
+#include <mrpt/viz/CSetOfObjects.h>
+#include <mrpt/viz/CSphere.h>
+#include <mrpt/viz/CText.h>
+#include <mrpt/viz/stock_objects.h>
 
 #include <algorithm>
 #include <array>
@@ -104,7 +104,7 @@ int closestPresetIndex(const std::array<float, N> & presets, float value)
 // derived from MRPT's R = Rz(yaw)*Ry(pitch)*Rx(roll) convention applied to
 // local Z (roll is a free rotation about the cylinder's own axis, so 0 is
 // fine). Returns nullptr for a degenerate (near-zero-length) edge.
-mrpt::opengl::CCylinder::Ptr makeEdgeCylinder(
+mrpt::viz::CCylinder::Ptr makeEdgeCylinder(
   const mrpt::math::TPoint3D & a, const mrpt::math::TPoint3D & b, float radius)
 {
   const mrpt::math::TPoint3D d = b - a;
@@ -116,7 +116,7 @@ mrpt::opengl::CCylinder::Ptr makeEdgeCylinder(
   const double yaw = std::atan2(d.y, d.x);
 
   auto glCyl =
-    mrpt::opengl::CCylinder::Create(radius, radius, static_cast<float>(len), kEdgeCylinderSlices);
+    mrpt::viz::CCylinder::Create(radius, radius, static_cast<float>(len), kEdgeCylinderSlices);
   glCyl->setHasBases(false, false);
   glCyl->setPose(mrpt::poses::CPose3D(a.x, a.y, a.z, yaw, pitch, 0.0));
   return glCyl;
@@ -242,21 +242,21 @@ void Mapper::updateVisualization()
 
   // --- Keyframe tree (corners + trajectory polyline) ---
   {
-    auto glKfs = mrpt::opengl::CSetOfObjects::Create();
+    auto glKfs = mrpt::viz::CSetOfObjects::Create();
     if (viz_show_keyframes_.load()) {
-      auto glPath = mrpt::opengl::CSetOfLines::Create();
+      auto glPath = mrpt::viz::CSetOfLines::Create();
       glPath->setColor_u8(0x00, 0xc0, 0x00, 0xff);  // green trajectory
       bool first = true;
       mrpt::math::TPoint3D prev;
       for (const auto & [kfId, pose] : kfPoses) {
         (void)kfId;
         if (kfCornerScale > 0) {
-          auto glCorner = mrpt::opengl::stock_objects::CornerXYZ(kfCornerScale);
+          auto glCorner = mrpt::viz::stock_objects::CornerXYZ(kfCornerScale);
           glCorner->setPose(pose);
           glKfs->insert(glCorner);
         }
         if (kfSphereRadius > 0) {
-          auto glSphere = mrpt::opengl::CSphere::Create(kfSphereRadius, 10 /*few polygons*/);
+          auto glSphere = mrpt::viz::CSphere::Create(kfSphereRadius, 10 /*few polygons*/);
           glSphere->setColor_u8(0xff, 0xa0, 0x00, 0xff);  // orange
           glSphere->setLocation(pose.translation());
           glKfs->insert(glSphere);
@@ -278,7 +278,7 @@ void Mapper::updateVisualization()
   // --- Graph edges (rendered as thin CCylinder tubes, not GL lines: lines are
   //     barely visible at typical zoom levels / with anti-aliasing off) ---
   {
-    auto glEdges = mrpt::opengl::CSetOfObjects::Create();
+    auto glEdges = mrpt::viz::CSetOfObjects::Create();
     if (viz_show_edges_.load()) {
       const float edgeRadius = viz_edge_cylinder_radius_.load();
       for (const auto & [a, b] : edges) {
@@ -306,7 +306,7 @@ void Mapper::updateVisualization()
 
   // --- Ground grid (XY extent from the trajectory bounding box) ---
   {
-    auto glGroundGrid = mrpt::opengl::CSetOfObjects::Create();
+    auto glGroundGrid = mrpt::viz::CSetOfObjects::Create();
     if (viz_show_ground_grid_.load()) {
       const float spacing = viz_params_.getOrDefault<float>("ground_grid_spacing", 10.0f);
 
@@ -328,7 +328,7 @@ void Mapper::updateVisualization()
         yMax += spacing;
       }
 
-      auto glGrid = mrpt::opengl::CGridPlaneXY::Create();
+      auto glGrid = mrpt::viz::CGridPlaneXY::Create();
       glGrid->setPlaneLimits(xMin, xMax, yMin, yMax);
       glGrid->setGridFrequency(spacing);
       glGrid->setColor_u8(0xff, 0xff, 0xff, 0x80);
@@ -340,7 +340,7 @@ void Mapper::updateVisualization()
 
   // --- Per-source movable frame nodes + visible markers ---
   {
-    auto glMarkers = mrpt::opengl::CSetOfObjects::Create();
+    auto glMarkers = mrpt::viz::CSetOfObjects::Create();
     for (const auto & [name, pose] : odomFrames) {
       // Functional part: reposition the movable frame node front ends draw
       // their dense clouds / local map under (see VizInterface::update_3d_object
@@ -352,11 +352,11 @@ void Mapper::updateVisualization()
       if (!viz_show_odom_frames_.load()) {
         continue;
       }
-      auto glCorner = mrpt::opengl::stock_objects::CornerXYZ(1.0f);
+      auto glCorner = mrpt::viz::stock_objects::CornerXYZ(1.0f);
       glCorner->setPose(pose);
       glMarkers->insert(glCorner);
 
-      auto glText = mrpt::opengl::CText::Create(name);
+      auto glText = mrpt::viz::CText::Create(name);
       glText->setColor_u8(0xff, 0xff, 0x00, 0xff);
       glText->setPose(pose);
       glMarkers->insert(glText);
@@ -372,11 +372,11 @@ void Mapper::updateVisualization()
     if (viz_reference_frame_.load() == 1) {
       const mrpt::poses::CPose3D enuInMap =
         enuToMap.has_value() ? (mrpt::poses::CPose3D() - enuToMap->mean) : mrpt::poses::CPose3D();
-      auto glEnu = mrpt::opengl::stock_objects::CornerXYZ(2.0f);
+      auto glEnu = mrpt::viz::stock_objects::CornerXYZ(2.0f);
       glEnu->setPose(enuInMap);
       glMarkers->insert(glEnu);
 
-      auto glEnuText = mrpt::opengl::CText::Create("enu");
+      auto glEnuText = mrpt::viz::CText::Create("enu");
       glEnuText->setColor_u8(0x00, 0xff, 0xff, 0xff);  // cyan, distinct from odom
       glEnuText->setPose(enuInMap);
       glMarkers->insert(glEnuText);

@@ -21,14 +21,14 @@ project(mola_mapper LANGUAGES CXX)
 find_package(mola_common REQUIRED)
 
 # find dependencies:
-find_package(mrpt-maps REQUIRED)
-find_package(mrpt-tclap REQUIRED)
+find_package(mrpt_maps REQUIRED)
+find_package(CLI11 REQUIRED)
 # Not linked directly here, but mola_kernel's VizInterface carries mrpt::gui in
 # its interface link libraries, and CMake requires the imported target to exist
 # even when this package only inherits it. It happens to be defined already on
 # distros where another find_package above pulls it in; humble is not one of
 # them, and the job that would have said so had been dying at rosdep instead.
-find_package(mrpt-gui REQUIRED)
+find_package(mrpt_gui REQUIRED)
 find_package(mola_kernel REQUIRED)
 find_package(mola_yaml REQUIRED)
 find_package(mp2p_icp REQUIRED)
@@ -66,7 +66,7 @@ mola_add_library(
   SOURCES ${LIB_SOURCES} ${LIB_PUBLIC_HEADERS}
   PUBLIC_LINK_LIBRARIES
     gtsam
-    mrpt::maps
+    mrpt::mrpt_maps
     mola::mola_kernel
     mola::mola_yaml
     mola::mp2p_icp
@@ -81,7 +81,7 @@ mola_add_library(
     mola_yaml
     mp2p_icp
     mp2p_icp_filters
-    mrpt-maps
+    mrpt_maps
     mola_pose_list
     gtsam2mrpt_serial
     mola_gtsam_factors
@@ -110,8 +110,8 @@ mola_add_executable(
   SOURCES apps/mola-mapper-cli.cpp
   LINK_LIBRARIES
   ${PROJECT_NAME}
-  mrpt::maps
-  mrpt::tclap
+  mrpt::mrpt_maps
+  CLI11::CLI11
 )
 
 if(mola_input_rawlog_FOUND)

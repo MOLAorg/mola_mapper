@@ -27,9 +27,9 @@
   <depend>mola_georeferencing</depend>
   <depend>mola_sm_loop_closure</depend>
 
-  <depend>mrpt_libtclap</depend>
-  <depend>mrpt_libmaps</depend>
-  <depend>mrpt_libgui</depend>
+  <depend>cli11</depend>
+  <depend>mrpt_maps</depend>
+  <depend>mrpt_gui</depend>
 
   <!-- dataset input sources (all are actually optional) -->
   <depend>mola_input_rawlog</depend>

@@ -58,7 +58,6 @@
 
 #include <mola_mapper/Mapper.h>
 #include <mola_yaml/yaml_helpers.h>
-#include <mrpt/3rdparty/tclap/CmdLine.h>
 #include <mrpt/containers/yaml.h>
 #include <mrpt/core/bits_math.h>
 #include <mrpt/core/exceptions.h>
@@ -73,6 +72,7 @@
 #include <mrpt/poses/CPose3DPDFGaussian.h>
 #include <mrpt/system/filesystem.h>
 
+#include <CLI/CLI.hpp>
 #include <algorithm>
 #include <cstdlib>
 #include <iostream>
@@ -88,147 +88,103 @@ namespace
 {
 struct Cli
 {
-  TCLAP::CmdLine cmd{"mola-mapper-cli", ' ', "0.1.0"};
+  CLI::App cmd{"mola-mapper-cli"};
 
-  TCLAP::ValueArg<std::string> argInput{
-    "i",  "input",         "Input .simplemap file to optimize offline.",
-    true, "map.simplemap", "map.simplemap",
-    cmd};
+  std::string argInput{"map.simplemap"};
+  std::string argConfig{"mapper-offline.yaml"};
+  std::string argOutputSimpleMap;
+  std::string argOutputTum;
+  std::string argInputTrajectory;
+  std::string argOutputCorrectedTrajectory;
+  std::string argLcPipeline;
+  bool argNoLoopClosure{false};
+  int argLcScanEvery{50};
+  int argLcFinalizeRounds{-1};
+  std::string argExternalsDir;
+  bool argLazyLoadOutput{false};
+  bool argNoDeterministic{false};
+  bool argIgnoreInputTwist{false};
+  double argTwistSigmaLin{0.5};
+  double argTwistSigmaAng{5.0};
+  std::string argVerbosity{"INFO"};
 
-  TCLAP::ValueArg<std::string> argConfig{
-    "c",
-    "config",
-    "YAML parameter file for mola::mapper::Mapper. This is the same FLAT "
-    "fragment the mola-cli launchers `$import` (e.g. the installed "
-    "share/mola_mapper/params/mapper-offline.yaml), not a whole mola-cli "
-    "system definition.",
-    true,
-    "mapper-offline.yaml",
-    "mapper-offline.yaml",
-    cmd};
+  CLI::Option * optOutputSimpleMap{nullptr};
+  CLI::Option * optOutputTum{nullptr};
+  CLI::Option * optInputTrajectory{nullptr};
+  CLI::Option * optOutputCorrectedTrajectory{nullptr};
+  CLI::Option * optLcPipeline{nullptr};
 
-  TCLAP::ValueArg<std::string> argOutputSimpleMap{
-    "o",
-    "output-simplemap",
-    "Write the optimized map here (keyframe poses corrected, observations "
-    "preserved).",
-    false,
-    "",
-    "optimized.simplemap",
-    cmd};
-
-  TCLAP::ValueArg<std::string> argOutputTum{
-    "",
-    "output-tum-path",
-    "Write the optimized KEYFRAME trajectory here, in TUM format.",
-    false,
-    "",
-    "keyframes.tum",
-    cmd};
-
-  TCLAP::ValueArg<std::string> argInputTrajectory{
-    "",
-    "input-trajectory",
-    "Dense front-end trajectory (TUM) to correct with the mapper's optimized "
-    "keyframe poses. Requires --output-corrected-trajectory.",
-    false,
-    "",
-    "lidar_odom.tum",
-    cmd};
-
-  TCLAP::ValueArg<std::string> argOutputCorrectedTrajectory{
-    "",
-    "output-corrected-trajectory",
-    "Write the corrected DENSE trajectory here, in TUM format. Requires "
-    "--input-trajectory.",
-    false,
-    "",
-    "corrected.tum",
-    cmd};
-
-  TCLAP::ValueArg<std::string> argLcPipeline{
-    "",
-    "lc-pipeline",
-    "Override the loop-closure pipeline YAML (mola_sm_loop_closure F2F "
-    "pipeline) named by the config file.",
-    false,
-    "",
-    "loop-closure-f2f-mapper.yaml",
-    cmd};
-
-  TCLAP::SwitchArg argNoLoopClosure{
-    "", "no-loop-closure",
-    "Disable loop closure: optimize the odometry chain alone. Useful as the "
-    "reference arm for measuring what loop closure buys.",
-    cmd};
-
-  TCLAP::ValueArg<int> argLcScanEvery{
-    "",
-    "lc-scan-every",
-    "Run one loop-closure scan every N ingested keyframes (0 = none during "
-    "ingestion, rely on the finalize pass alone). Default: 50.",
-    false,
-    50,
-    "N",
-    cmd};
-
-  TCLAP::ValueArg<int> argLcFinalizeRounds{
-    "",
-    "lc-finalize-rounds",
-    "Override the config's loop_closure_finalize_rounds: full scan + "
-    "re-optimization rounds after ingestion, until a round finds nothing new.",
-    false,
-    -1,
-    "N",
-    cmd};
-
-  TCLAP::ValueArg<std::string> argExternalsDir{
-    "",
-    "externals-dir",
-    "Lazy-load base directory for a simplemap with externally-stored "
-    "observations. If unset, a sibling directory named '<input>_Images' is "
-    "used when it exists.",
-    false,
-    "",
-    "<ExternalsDirectory>",
-    cmd};
-
-  TCLAP::SwitchArg argLazyLoadOutput{
-    "", "lazy-load-output",
-    "Externalize the output simplemap's point clouds into a sidecar directory, "
-    "so it stays small and loads fast downstream.",
-    cmd};
-
-  TCLAP::SwitchArg argNoDeterministic{
-    "", "no-deterministic",
-    "Let the loop-closure detector use all cores. Much faster, and the run is "
-    "then NOT reproducible: two runs that close loops give different maps. Use "
-    "when the map matters and repeating the exact run does not.",
-    cmd};
-
-  TCLAP::SwitchArg argIgnoreInputTwist{
-    "", "ignore-input-twist",
-    "Do not feed the input simplemap's per-keyframe velocities into the graph. "
-    "Diagnostic only: without them the constant-velocity factor between "
-    "keyframes has no velocity observation to agree with and deforms the map "
-    "(measured 7.1 -> 34.1 m APE on KITTI-00).",
-    cmd};
-
-  TCLAP::ValueArg<double> argTwistSigmaLin{
-    "", "twist-sigma-lin", "Sigma [m/s] of the input keyframe velocities.", false, 0.5, "m/s", cmd};
-
-  TCLAP::ValueArg<double> argTwistSigmaAng{
-    "",
-    "twist-sigma-ang",
-    "Sigma [deg/s] of the input keyframe angular velocities.",
-    false,
-    5.0,
-    "deg/s",
-    cmd};
-
-  TCLAP::ValueArg<std::string> argVerbosity{
-    "v",    "verbosity", "Verbosity level: ERROR|WARN|INFO|DEBUG (Default: INFO)", false, "INFO",
-    "INFO", cmd};
+  Cli()
+  {
+    cmd.add_option("-i,--input", argInput, "Input .simplemap file to optimize offline.")
+      ->required();
+    cmd
+      .add_option(
+        "-c,--config", argConfig,
+        "YAML parameter file for mola::mapper::Mapper. This is the same FLAT "
+        "fragment the mola-cli launchers `$import` (e.g. the installed "
+        "share/mola_mapper/params/mapper-offline.yaml), not a whole mola-cli "
+        "system definition.")
+      ->required();
+    optOutputSimpleMap = cmd.add_option(
+      "-o,--output-simplemap", argOutputSimpleMap,
+      "Write the optimized map here (keyframe poses corrected, observations "
+      "preserved).");
+    optOutputTum = cmd.add_option(
+      "--output-tum-path", argOutputTum,
+      "Write the optimized KEYFRAME trajectory here, in TUM format.");
+    optInputTrajectory = cmd.add_option(
+      "--input-trajectory", argInputTrajectory,
+      "Dense front-end trajectory (TUM) to correct with the mapper's optimized "
+      "keyframe poses. Requires --output-corrected-trajectory.");
+    optOutputCorrectedTrajectory = cmd.add_option(
+      "--output-corrected-trajectory", argOutputCorrectedTrajectory,
+      "Write the corrected DENSE trajectory here, in TUM format. Requires "
+      "--input-trajectory.");
+    optLcPipeline = cmd.add_option(
+      "--lc-pipeline", argLcPipeline,
+      "Override the loop-closure pipeline YAML (mola_sm_loop_closure F2F "
+      "pipeline) named by the config file.");
+    cmd.add_flag(
+      "--no-loop-closure", argNoLoopClosure,
+      "Disable loop closure: optimize the odometry chain alone. Useful as the "
+      "reference arm for measuring what loop closure buys.");
+    cmd.add_option(
+      "--lc-scan-every", argLcScanEvery,
+      "Run one loop-closure scan every N ingested keyframes (0 = none during "
+      "ingestion, rely on the finalize pass alone). Default: 50.");
+    cmd.add_option(
+      "--lc-finalize-rounds", argLcFinalizeRounds,
+      "Override the config's loop_closure_finalize_rounds: full scan + "
+      "re-optimization rounds after ingestion, until a round finds nothing new.");
+    cmd.add_option(
+      "--externals-dir", argExternalsDir,
+      "Lazy-load base directory for a simplemap with externally-stored "
+      "observations. If unset, a sibling directory named '<input>_Images' is "
+      "used when it exists.");
+    cmd.add_flag(
+      "--lazy-load-output", argLazyLoadOutput,
+      "Externalize the output simplemap's point clouds into a sidecar directory, "
+      "so it stays small and loads fast downstream.");
+    cmd.add_flag(
+      "--no-deterministic", argNoDeterministic,
+      "Let the loop-closure detector use all cores. Much faster, and the run is "
+      "then NOT reproducible: two runs that close loops give different maps. Use "
+      "when the map matters and repeating the exact run does not.");
+    cmd.add_flag(
+      "--ignore-input-twist", argIgnoreInputTwist,
+      "Do not feed the input simplemap's per-keyframe velocities into the graph. "
+      "Diagnostic only: without them the constant-velocity factor between "
+      "keyframes has no velocity observation to agree with and deforms the map "
+      "(measured 7.1 -> 34.1 m APE on KITTI-00).");
+    cmd.add_option(
+      "--twist-sigma-lin", argTwistSigmaLin, "Sigma [m/s] of the input keyframe velocities.");
+    cmd.add_option(
+      "--twist-sigma-ang", argTwistSigmaAng,
+      "Sigma [deg/s] of the input keyframe angular velocities.");
+    cmd.add_option(
+      "-v,--verbosity", argVerbosity, "Verbosity level: ERROR|WARN|INFO|DEBUG (Default: INFO)");
+  }
 };
 
 /// The timestamp a keyframe stands for. A simplemap stores no keyframe stamp of
@@ -345,7 +301,7 @@ void run_offline_mapping(Cli & cli)
   // ---------------------------------------------------------------------
   // 1) Configuration
   // ---------------------------------------------------------------------
-  const auto configFile = cli.argConfig.getValue();
+  const auto configFile = cli.argConfig;
   ASSERT_FILE_EXISTS_(configFile);
 
   mrpt::containers::yaml params = mola::load_yaml_file(configFile);
@@ -354,16 +310,16 @@ void run_offline_mapping(Cli & cli)
     "The config file must be a map of mola::mapper::Mapper parameters (the "
     "same flat fragment the launchers `$import`).");
 
-  if (cli.argLcPipeline.isSet()) {
-    params["loop_closure_pipeline_file"] = cli.argLcPipeline.getValue();
+  if (cli.optLcPipeline->count() > 0) {
+    params["loop_closure_pipeline_file"] = cli.argLcPipeline;
   }
-  if (cli.argNoLoopClosure.getValue()) {
+  if (cli.argNoLoopClosure) {
     params["loop_closure_enabled"] = false;
   }
-  if (cli.argLcFinalizeRounds.getValue() >= 0) {
-    params["loop_closure_finalize_rounds"] = cli.argLcFinalizeRounds.getValue();
+  if (cli.argLcFinalizeRounds >= 0) {
+    params["loop_closure_finalize_rounds"] = cli.argLcFinalizeRounds;
   }
-  if (cli.argLazyLoadOutput.getValue()) {
+  if (cli.argLazyLoadOutput) {
     params["generate_lazy_load_scan_files"] = true;
   }
 
@@ -382,7 +338,7 @@ void run_offline_mapping(Cli & cli)
   // On by default because that is what this program is for. An explicitly
   // exported LC_DETERMINISTIC still wins over the default (overwrite=0), while
   // --no-deterministic wins over both.
-  if (cli.argNoDeterministic.getValue()) {
+  if (cli.argNoDeterministic) {
     ::setenv("LC_DETERMINISTIC", "false", /*overwrite=*/1);
     std::cout << "[mola-mapper-cli] Loop closure: parallel (NOT reproducible).\n";
   } else {
@@ -395,10 +351,10 @@ void run_offline_mapping(Cli & cli)
   // ---------------------------------------------------------------------
   // 2) Input map
   // ---------------------------------------------------------------------
-  const auto inputFile = cli.argInput.getValue();
+  const auto inputFile = cli.argInput;
   ASSERT_FILE_EXISTS_(inputFile);
 
-  std::string lazyLoadBaseDir = cli.argExternalsDir.getValue();
+  std::string lazyLoadBaseDir = cli.argExternalsDir;
   if (lazyLoadBaseDir.empty()) {
     const auto candidate = mrpt::system::pathJoin(
       {mrpt::system::extractFileDirectory(inputFile),
@@ -428,7 +384,7 @@ void run_offline_mapping(Cli & cli)
 
   {
     using vl = mrpt::typemeta::TEnumType<mrpt::system::VerbosityLevel>;
-    mapper->setMinLoggingLevel(vl::name2value(cli.argVerbosity.getValue()));
+    mapper->setMinLoggingLevel(vl::name2value(cli.argVerbosity));
   }
   mapper->initialize(cfg);
 
@@ -482,7 +438,7 @@ void run_offline_mapping(Cli & cli)
   // difference between these and the optimized ones.
   std::map<mrpt::Clock::time_point, mrpt::poses::CPose3D> originalKfPoses;
 
-  const int scanEvery = std::max(0, cli.argLcScanEvery.getValue());
+  const int scanEvery = std::max(0, cli.argLcScanEvery);
   std::size_t loopsOnline = 0;
 
   // Per-keyframe velocity, and why it is not optional in practice. The graph
@@ -495,12 +451,12 @@ void run_offline_mapping(Cli & cli)
   // the platform actually accelerates -- 7.1 -> 34.1 m APE on KITTI-00, a
   // corner-cutting deformation, not a divergence. A simplemap already stores
   // the front end's own per-keyframe twist, so feed it.
-  const bool useTwist = !cli.argIgnoreInputTwist.getValue();
+  const bool useTwist = !cli.argIgnoreInputTwist;
   mrpt::math::CMatrixDouble66 twistCov;
   twistCov.setZero();
   {
-    const double sl = cli.argTwistSigmaLin.getValue();
-    const double sa = mrpt::DEG2RAD(cli.argTwistSigmaAng.getValue());
+    const double sl = cli.argTwistSigmaLin;
+    const double sa = mrpt::DEG2RAD(cli.argTwistSigmaAng);
     ASSERTMSG_(sl > 0 && sa > 0, "--twist-sigma-lin/ang must be positive.");
     for (int i = 0; i < 3; i++) {
       twistCov(i, i) = sl * sl;
@@ -566,8 +522,8 @@ void run_offline_mapping(Cli & cli)
   std::cout << "[mola-mapper-cli] Optimized " << optimizedKfPoses.size() << " keyframe poses.\n";
   ASSERTMSG_(!optimizedKfPoses.empty(), "The optimizer committed no keyframe poses.");
 
-  if (cli.argOutputTum.isSet() && !cli.argOutputTum.getValue().empty()) {
-    const auto & fil = cli.argOutputTum.getValue();
+  if (cli.optOutputTum->count() > 0 && !cli.argOutputTum.empty()) {
+    const auto & fil = cli.argOutputTum;
     if (!optimizedKfPoses.saveToTextFile_TUM(fil)) {
       THROW_EXCEPTION_FMT("Could not write keyframe trajectory: '%s'", fil.c_str());
     }
@@ -575,8 +531,8 @@ void run_offline_mapping(Cli & cli)
               << optimizedKfPoses.size() << " poses).\n";
   }
 
-  if (cli.argOutputSimpleMap.isSet() && !cli.argOutputSimpleMap.getValue().empty()) {
-    const auto & fil = cli.argOutputSimpleMap.getValue();
+  if (cli.optOutputSimpleMap->count() > 0 && !cli.argOutputSimpleMap.empty()) {
+    const auto & fil = cli.argOutputSimpleMap;
     const auto outMap = mapper->current_simple_map();
     if (!outMap.saveToFile(fil)) {
       THROW_EXCEPTION_FMT("Could not write output simplemap: '%s'", fil.c_str());
@@ -586,10 +542,10 @@ void run_offline_mapping(Cli & cli)
   }
 
   const bool wantCorrected =
-    cli.argInputTrajectory.isSet() || cli.argOutputCorrectedTrajectory.isSet();
+    cli.optInputTrajectory->count() > 0 || cli.optOutputCorrectedTrajectory->count() > 0;
   if (wantCorrected) {
     ASSERTMSG_(
-      cli.argInputTrajectory.isSet() && cli.argOutputCorrectedTrajectory.isSet(),
+      cli.optInputTrajectory->count() > 0 && cli.optOutputCorrectedTrajectory->count() > 0,
       "--input-trajectory and --output-corrected-trajectory must be used together.");
 
     const auto corr = build_correction_field(originalKfPoses, optimizedKfPoses);
@@ -598,10 +554,10 @@ void run_offline_mapping(Cli & cli)
       "No keyframe timestamp survived into the optimized trajectory, so no "
       "correction field could be built.");
 
-    const auto n = write_corrected_trajectory(
-      cli.argInputTrajectory.getValue(), cli.argOutputCorrectedTrajectory.getValue(), corr);
+    const auto n =
+      write_corrected_trajectory(cli.argInputTrajectory, cli.argOutputCorrectedTrajectory, corr);
     std::cout << "[mola-mapper-cli] Wrote corrected dense trajectory: '"
-              << cli.argOutputCorrectedTrajectory.getValue() << "' (" << n << " poses, corrected "
+              << cli.argOutputCorrectedTrajectory << "' (" << n << " poses, corrected "
               << "from " << corr.size() << " keyframe corrections).\n";
   }
 
@@ -613,9 +569,7 @@ int main(int argc, char ** argv)
 {
   try {
     Cli cli;
-    if (!cli.cmd.parse(argc, argv)) {
-      return 1;
-    }
+    CLI11_PARSE(cli.cmd, argc, argv);
     run_offline_mapping(cli);
     return 0;
   } catch (const std::exception & e) {

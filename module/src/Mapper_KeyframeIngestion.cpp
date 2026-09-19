@@ -81,7 +81,7 @@ KeyFrameID Mapper::request_insert_keyframe_locked(
   // Merge the front end's raw observations into this keyframe's storage:
   auto & kfObs = state_.keyframe_observations[kfId];
   for (const auto & obs : req.observations) {
-    kfObs.insert(obs);
+    kfObs.insert(std::const_pointer_cast<mrpt::obs::CObservation>(obs));
   }
 
   // Feed this keyframe's absolute odometry pose (mean + covariance) into the

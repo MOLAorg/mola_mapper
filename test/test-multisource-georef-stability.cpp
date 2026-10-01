@@ -507,14 +507,17 @@ void check_combo(const Combo & c)
   // GNSS alone does not pin it as tight as GNSS + an absolute attitude does,
   // for the same reason map_pos_bound below splits on any_imu(): GNSS measures
   // POSITION only, so with no orientation reference the roll is weakly
-  // observable and a degenerate roll leaks into the horizontal error. That is
-  // visible in the numbers -- every combo with an attitude source lands at
-  // 1.4-1.8 m, while the two stiff GNSS-only ones settle at a roll of -7 to
-  // -9 deg. Bound the two regimes separately rather than at one value that
-  // only fits the observable one.
+  // observable and a degenerate roll leaks into the horizontal error. Bound the
+  // two regimes separately rather than at one value that only fits the
+  // observable one.
+  //
+  // The error depends strongly on the simulated noise draw: across random
+  // seeds, combos with an attitude source range ~1.2-4.5 m and GNSS-only ones
+  // ~1.2-5.7 m. The bounds leave margin over that spread, so the test catches
+  // divergence rather than the luck of one particular seed.
   double max_xy_err = 30.0;
   if (c.gnss) {
-    max_xy_err = c.imu_att ? 3.0 : 4.0;
+    max_xy_err = c.imu_att ? 6.0 : 7.5;
   }
   ASSERT_LT_(se3_xy_err, max_xy_err);
 
@@ -524,8 +527,9 @@ void check_combo(const Combo & c)
   // relative-yaw odometry edges (LIO's drift), so without an orientation source
   // position fixes cannot fully reshape the chain and a few meters of yaw-drift
   // shape error remain. With IMU the heading is pinned and recovery is tight.
+  // Without IMU, results range ~1.5-2.5 m across random seeds.
   if (c.gnss_is_cm()) {
-    const double cm_xy_bound = c.any_imu() ? 1.0 : 2.5;
+    const double cm_xy_bound = c.any_imu() ? 1.0 : 3.5;
     std::cout << "    [cm-GNSS] XY err=" << se3_xy_err << " m\n";
     ASSERT_LT_(se3_xy_err, cm_xy_bound);
   }

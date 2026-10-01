@@ -31,18 +31,10 @@ jobs:
             ros_distribution: humble
             use_ros_testing: false
 
-          # DISABLED: not our failure and not fixable here. ros-tooling/setup-ros
-          # fetches ros2-testing-apt-source_<ver>.jammy_all.deb from the
-          # ros-infrastructure/ros-apt-source releases, and that asset 404s --
-          # the ros2-testing channel no longer publishes a jammy variant. The
-          # job dies in setup-ros, before any of this repo's code is touched.
-          # mola_lidar_odometry has the same row commented out for the same
-          # reason. Re-enable if upstream starts publishing it again; humble
-          # stable still covers the distro.
-          #- name: humble testing
-          #  docker_image: ubuntu:jammy
-          #  ros_distribution: humble
-          #  use_ros_testing: true
+          - name: humble testing
+            docker_image: ubuntu:jammy
+            ros_distribution: humble
+            use_ros_testing: true
 
           # Jazzy Jalisco (May 2024 - May 2029)
           - name: jazzy stable
@@ -94,13 +86,9 @@ jobs:
           required-ros-distributions: ${{ matrix.ros_distribution }}
           use-ros2-testing: ${{ matrix.use_ros_testing }}
 
-      # Some MOLA dependencies are released in rosdistro but reach a given
-      # distro's apt repo later than others, and this package cannot build
-      # without them. Clone exactly those into the workspace so colcon builds
-      # them from source; the ones apt can already provide are left alone.
-      # See dependencies.repos.
-      # Two MOLA dependencies have no released binary that can build this
-      # package, on any distro -- see dependencies.repos for which and why.
+      # MOLA dependencies whose binaries are too old (or not yet built) to
+      # build this package are cloned and built from source instead; see
+      # dependencies.repos for which and why. Everything else comes from apt.
       #
       # NOTE the clone target is OUTSIDE the workspace. colcon stops descending
       # once a directory is itself a package, and this repo's package.xml is at
@@ -114,8 +102,9 @@ jobs:
           mkdir -p /tmp/mola_deps
           vcs import /tmp/mola_deps < dependencies.repos
           # vcs import does not initialize submodules, and MOLA repos vendor
-          # third-party code that way (mola_metric_maps' 3rdparty/), which fails
-          # at add_subdirectory() on an empty directory rather than saying so.
+          # third-party code that way (e.g. mola_sm_loop_closure's third_party/),
+          # which fails at add_subdirectory() on an empty directory rather than
+          # saying so.
           git config --global --add safe.directory '*'
           vcs custom /tmp/mola_deps --git --args submodule update --init --recursive
           ls -la /tmp/mola_deps

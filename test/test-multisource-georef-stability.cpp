@@ -363,10 +363,7 @@ RunResult run_combo(const Combo & c)
       lioOdom = lioOdom + deltaTrue;
     }
 
-    double gtYaw = 0;
-    double gtPitch = 0;
-    double gtRoll = 0;
-    gtEnu.getYawPitchRoll(gtYaw, gtPitch, gtRoll);
+    const auto [gtYaw, gtPitch, gtRoll] = gtEnu.getYawPitchRoll();
 
     // --- IMU at every tick (highest rate) ---
     if (c.any_imu()) {
@@ -488,10 +485,7 @@ void check_combo(const Combo & c)
   const double se3_xy_err =
     std::hypot(r.est_pose_map.x() - r.gt_pose_map.x(), r.est_pose_map.y() - r.gt_pose_map.y());
 
-  double ey = 0;
-  double ep = 0;
-  double er = 0;
-  r.est_pose_map.getYawPitchRoll(ey, ep, er);
+  const auto [ey, ep, er] = r.est_pose_map.getYawPitchRoll();
 
   std::cout << "    final est(map)=" << r.est_pose_map.asString() << "\n"
             << "    final  gt(map)=" << r.gt_pose_map.asString() << "\n"
@@ -551,10 +545,7 @@ void check_combo(const Combo & c)
     return;
   }
   ASSERT_(r.T_enu_to_map.has_value());
-  double tey = 0;
-  double tep = 0;
-  double ter = 0;
-  r.T_enu_to_map->mean.getYawPitchRoll(tey, tep, ter);
+  const auto [tey, tep, ter] = r.T_enu_to_map->mean.getYawPitchRoll();
 
   const double yawErr = std::abs(mrpt::math::angDistance(tey, mrpt::DEG2RAD(PSI0_DEG)));
   std::cout << "    T_enu2map=" << r.T_enu_to_map->mean.asString()

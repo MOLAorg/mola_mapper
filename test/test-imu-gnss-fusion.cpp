@@ -151,10 +151,7 @@ params:
     nav.estimated_navstate(mrpt::Clock::fromDouble(T * static_cast<double>(numSteps)), "map");
   ASSERT_(stateOpt.has_value());
 
-  double y = 0;
-  double p = 0;
-  double r = 0;
-  stateOpt->pose.mean.getYawPitchRoll(y, p, r);
+  const auto [y, p, r] = stateOpt->pose.mean.getYawPitchRoll();
   std::cout << "  leveled pitch=" << mrpt::RAD2DEG(p) << " roll=" << mrpt::RAD2DEG(r) << " deg\n";
 
   ASSERT_NEAR_(p, 0.0, mrpt::DEG2RAD(4.0));
@@ -332,10 +329,7 @@ params:
 
   const auto est = stateOpt->pose.mean;
   const double posError = (est.asTPose() - vehiclePose.asTPose()).norm();
-  double yaw_est = 0;
-  double pitch_est = 0;
-  double roll_est = 0;
-  est.getYawPitchRoll(yaw_est, pitch_est, roll_est);
+  const auto [yaw_est, pitch_est, roll_est] = est.getYawPitchRoll();
   const double headingError = std::abs(mrpt::math::angDistance(yaw_est, mrpt::DEG2RAD(yaw_gt_deg)));
 
   std::cout << "  pos error=" << posError << " m  heading error=" << mrpt::RAD2DEG(headingError)

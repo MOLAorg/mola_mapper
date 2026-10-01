@@ -201,10 +201,7 @@ params:
   ASSERT_EQUAL_(nav.keyframe_count(), numSteps);
 
   // Raw LIO drift (what the absolute, uncorrected odometry alone reports):
-  double rawYaw = 0;
-  double rawPitch = 0;
-  double rawRoll = 0;
-  currentOdom.getYawPitchRoll(rawYaw, rawPitch, rawRoll);
+  const auto [rawYaw, rawPitch, rawRoll] = currentOdom.getYawPitchRoll();
   std::cout << "  raw LIO drift: pitch=" << mrpt::RAD2DEG(rawPitch) << " deg  z=" << currentOdom.z()
             << " m\n";
 
@@ -213,10 +210,7 @@ params:
     nav.estimated_navstate(mrpt::Clock::fromDouble(T * static_cast<double>(numSteps)), "map");
   ASSERT_(stateOpt.has_value());
 
-  double corrYaw = 0;
-  double corrPitch = 0;
-  double corrRoll = 0;
-  stateOpt->pose.mean.getYawPitchRoll(corrYaw, corrPitch, corrRoll);
+  const auto [corrYaw, corrPitch, corrRoll] = stateOpt->pose.mean.getYawPitchRoll();
   std::cout << "  corrected: pitch=" << mrpt::RAD2DEG(corrPitch)
             << " deg  z=" << stateOpt->pose.mean.z() << " m\n";
 

@@ -118,10 +118,7 @@ params:
     nav.estimated_navstate(mrpt::Clock::fromDouble(T * static_cast<double>(numSteps)), "map");
   ASSERT_(stateOpt.has_value());
 
-  double y = 0;
-  double p = 0;
-  double r = 0;
-  stateOpt->pose.mean.getYawPitchRoll(y, p, r);
+  const auto [y, p, r] = stateOpt->pose.mean.getYawPitchRoll();
   std::cout << "  [preint] leveled pitch=" << mrpt::RAD2DEG(p) << " roll=" << mrpt::RAD2DEG(r)
             << " deg\n";
 

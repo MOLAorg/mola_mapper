@@ -96,6 +96,8 @@ public:
      * @{ */
   void initialize(const mrpt::containers::yaml & cfg) override;
   void spinOnce() override;
+  /// Runs finalize() (the other modules still exist at this point).
+  void onQuit() override;
   void onNewObservation(const CObservation::ConstPtr & o) override;
   std::optional<KeyFrameID> requestInsertKeyframe(const KeyframeInsertRequest & req) override;
   void getDiagnostics(std::vector<mola::DiagnosticStatusMsg> & status) override;
@@ -202,6 +204,7 @@ private:
   void stop_optimizer_thread();
   /// Returns false if there was nothing new to solve.
   bool solve_global_graph();
+  [[nodiscard]] GlobalGraphInput graph_input_locked() const;
   void send_feedback(const Keyframe & kf, const GlobalGraphResult & r);
   std::weak_ptr<mola::NavStateFilter> state_estimator_;
   /** @} */

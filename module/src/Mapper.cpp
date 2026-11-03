@@ -18,6 +18,7 @@
  */
 
 #include <mola_kernel/interfaces/RawDataSourceBase.h>
+#include <mola_mapper/GlobalGraphIO.h>
 #include <mola_mapper/Mapper.h>
 #include <mrpt/core/lock_helper.h>
 #include <mrpt/poses/CPose3DQuat.h>
@@ -125,6 +126,8 @@ void Mapper::initialize(const mrpt::containers::yaml & cfg)
 }
 
 void Mapper::spinOnce() {}
+
+void Mapper::onQuit() { finalize(); }
 
 // ---------------------------------------------------------------------------
 // Sensor input
@@ -330,6 +333,28 @@ void Mapper::stop_optimizer_thread()
 
 void Mapper::optimize_now() { solve_global_graph(); }
 
+GlobalGraphInput Mapper::graph_input_locked() const
+{
+  GlobalGraphInput in;
+  in.keyframes.reserve(keyframes_.size());
+  for (const auto & kf : keyframes_) {
+    GlobalGraphKeyframe g;
+    g.stamp = kf.stamp;
+    g.source_frame = kf.source_frame;
+    g.pose_in_source = kf.pose_in_source;
+    g.initial_guess = kf.pose_in_map;
+    // A copy: the original may get new GNSS readings while solving.
+    g.aux_observations = std::make_shared<mrpt::obs::CSensoryFrame>(*kf.aux);
+    in.keyframes.push_back(std::move(g));
+  }
+  in.loops = loops_;
+  in.geodetic_datum = geodetic_datum_;
+  if (georef_) {
+    in.T_enu_to_map_guess = georef_->T_enu_to_map.mean;
+  }
+  return in;
+}
+
 bool Mapper::solve_global_graph()
 {
   auto lckSolve = mrpt::lockHelper(solve_mtx_);
@@ -340,22 +365,7 @@ bool Mapper::solve_global_graph()
     if (keyframes_.empty()) {
       return false;
     }
-    in.keyframes.reserve(keyframes_.size());
-    for (const auto & kf : keyframes_) {
-      GlobalGraphKeyframe g;
-      g.stamp = kf.stamp;
-      g.source_frame = kf.source_frame;
-      g.pose_in_source = kf.pose_in_source;
-      g.initial_guess = kf.pose_in_map;
-      // A copy: the original may get new GNSS readings while solving.
-      g.aux_observations = std::make_shared<mrpt::obs::CSensoryFrame>(*kf.aux);
-      in.keyframes.push_back(std::move(g));
-    }
-    in.loops = loops_;
-    in.geodetic_datum = geodetic_datum_;
-    if (georef_) {
-      in.T_enu_to_map_guess = georef_->T_enu_to_map.mean;
-    }
+    in = graph_input_locked();
   }
 
   const auto t0 = std::chrono::steady_clock::now();
@@ -557,33 +567,65 @@ void Mapper::save_outputs()
     georef = georef_;
   }
 
-  if (!params_.output_tum_trajectory.empty()) {
-    std::ofstream f(params_.output_tum_trajectory);
-    f << std::fixed << std::setprecision(6);
-    for (const auto & kf : kfs) {
-      const mrpt::poses::CPose3DQuat q(kf.pose_in_map);
-      f << mrpt::Clock::toDouble(kf.stamp) << " " << q.x() << " " << q.y() << " " << q.z() << " "
-        << q.quat().x() << " " << q.quat().y() << " " << q.quat().z() << " " << q.quat().r()
-        << "\n";
+  if (!params_.output_graph_input.empty()) {
+    GlobalGraphInput in;
+    {
+      auto lck = mrpt::lockHelper(state_mtx_);
+      in = graph_input_locked();
     }
+    save_global_graph_input(in, params_.output_graph_input);
+    MRPT_LOG_INFO_STREAM("Saved the global graph input to " << params_.output_graph_input << ".*");
+  }
+
+  if (!params_.output_tum_trajectory.empty()) {
+    std::vector<std::pair<mrpt::Clock::time_point, mrpt::poses::CPose3D>> poses;
+    for (const auto & kf : kfs) {
+      poses.emplace_back(kf.stamp, kf.pose_in_map);
+    }
+    save_tum_trajectory(poses, params_.output_tum_trajectory);
     MRPT_LOG_INFO_STREAM(
       "Saved " << kfs.size() << " keyframe poses to " << params_.output_tum_trajectory);
   }
-
   if (!params_.output_georeference.empty() && georef) {
-    std::ofstream f(params_.output_georeference);
-    f << std::setprecision(12);
-    const auto & m = georef->T_enu_to_map.mean;
-    f << "latitude: " << georef->geo_coord.lat.decimal_value << "\n"
-      << "longitude: " << georef->geo_coord.lon.decimal_value << "\n"
-      << "height: " << georef->geo_coord.height << "\n"
-      << "T_enu_to_map: [" << m.x() << ", " << m.y() << ", " << m.z() << ", " << m.yaw() << ", "
-      << m.pitch() << ", " << m.roll() << "]  # x y z yaw pitch roll [m, rad]\n"
-      << "T_enu_to_map_sigmas: [";
-    for (int i = 0; i < 6; i++) {
-      f << std::sqrt(std::max(0.0, georef->T_enu_to_map.cov(i, i))) << (i < 5 ? ", " : "]\n");
-    }
+    save_georeference(*georef, params_.output_georeference);
     MRPT_LOG_INFO_STREAM("Saved the geo-reference to " << params_.output_georeference);
+  }
+
+  // The state estimator view, for comparisons:
+  const bool wantSe = !params_.output_state_estimator_tum.empty() ||
+                      !params_.output_state_estimator_georeference.empty();
+  if (wantSe && !kfs.empty()) {
+    const auto mods = findService<mola::NavStateFilter>();
+    auto se = mods.size() == 1 ? std::dynamic_pointer_cast<mola::NavStateFilter>(mods[0]) : nullptr;
+    if (!se) {
+      MRPT_LOG_WARN("No (single) NavStateFilter module: its outputs are not saved");
+    } else {
+      if (!params_.output_state_estimator_tum.empty()) {
+        const auto traj = se->estimated_trajectory(
+          kfs.front().stamp - std::chrono::seconds(10), kfs.back().stamp + std::chrono::seconds(10),
+          params_.reference_frame_name);
+        if (traj && !traj->empty()) {
+          std::vector<std::pair<mrpt::Clock::time_point, mrpt::poses::CPose3D>> poses;
+          for (const auto & [t, p] : *traj) {
+            poses.emplace_back(t, mrpt::poses::CPose3D(p));
+          }
+          save_tum_trajectory(poses, params_.output_state_estimator_tum);
+          MRPT_LOG_INFO_STREAM(
+            "Saved " << poses.size() << " state estimator poses to "
+                     << params_.output_state_estimator_tum);
+        } else {
+          MRPT_LOG_WARN(
+            "The state estimator returned no trajectory (smoother: keep_finalized_trajectory?)");
+        }
+      }
+#if defined(MOLA_KERNEL_NAVSTATE_FILTER_HAS_GEO_REFERENCE)
+      if (!params_.output_state_estimator_georeference.empty()) {
+        if (const auto g = se->get_geo_reference(); g) {
+          save_georeference(*g, params_.output_state_estimator_georeference);
+        }
+      }
+#endif
+    }
   }
 
   if (!params_.output_loop_closures.empty()) {

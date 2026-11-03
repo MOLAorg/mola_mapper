@@ -22,43 +22,26 @@ find_package(mola_common REQUIRED)
 
 # find dependencies:
 find_package(mrpt_maps REQUIRED)
-find_package(CLI11 REQUIRED)
-# Not linked directly here, but mola_kernel's VizInterface carries mrpt::gui in
-# its interface link libraries, and CMake requires the imported target to exist
-# even when this package only inherits it. It happens to be defined already on
-# distros where another find_package above pulls it in; humble is not one of
-# them, and the job that would have said so had been dying at rosdep instead.
-find_package(mrpt_gui REQUIRED)
 find_package(mola_kernel REQUIRED)
 find_package(mola_yaml REQUIRED)
-find_package(mp2p_icp REQUIRED)
-find_package(mp2p_icp_filters REQUIRED)
-find_package(mola_pose_list REQUIRED)
 find_package(GTSAM REQUIRED)
-find_package(gtsam2mrpt_serial REQUIRED)
 find_package(mola_gtsam_factors REQUIRED)
-find_package(mola_imu_preintegration REQUIRED)
+find_package(mola_georeferencing REQUIRED)
 find_package(mola_sm_loop_closure REQUIRED)
 
 # -----------------------
 # define lib:
 set(LIB_SOURCES
+  module/src/GlobalGraph.cpp
   module/src/Mapper.cpp
-  module/src/Mapper_Fusion.cpp
   module/src/Mapper_LoopClosure.cpp
-  module/src/ImuGravityFilter.cpp
-  module/src/Mapper_GUI.cpp
-  module/src/Mapper_KeyframeIngestion.cpp
-  module/src/Mapper_SensorCallbacks.cpp
-  module/src/WorldModelState.cpp
   module/src/Parameters.cpp
   module/src/register.cpp
 )
 set(LIB_PUBLIC_HEADERS
+  module/include/mola_mapper/GlobalGraph.h
   module/include/mola_mapper/Mapper.h
   module/include/mola_mapper/Parameters.h
-  module/include/mola_mapper/WorldModelState.h
-  module/include/mola_mapper/ImuGravityFilter.h
 )
 
 mola_add_library(
@@ -69,27 +52,18 @@ mola_add_library(
     mrpt::mrpt_maps
     mola::mola_kernel
     mola::mola_yaml
-    mola::mp2p_icp
-    mola::mp2p_icp_filters
-    mola::mola_pose_list
-    mola::gtsam2mrpt_serial
     mola::mola_gtsam_factors
-    mola::mola_imu_preintegration
+    mola::mola_georeferencing
     mola::mola_sm_loop_closure
   CMAKE_DEPENDENCIES
     mola_kernel
     mola_yaml
-    mp2p_icp
-    mp2p_icp_filters
     mrpt_maps
-    mola_pose_list
-    gtsam2mrpt_serial
     mola_gtsam_factors
-    mola_imu_preintegration
+    mola_georeferencing
     mola_sm_loop_closure
 )
 
-# mola_add_library() expects headers under "ROOT/include", so do this manually here:
 target_include_directories(${PROJECT_NAME} PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/module/include>
   $<INSTALL_INTERFACE:include>
@@ -100,37 +74,6 @@ install(
   DESTINATION ${CMAKE_INSTALL_PREFIX}/include
 )
 
-# CLI apps
-# ---------------------------------
-find_package(mola_input_rawlog) # optional
-find_package(mola_input_rosbag2) # optional
-
-mola_add_executable(
-  TARGET  mola-mapper-cli
-  SOURCES apps/mola-mapper-cli.cpp
-  LINK_LIBRARIES
-  ${PROJECT_NAME}
-  mrpt::mrpt_maps
-  CLI11::CLI11
-)
-
-if(mola_input_rawlog_FOUND)
-  message(STATUS "mola-mapper-cli: With Rawlog = YES")
-  target_link_libraries(mola-mapper-cli mola::mola_input_rawlog)
-  target_compile_definitions(mola-mapper-cli PRIVATE HAVE_MOLA_INPUT_RAWLOG)
-else()
-  message(STATUS "mola-mapper-cli: With Rawlog = NO")
-endif()
-
-if(mola_input_rosbag2_FOUND)
-  message(STATUS "mola-mapper-cli: With rosbag2 = YES")
-  target_link_libraries(mola-mapper-cli mola::mola_input_rosbag2)
-  target_compile_definitions(mola-mapper-cli PRIVATE HAVE_MOLA_INPUT_ROSBAG2)
-else()
-  message(STATUS "mola-mapper-cli: With rosbag2 = NO")
-endif()
-
-# Install files:
 install(
   DIRECTORY
     params

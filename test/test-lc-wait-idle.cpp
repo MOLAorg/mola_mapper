@@ -81,14 +81,7 @@ std::string params_yaml(bool loopClosure, const std::string & pipelineFile)
 {
   std::string s = R"###(
 params:
-  vehicle_frame_name: "base_link"
   reference_frame_name: "map"
-  kinematic_model: KinematicModel::ConstantVelocity
-  max_time_to_use_velocity_model: 2.0
-  sigma_random_walk_acceleration_linear: 1.0
-  sigma_random_walk_acceleration_angular: 1.0
-  link_first_pose_to_reference_origin_sigma: 1e-6
-  min_time_difference_to_create_new_frame: 0.01
   enable_optimizer_thread: false
 )###";
   if (loopClosure) {

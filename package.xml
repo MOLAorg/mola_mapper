@@ -17,23 +17,12 @@
   <!-- core dependencies -->
   <depend>mola_common</depend>
   <depend>mola_kernel</depend>
-  <depend>mp2p_icp</depend>
-  <depend>mola_pose_list</depend>
   <depend>mola_yaml</depend>
   <depend>gtsam</depend>
-  <depend>gtsam2mrpt_serial</depend>
   <depend>mola_gtsam_factors</depend>
-  <depend>mola_imu_preintegration</depend>
   <depend>mola_georeferencing</depend>
   <depend>mola_sm_loop_closure</depend>
-
-  <depend>cli11</depend>
   <depend>mrpt_maps</depend>
-  <depend>mrpt_gui</depend>
-
-  <!-- dataset input sources (all are actually optional) -->
-  <depend>mola_input_rawlog</depend>
-  <depend>mola_input_rosbag2</depend>
 
   <doc_depend>doxygen</doc_depend>
 
@@ -51,9 +40,13 @@
   <test_depend>ament_lint_cmake</test_depend>
   <test_depend>ament_cmake_gtest</test_depend>
 
-  <!-- Needed by the launch scripts: -->
+  <!-- Needed by the launch scripts (the composed system: front end + state
+       estimator + mapper, and dataset input): -->
   <exec_depend>mola_launcher</exec_depend>
   <exec_depend>mola_viz</exec_depend>
+  <exec_depend>mola_lidar_odometry</exec_depend>
+  <exec_depend>mola_state_estimation_smoother</exec_depend>
+  <exec_depend>mola_input_rosbag2</exec_depend>
 
   <!-- Test datasets to run on them: -->
   <test_depend>mola_test_datasets</test_depend>

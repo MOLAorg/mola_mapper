@@ -1,30 +1,68 @@
 # ============================================================================
-# Standalone configuration for mola::mapper::Mapper
-# ============================================================================
-# This is the whole-module config form, referenced from a launch file as:
+# mola::mapper::Mapper: the global back end next to a front end (LIO) and its
+# state estimator. Every setting can be changed with its environment variable.
 #
+# Used from a launch file as:
 #   - name: mapper
 #     type: mola::mapper::Mapper
+#     raw_data_source: "dataset_input"   # GNSS and IMU readings
 #     params: "../params/mapper.yaml"
-#
-# It just `$import`s the shared parameter fragment (single source of truth) and
-# adds the `visualization` block (a SIBLING of `params`, read separately by the
-# module). Per-dataset launch files instead `$import: ../params/mapper-common.yaml`
-# directly under their own `params:` and override the few keys that differ.
-#
-# Refer to:
-# https://docs.mola-slam.org/latest/
-# https://github.com/MOLAorg/mola_mapper
 # ============================================================================
 
 params:
-  $import: mapper-common.yaml
+  # The map frame: the state estimator's reference frame.
+  reference_frame_name: "${MOLA_TF_MAP|map}"
 
-# --------------------------------------------------------------------------
-# Optional visualization (MolaViz / MolaVizImGui).
-# --------------------------------------------------------------------------
-# Renders the keyframe tree + graph edges in {map}, and repositions each
-# odometry source's movable {odom_i} frame node (LidarOdometry draws its dense
-# clouds / local map under it via render_in_movable_frame).
-visualization:
-  $import: mapper-visualization-common.yaml
+  # GNSS readings attached to the keyframes (regex of sensor labels; empty: none):
+  gnss_sensor_labels_re: "${MOLA_MAPPER_GNSS_LABELS|gps}"
+  gnss_max_time_offset: ${MOLA_MAPPER_GNSS_MAX_TIME_OFFSET|0.5}  # [s]
+
+  # IMU whose averaged accelerometer levels the map (regex; empty: none):
+  imu_sensor_labels_re: "${MOLA_MAPPER_GRAVITY_IMU_LABELS|}"
+  imu_gravity_window: ${MOLA_MAPPER_GRAVITY_WINDOW|1.0}  # [s] before each keyframe
+  imu_gravity_min_samples: 10
+
+  graph:
+    # LIO keyframe chain: sigmas of each increment, growing with its length:
+    odometry_uncertainty_multiplier: ${MOLA_MAPPER_ODOM_SIGMA_MULTIPLIER|1.0}
+    odometry_additional_noise_xyz: 0.01          # [m]
+    odometry_additional_noise_ang_deg: 0.1       # [deg]
+    odometry_noise_xyz_per_sqrt_m: ${MOLA_MAPPER_ODOM_SIGMA_XYZ_PER_SQRT_M|0.02}
+    odometry_noise_ang_deg_per_sqrt_m: ${MOLA_MAPPER_ODOM_SIGMA_ANG_PER_SQRT_M|0.2}
+
+    use_gnss: ${MOLA_MAPPER_USE_GNSS|true}
+    gnss_minimum_uncertainty: ${MOLA_MAPPER_GNSS_MIN_SIGMA|0.5}  # [m]
+    gnss_uncertainty_multiplier: ${MOLA_MAPPER_GNSS_SIGMA_MULTIPLIER|1.0}
+    gnss_max_uncertainty_horiz: 20.0  # [m]
+    gnss_robust_huber_k: 1.5
+
+    use_imu_gravity: ${MOLA_MAPPER_USE_GRAVITY|true}
+    imu_gravity_sigma_deg: ${MOLA_MAPPER_GRAVITY_SIGMA_DEG|3.0}
+
+    loop_closure_robust_huber_k: 1.5
+
+  enable_optimizer_thread: true
+  optimizer_min_period: ${MOLA_MAPPER_OPTIMIZER_PERIOD|1.0}  # [s]
+
+  # Fuse the optimized newest keyframe pose into the state estimator:
+  feedback_to_state_estimator: ${MOLA_MAPPER_FEEDBACK|false}
+  feedback_min_sigma_xyz: ${MOLA_MAPPER_FEEDBACK_MIN_SIGMA_XYZ|0.10}  # [m]
+  feedback_min_sigma_ang_deg: ${MOLA_MAPPER_FEEDBACK_MIN_SIGMA_ANG|0.5}  # [deg]
+
+  # Loop closure detection (mola_sm_loop_closure):
+  loop_closure_enabled: ${MOLA_MAPPER_LOOP_CLOSURE|true}
+  loop_closure_pipeline_file: "${MOLA_MAPPER_LC_PIPELINE|$(ros2 pkg prefix mola_mapper)/share/mola_mapper/params/loop-closure-f2f-mapper.yaml}"
+  loop_closure_check_period_sec: ${MOLA_MAPPER_LC_PERIOD|5.0}  # [s]
+  loop_closure_min_new_keyframes: 10
+  loop_closure_incremental: true
+  loop_closure_full_scan_every_n: 10
+  loop_closure_finalize_rounds: ${MOLA_MAPPER_LC_FINALIZE_ROUNDS|4}
+
+  # Outputs, written at the end (empty: not written):
+  output_tum_trajectory: "${MOLA_MAPPER_OUTPUT_TUM|}"
+  output_simplemap: "${MOLA_MAPPER_OUTPUT_SIMPLEMAP|}"
+  output_georeference: "${MOLA_MAPPER_OUTPUT_GEOREF|}"
+  output_loop_closures: "${MOLA_MAPPER_OUTPUT_LOOPS|}"
+  output_state_estimator_tum: "${MOLA_MAPPER_OUTPUT_SE_TUM|}"
+  output_state_estimator_georeference: "${MOLA_MAPPER_OUTPUT_SE_GEOREF|}"
+  output_graph_input: "${MOLA_MAPPER_OUTPUT_GRAPH_INPUT|}"

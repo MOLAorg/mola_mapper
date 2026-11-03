@@ -33,6 +33,7 @@ find_package(mola_sm_loop_closure REQUIRED)
 # define lib:
 set(LIB_SOURCES
   module/src/GlobalGraph.cpp
+  module/src/GlobalGraphIO.cpp
   module/src/Mapper.cpp
   module/src/Mapper_LoopClosure.cpp
   module/src/Parameters.cpp
@@ -40,6 +41,7 @@ set(LIB_SOURCES
 )
 set(LIB_PUBLIC_HEADERS
   module/include/mola_mapper/GlobalGraph.h
+  module/include/mola_mapper/GlobalGraphIO.h
   module/include/mola_mapper/Mapper.h
   module/include/mola_mapper/Parameters.h
 )
@@ -72,6 +74,14 @@ target_include_directories(${PROJECT_NAME} PUBLIC
 install(
   DIRECTORY module/include/
   DESTINATION ${CMAKE_INSTALL_PREFIX}/include
+)
+
+# Offline tool: re-optimize a saved global graph with other parameters
+mola_add_executable(
+  TARGET  mola-mapper-reoptimize
+  SOURCES apps/mola-mapper-reoptimize.cpp
+  LINK_LIBRARIES
+    ${PROJECT_NAME}
 )
 
 install(

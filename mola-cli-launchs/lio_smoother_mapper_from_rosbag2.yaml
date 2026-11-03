@@ -1,0 +1,89 @@
+# =============================================================================
+# A complete LiDAR SLAM system from a ROS 2 bag:
+#  - mola::LidarOdometry (LIO): the front end. It queries the state estimator
+#    for its motion prior, and pushes its keyframes to the mapper.
+#  - mola::state_estimation_smoother::StateEstimationSmoother: the state
+#    estimator LIO queries (its only mola::NavStateFilter).
+#  - mola::mapper::Mapper: the global back end: keyframe map with GNSS and
+#    gravity, loop closures, global pose graph, geo-reference and outputs; it can
+#    feed its corrections back to the state estimator.
+#
+# Usage:
+#   export MOLA_INPUT_ROSBAG2=/path/to/bag
+#   export MOLA_LIDAR_TOPIC=/ouster/points   MOLA_IMU_TOPIC=/ouster/imu
+#   export MOLA_GNSS_TOPIC=/gps/fix          # optional
+#   mola-cli $(ros2 pkg prefix mola_mapper)/share/mola_mapper/mola-cli-launchs/lio_smoother_mapper_from_rosbag2.yaml
+#
+# Main switches (environment variables):
+#   MOLA_WITH_MAPPER=false        LIO + state estimator only
+#   MOLA_MAPPER_LOOP_CLOSURE      loop closure detection (default: true)
+#   MOLA_MAPPER_FEEDBACK=true     mapper corrections into the state estimator
+#   MOLA_NAVSTATE_GNSS_SENSOR_NAME=none  keep GNSS out of the state estimator
+#                                        (the mapper owns it)
+#   MOLA_MAPPER_OUTPUT_TUM, _GEOREF, _SIMPLEMAP, _LOOPS, _SE_TUM, _SE_GEOREF
+#   See params/mapper.yaml for the rest.
+# =============================================================================
+
+modules:
+  - name: viz
+    type: ${MOLA_GUI_MODULE|mola::MolaVizImGui}
+    enabled: ${MOLA_WITH_GUI|true}
+    verbosity_level: "${MOLA_VERBOSITY_MOLA_VIZ|INFO}"
+    params:
+      imgui_app_name: lio_smoother_mapper
+
+  - name: state_estimation
+    type: mola::state_estimation_smoother::StateEstimationSmoother
+    verbosity_level: "${MOLA_VERBOSITY_MOLA_STATE_ESTIMATOR|INFO}"
+    raw_data_source: "dataset_input"
+    params: "${MOLA_STATE_ESTIMATOR_YAML|$(ros2 pkg prefix mola_state_estimation_smoother)/share/mola_state_estimation_smoother/params/state-estimation-smoother.yaml}"
+
+  - name: mapper
+    type: mola::mapper::Mapper
+    enabled: ${MOLA_WITH_MAPPER|true}
+    verbosity_level: "${MOLA_VERBOSITY_MAPPER|INFO}"
+    raw_data_source: "dataset_input"
+    params: "${MOLA_MAPPER_YAML|../params/mapper.yaml}"
+
+  - name: lidar_odom
+    type: mola::LidarOdometry
+    verbosity_level: "${MOLA_VERBOSITY_MOLA_LO|INFO}"
+    raw_data_source: "dataset_input"
+    params: "${MOLA_ODOMETRY_PIPELINE_YAML|$(ros2 pkg prefix mola_lidar_odometry)/share/mola_lidar_odometry/pipelines/lidar3d-gicp.yaml}"
+
+  - type: mola::Rosbag2Dataset
+    name: dataset_input
+    verbosity_level: "${MOLA_VERBOSITY_ROSBAG2|INFO}"
+    execution_rate: 50 # Hz
+    quit_mola_app_on_dataset_end: ${MOLA_QUIT_ON_DATASET_END|false}
+    gui_preview_sensors:
+      - raw_sensor_label: lidar
+        decimation: 1
+        enabled: ${MOLA_WITH_GUI|true}
+        win_pos: 5 5 400 400
+    params:
+      rosbag_filename: ${MOLA_INPUT_ROSBAG2}
+      time_warp_scale: ${MOLA_TIME_WARP|1.0}
+      start_paused: ${MOLA_DATASET_START_PAUSED|false}
+      base_link_frame_id: "${MOLA_TF_BASE_LINK|base_link}"
+      tf_topic: "${MOLA_TF_TOPIC|/tf}"
+      tf_static_topic: "${MOLA_TF_STATIC_TOPIC|/tf_static}"
+      sensors:
+        - topic: ${MOLA_LIDAR_TOPIC|'/ouster/points'}
+          type: CObservationPointCloud
+          sensorLabel: lidar
+        - topic: ${MOLA_IMU_TOPIC|'/imu'}
+          type: CObservationIMU
+          sensorLabel: imu
+          is_optional: true
+        - topic: ${MOLA_ATTITUDE_IMU_TOPIC|''}
+          type: CObservationIMU
+          sensorLabel: ${MOLA_ATTITUDE_IMU_NAME|imu_attitude}
+          is_optional: true
+        - topic: ${MOLA_GNSS_TOPIC|''}
+          sensorLabel: gps
+          is_optional: true
+        - topic: ${MOLA_ODOMETRY_TOPIC|''}
+          type: CObservationOdometry
+          sensorLabel: odom_wheels
+          is_optional: true

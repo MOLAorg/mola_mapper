@@ -3,7 +3,6 @@
 | '_ ` _ \ / _ \| |/ _` | Modular Optimization framework for
 | | | | | | (_) | | (_| | Localization and mApping (MOLA)
 |_| |_| |_|\___/|_|\__,_| https://github.com/MOLAorg/mola
-
  Copyright (C) 2018-2026 Jose Luis Blanco, University of Almeria,
                          and individual contributors.
  SPDX-License-Identifier: GPL-3.0
@@ -14,158 +13,84 @@
 
 /**
  * @file   Parameters.cpp
- * @brief  Parameters for the Mapper central 3D SLAM module.
+ * @brief  Parameters of mola::mapper::Mapper, loaded from YAML.
  * @author Jose Luis Blanco Claraco
  * @date   2026
  */
 
 #include <mola_mapper/Parameters.h>
+#include <mrpt/core/exceptions.h>
+#include <mrpt/core/format.h>
+
+#include <set>
+#include <string>
 
 namespace mola::mapper
 {
 
+void GlobalGraphParams::loadFrom(const mrpt::containers::yaml & cfg)
+{
+  MCP_LOAD_OPT(cfg, odometry_uncertainty_multiplier);
+  MCP_LOAD_OPT(cfg, odometry_additional_noise_xyz);
+  MCP_LOAD_OPT(cfg, odometry_additional_noise_ang_deg);
+  MCP_LOAD_OPT(cfg, odometry_noise_xyz_per_sqrt_m);
+  MCP_LOAD_OPT(cfg, odometry_noise_ang_deg_per_sqrt_m);
+  MCP_LOAD_OPT(cfg, odometry_noise_ang_per_rad);
+  MCP_LOAD_OPT(cfg, use_gyro);
+  MCP_LOAD_OPT(cfg, gyro_min_sigma_deg);
+
+  MCP_LOAD_OPT(cfg, use_gnss);
+  MCP_LOAD_OPT(cfg, gnss_minimum_uncertainty);
+  MCP_LOAD_OPT(cfg, gnss_uncertainty_multiplier);
+  MCP_LOAD_OPT(cfg, gnss_max_uncertainty_horiz);
+  MCP_LOAD_OPT(cfg, gnss_robust_kernel);
+  MCP_LOAD_OPT(cfg, gnss_robust_k);
+  MCP_LOAD_OPT(cfg, georef_min_gnss_factors);
+  MCP_LOAD_OPT(cfg, georef_max_sigma_yaw_deg);
+  {
+    const std::set<std::string> kernels = {"huber", "cauchy", "geman_mcclure", "tukey"};
+    ASSERTMSG_(
+      kernels.count(gnss_robust_kernel) != 0,
+      mrpt::format(
+        "Unknown gnss_robust_kernel '%s' (huber, cauchy, geman_mcclure or tukey)",
+        gnss_robust_kernel.c_str()));
+  }
+
+  MCP_LOAD_OPT(cfg, use_imu_gravity);
+  MCP_LOAD_OPT(cfg, imu_gravity_sigma_deg);
+
+  MCP_LOAD_OPT(cfg, loop_closure_robust_huber_k);
+  MCP_LOAD_OPT(cfg, loop_closure_min_sigma_xyz);
+  MCP_LOAD_OPT(cfg, loop_closure_min_sigma_ang_deg);
+  MCP_LOAD_OPT(cfg, first_pose_prior_sigma);
+  MCP_LOAD_OPT(cfg, max_iterations);
+}
+
 void Parameters::loadFrom(const mrpt::containers::yaml & cfg)
 {
-  // Reference frame IDs
-  // -----------------------------------------------------
-  MCP_LOAD_REQ(cfg, vehicle_frame_name);
-  MCP_LOAD_REQ(cfg, reference_frame_name);
-  MCP_LOAD_OPT(cfg, enu_frame_name);
+  MCP_LOAD_OPT(cfg, reference_frame_name);
 
-  // Kinematic factors and keyframe creation (motion model)
-  // -------------------------------------------------------
-  MCP_LOAD_REQ(cfg, kinematic_model);
-  MCP_LOAD_REQ(cfg, max_time_to_use_velocity_model);
-
-  MCP_LOAD_OPT(cfg, min_time_difference_to_create_new_frame);
-  MCP_LOAD_OPT(cfg, time_between_frames_to_warning);
-  MCP_LOAD_OPT(cfg, gnss_nearby_keyframe_stamp_tolerance);
-
-  MCP_LOAD_OPT(cfg, odometry_max_insert_rate_hz);
-  ASSERT_GE_(odometry_max_insert_rate_hz, .0);
-
-  MCP_LOAD_OPT(cfg, aggregate_high_rate_into_edges);
-  MCP_LOAD_OPT(cfg, sensor_keyframe_min_period);
-  ASSERT_GT_(sensor_keyframe_min_period, .0);
-
-  MCP_LOAD_OPT(cfg, keyframe_creation_source);
-  MCP_LOAD_OPT(cfg, sensor_clock_min_period_s);
-  ASSERT_GT_(sensor_clock_min_period_s, .0);
-
-  MCP_LOAD_OPT(cfg, sigma_random_walk_acceleration_linear);
-  MCP_LOAD_OPT(cfg, sigma_random_walk_acceleration_angular);
-  MCP_LOAD_OPT(cfg, sigma_integrator_position);
-  MCP_LOAD_OPT(cfg, sigma_integrator_orientation);
-  MCP_LOAD_OPT(cfg, sigma_twist_from_consecutive_poses_linear);
-  MCP_LOAD_OPT(cfg, sigma_twist_from_consecutive_poses_angular);
-
-  MCP_LOAD_OPT(cfg, predict_twist_filter_enabled);
-  MCP_LOAD_OPT(cfg, predict_twist_filter_time_const);
-
-  MCP_LOAD_OPT(cfg, initial_twist_sigma_lin);
-  MCP_LOAD_OPT(cfg, initial_twist_sigma_ang);
-
-  MCP_LOAD_OPT(cfg, enforce_planar_motion);
-
-  if (cfg.has("link_first_pose_to_reference_origin_sigma")) {
-    const auto strSigma = cfg["link_first_pose_to_reference_origin_sigma"].as<std::string>();
-    double sigma = 0;
-    if (1 == ::sscanf(strSigma.c_str(), "%lf", &sigma)) {
-      ASSERT_GT_(sigma, .0);
-      link_first_pose_to_reference_origin_sigma = sigma;
-    }
-  }
-
-  if (cfg.has("initial_twist")) {
-    ASSERT_(cfg["initial_twist"].isSequence() && cfg["initial_twist"].asSequence().size() == 6);
-    const auto seq = cfg["initial_twist"].asSequenceRange();
-    for (size_t i = 0; i < 6; i++) {
-      initial_twist[i] = seq.at(i).as<double>();
-    }
-  }
-
-  // Keyframe ingestion (SharedKeyframeMap sink)
-  // -----------------------------------------------------
-  MCP_LOAD_OPT(cfg, keyframe_ingestion_sigma_lin);
-  MCP_LOAD_OPT(cfg, keyframe_ingestion_sigma_ang_deg);
-  ASSERT_GT_(keyframe_ingestion_sigma_lin, .0);
-  ASSERT_GT_(keyframe_ingestion_sigma_ang_deg, .0);
-
-  MCP_LOAD_OPT(cfg, odometry_edge_uncertainty_multiplier);
-  MCP_LOAD_OPT(cfg, odometry_edge_min_sigma_xyz);
-  MCP_LOAD_OPT(cfg, odometry_edge_min_sigma_ang_deg);
-  MCP_LOAD_OPT(cfg, odometry_edge_min_sigma_rollpitch_deg);
-  ASSERT_GT_(odometry_edge_uncertainty_multiplier, .0);
-  ASSERT_GE_(odometry_edge_min_sigma_xyz, .0);
-  ASSERT_GE_(odometry_edge_min_sigma_ang_deg, .0);
-
-  // IMU related
-  // -----------------------------------------------------
-  MCP_LOAD_OPT(cfg, imu_attitude_sigma_deg);
-  MCP_LOAD_OPT(cfg, imu_attitude_azimuth_offset_deg);
-  MCP_LOAD_OPT(cfg, imu_angular_velocity_sigma_deg);
-
-  MCP_LOAD_OPT(cfg, imu_gravity_window_sec);
-  MCP_LOAD_OPT(cfg, imu_gravity_accel_tol_frac);
-  MCP_LOAD_OPT(cfg, imu_gravity_gyro_tol_deg);
+  MCP_LOAD_OPT(cfg, gnss_sensor_labels_re);
+  MCP_LOAD_OPT(cfg, gnss_max_time_offset);
+  MCP_LOAD_OPT(cfg, imu_sensor_labels_re);
+  MCP_LOAD_OPT(cfg, imu_gravity_window);
   MCP_LOAD_OPT(cfg, imu_gravity_min_samples);
-  MCP_LOAD_OPT(cfg, imu_gravity_max_spread_deg);
-  MCP_LOAD_OPT(cfg, imu_gravity_min_accept_fraction);
-  MCP_LOAD_OPT(cfg, imu_gravity_sigma_floor_deg);
-  MCP_LOAD_OPT(cfg, imu_gravity_sigma_ceil_deg);
+  MCP_LOAD_OPT(cfg, gyro_sensor_labels_re);
+  MCP_LOAD_OPT(cfg, gyro_noise_density);
+  MCP_LOAD_OPT(cfg, gyro_bias_sigma);
+  MCP_LOAD_OPT(cfg, gyro_scale_sigma);
+  MCP_LOAD_OPT(cfg, gyro_max_gap);
 
-  MCP_LOAD_OPT(cfg, imu_preintegration_enabled);
-  MCP_LOAD_OPT(cfg, imu_preint_gravity_in_enu);
-  MCP_LOAD_OPT(cfg, imu_preint_accel_noise_sigma);
-  MCP_LOAD_OPT(cfg, imu_preint_gyro_noise_sigma);
-  MCP_LOAD_OPT(cfg, imu_preint_accel_bias_rw_sigma);
-  MCP_LOAD_OPT(cfg, imu_preint_gyro_bias_rw_sigma);
-  MCP_LOAD_OPT(cfg, imu_preint_integration_sigma);
-  MCP_LOAD_OPT(cfg, imu_preint_gravity_magnitude);
-  MCP_LOAD_OPT(cfg, imu_preint_initial_bias_sigma_accel);
-  MCP_LOAD_OPT(cfg, imu_preint_initial_bias_sigma_gyro);
-  MCP_LOAD_OPT(cfg, imu_preint_initial_velocity_sigma);
-  MCP_LOAD_OPT(cfg, imu_preint_dropout_velocity_sigma);
-
-  MCP_LOAD_OPT(cfg, imu_relative_rotation_enabled);
-  MCP_LOAD_OPT(cfg, imu_relative_rotation_sigma_deg_per_sqrt_s);
-  MCP_LOAD_OPT(cfg, imu_relative_rotation_sigma_floor_deg);
-  MCP_LOAD_OPT(cfg, imu_integration_buffer_retention_sec);
-  MCP_LOAD_OPT(cfg, imu_integration_min_interval_coverage);
-
-  // Geo-referencing
-  // -----------------------------------------------------
-  MCP_LOAD_OPT(cfg, estimate_geo_reference);
-  MCP_LOAD_OPT(cfg, enu_to_map_prior_sigma_no_georef);
-  MCP_LOAD_OPT(cfg, gnss_huber_threshold);
-  MCP_LOAD_OPT(cfg, convergence_max_position_sigma);
-  MCP_LOAD_OPT(cfg, convergence_max_orientation_sigma_deg);
-  MCP_LOAD_OPT(cfg, publish_estimated_georef_on_convergence);
-
-  if (cfg.has("fixed_geo_reference")) {
-    auto & gr = fixed_geo_reference.emplace();
-    const auto & fgr = cfg["fixed_geo_reference"];
-
-    ASSERT_(fgr.isMap());
-    ASSERT_(fgr.has("latitude_deg"));
-    ASSERT_(fgr.has("longitude_deg"));
-    ASSERT_(fgr.has("altitude"));
-
-    gr.geo_coord.lat = fgr["latitude_deg"].as<double>();
-    gr.geo_coord.lon = fgr["longitude_deg"].as<double>();
-    gr.geo_coord.height = fgr["altitude"].as<double>();
-
-    gr.T_enu_to_map.cov.setIdentity();
-    gr.T_enu_to_map.cov *= 1e-6;
+  if (cfg.has("graph")) {
+    graph.loadFrom(cfg["graph"]);
   }
-
-  // Nonlinear optimization
-  // -----------------------------------------------------
-  MCP_LOAD_OPT(cfg, additional_isam2_update_steps);
   MCP_LOAD_OPT(cfg, enable_optimizer_thread);
+  MCP_LOAD_OPT(cfg, optimizer_min_period);
 
-  // Loop closure
-  // -----------------------------------------------------
+  MCP_LOAD_OPT(cfg, feedback_to_state_estimator);
+  MCP_LOAD_OPT(cfg, feedback_min_sigma_xyz);
+  MCP_LOAD_OPT(cfg, feedback_min_sigma_ang_deg);
+
   MCP_LOAD_OPT(cfg, loop_closure_enabled);
   MCP_LOAD_OPT(cfg, enable_loop_closure_thread);
   MCP_LOAD_OPT(cfg, loop_closure_pipeline_file);
@@ -174,30 +99,14 @@ void Parameters::loadFrom(const mrpt::containers::yaml & cfg)
   MCP_LOAD_OPT(cfg, loop_closure_incremental);
   MCP_LOAD_OPT(cfg, loop_closure_full_scan_every_n);
   MCP_LOAD_OPT(cfg, loop_closure_finalize_rounds);
-  MCP_LOAD_OPT(cfg, loop_closure_finalize_max_seconds);
-  MCP_LOAD_OPT(cfg, loop_closure_edge_robust_param);
 
-  // High-rate pose publisher
-  // -----------------------------------------------------
-  MCP_LOAD_OPT(cfg, high_rate_pose_publish_rate_hz);
-  MCP_LOAD_OPT(cfg, high_rate_use_latest_sensors);
-
-  // Map save/load
-  // -----------------------------------------------------
-  MCP_LOAD_OPT(cfg, load_simplemap_file);
-  MCP_LOAD_OPT(cfg, save_simplemap_file);
-  MCP_LOAD_OPT(cfg, generate_lazy_load_scan_files);
-  MCP_LOAD_OPT(cfg, externalize_after_seconds);
-
-  // Sensor input names (regex)
-  // -----------------------------------------------------
-  MCP_LOAD_OPT(cfg, do_process_imu_labels_re);
-  MCP_LOAD_OPT(cfg, do_process_odometry_labels_re);
-  MCP_LOAD_OPT(cfg, do_process_gnss_labels_re);
-
-  // Output trajectory
-  // -----------------------------------------------------
-  MCP_LOAD_OPT(cfg, save_trajectory_to_file);
+  MCP_LOAD_OPT(cfg, output_tum_trajectory);
+  MCP_LOAD_OPT(cfg, output_simplemap);
+  MCP_LOAD_OPT(cfg, output_georeference);
+  MCP_LOAD_OPT(cfg, output_loop_closures);
+  MCP_LOAD_OPT(cfg, output_state_estimator_tum);
+  MCP_LOAD_OPT(cfg, output_state_estimator_georeference);
+  MCP_LOAD_OPT(cfg, output_graph_input);
 }
 
 }  // namespace mola::mapper

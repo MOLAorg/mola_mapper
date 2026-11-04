@@ -1,504 +1,97 @@
 # mola_mapper - AI agent context guide
 
-Central 3D SLAM map for MOLA: fuses LIO/VIO/IMU/GNSS/wheels into ONE optimized
-world model (keyframes as a `CSimpleMap` + a GTSAM factor graph), with anytime
-loop closure, geo-referencing, lifelong keyframe management and relocalization.
+The global back end of a MOLA system: a container next to a front end (LIO, later VO) and
+its state estimator (`mola_state_estimation_smoother`), adding a central keyframe map, loop
+closure detection and a global pose graph. It does little estimation of its own.
 
-Full plan, architecture rationale and task checklist: `~/plans/900_mola_mapper.md`.
-Keep both this file and the plan in sync as the code changes. Do not mention
-phase numbers in this repo's docs or code.
+Use clang-format-14.
 
-Use clang-format-14 on generated code.
+## Topology
 
-## What it is
+Separate MOLA modules, composed by `mola-cli-launchs/*.yaml`:
+- LIO (`mola::LidarOdometry`) keeps the smoother as its only `NavStateFilter`, and pushes
+  sparse keyframes to the mapper through `mola::SharedKeyframeMap` (source frame
+  `lidar_odom_kf`).
+- The smoother fuses LIO increments (and, in "owner" mode, the mapper's absolute `{map}`
+  corrections). Optionally it tracks IMU biases (`MOLA_NAVSTATE_IMU_BIAS_TRACKING`) and
+  offers them as `mola::ImuBiasSource`.
+- `mola::mapper::Mapper` (ExecutableBase, RawDataConsumer, MapSourceBase,
+  DiagnosticsProvider, SharedKeyframeMap) is NOT a NavStateFilter.
 
-`mola::mapper::Mapper` implements `mola::NavStateFilter`,
-`LocalizationSourceBase`, `MapSourceBase`, `DiagnosticsProvider`, and
-`mola::SharedKeyframeMap`. It is the single source of truth for short-term
-pose prediction that LIO/VIO query (replacing `mola_state_estimation_
-{simple,smoother}` when used), and the sink front ends push sparse
-central-map keyframes to via `requestInsertKeyframe()`. It is NOT a
-`FrontEndBase`: it does no raw-scan ICP.
-
-`mola_lidar_odometry` integrates both roles: it queries `navstate_fuse`
-densely every scan, and separately pushes sparse keyframes through the
-`SharedKeyframeMap` sink at its own keyframe-sparsity criterion, using a
-dedicated source frame name (`publish_reference_frame + "_kf"`, distinct from
-the dense path's frame) so the two paths don't collide.
+The mapper owns GNSS and the geo-reference: in owner mode the smoother runs without GNSS and
+without absolute attitude, and gets the optimized newest keyframe pose with
+`fuse_pose(t, pose, "map")` (`feedback_to_state_estimator`). The smoother's
+`set_geo_reference()` is not used mid-run (it resets the smoother).
 
 ## Layout
 
 ```
-module/include/mola_mapper/   Public headers
-  Mapper.h                     Main class
-  Parameters.h                   YAML-loaded config (navstate group mirrors the smoother)
-  WorldModelState.h              Central map state (keyframes, connectivity, geo-ref, GTSAM pimpl)
-  ImuGravityFilter.h             Robust low-dynamics gravity-direction reducer
-module/src/
-  Mapper.cpp                   Lifecycle: initialize/spinOnce/reset/diagnostics + IMPLEMENTS_MRPT_OBJECT
-  Mapper_Fusion.cpp            Keyframe management + factor-graph fusion + estimated_navstate
-  Mapper_KeyframeIngestion.cpp SharedKeyframeMap sink: requestInsertKeyframe()
-  Mapper_GUI.cpp               MolaViz/MolaVizImGui viz: KF tree, graph edges (loop-closure
-                                  edges highlighted green), per-source movable {odom_i} frames,
-                                  {enu} geo-ref marker, status/geo-ref/loop-closure/view panel
-  Mapper_SensorCallbacks.cpp   onNewObservation dispatch -> fuse_*()
-  Mapper_LoopClosure.cpp         Background LC thread: snapshots the map, runs the
-                                  mola_sm_loop_closure detector (analyze()) off-lock,
-                                  merges accepted edges as robust BetweenFactors;
-                                  plus the end-of-run finalize pass (batch full
-                                  scans + re-optimization until no new loops). Also
-                                  maintains live LC UI counters (lc_ui_) and an
-                                  on-demand scan request (request_loop_closure_scan())
-  ImuGravityFilter.cpp           Robust low-dynamics gravity-direction reducer (pure/testable):
-                                  given a window of lever-arm-corrected accel/gyro samples,
-                                  rejects motion-contaminated ones, robustly averages the
-                                  survivors -> ONE gravity dir + data-earned sigma
-  WorldModelState.cpp            GtsamData pimpl (ISAM2/Values/NonlinearFactorGraph) + map helpers
-  Parameters.cpp                 loadFrom(yaml)
-  register.cpp                   MOLA_REGISTER_MODULE(mola::mapper::Mapper)
-  GtsamData.h, factor_builders.h Private GTSAM symbol scheme + factor builders (shared by the two fusion TUs)
-  covariance_utils.h             Shared SE(3)-covariance summary (max position / orientation sigma)
-apps/mola-mapper-cli.cpp      Offline front end: simplemap -> optimized map
-params/mapper.yaml            Default config (no fixed geo-ref; pure-odometry-safe defaults)
-params/mapper-offline.yaml    mola-mapper-cli defaults (LC + finalize on, gauge pinned)
-mola-cli-launchs/                Live system YAMLs (KITTI, MulRan, BotanicGarden, Oxford Spires,
-                                  ConSLAM, generic ROS 2 bag)
-test/                            Unit tests (plain main() + MRPT ASSERT_ macros, run by mola_add_test)
-docs/call-graph.md               Mermaid diagram tracing every public-API method to its internals
+module/include/mola_mapper/
+  Mapper.h          the module (keyframe sink, raw data, threads, outputs)
+  GlobalGraph.h     optimize_global_graph(): pure function, GTSAM batch LM + Marginals
+  GlobalGraphIO.h   save/load the graph input (offline re-optimization), TUM, georef
+  GyroIntegration.h integrate_gyro(): rotation between keyframes from gyro readings
+  Parameters.h      Parameters (module) and GlobalGraphParams (graph)
+module/src/         Mapper.cpp, Mapper_LoopClosure.cpp, GlobalGraph*.cpp, ...
+apps/mola-mapper-reoptimize.cpp   re-solves a saved graph input with other parameters
+params/mapper.yaml                every setting with a MOLA_MAPPER_* environment hook
+params/loop-closure-f2f-mapper*.yaml  mola_sm_loop_closure detector pipelines
+mola-cli-launchs/lio_smoother_mapper_from_rosbag2.yaml  rosbag2 -> LIO + smoother + mapper
+mola-cli-launchs/lio_smoother_mapper_from_kitti.yaml    KITTI odometry (params/mapper-kitti.yaml)
 ```
 
-## Architecture invariants
+## Keyframes and attached data
 
-- GTSAM is hidden behind `WorldModelState::GtsamData` (pimpl via
-  `mrpt::make_impl`, kept copyable: `std::optional<gtsam::ISAM2>`, not
-  `unique_ptr`).
-- Solver: full `ISAM2` over ALL keyframes (the central map, not a fixed-lag
-  window) + LM on loop closure + a lightweight predictor for short-term
-  queries. Persistent variables (`T_enu_to_map`, `T_map_to_odom_i`) must stay
-  out of any lossy fixed-lag marginalization.
-- A background optimizer thread runs the iSAM2 solve off the query path
-  (`enable_optimizer_thread`, default true in real launches, false for
-  deterministic unit tests). `estimated_navstate()` /
-  `get_latest_state_and_covariance()` read cached per-keyframe state, never
-  touch iSAM2 directly. The solve is lock-split so heavy compute never blocks
-  queries / publisher / ingestion. Always keep the thread on for any real
-  high-rate source.
-- The high-rate publisher (`spinOnce()` -> `publish_high_rate_pose()`)
-  extrapolates the latest anchor with the kinematic model and publishes via
-  `advertiseUpdatedLocalization()` at `high_rate_pose_publish_rate_hz`, gated
-  on a subscriber existing. It queries `estimated_navstate()` at
-  `get_current_extrapolated_stamp_locked()` = the freshest of (newest raw
-  `fuse_pose()` anchor, newest raw-observation stamp, newest keyframe). The
-  raw-observation stamp (`note_observation_stamp()`, fed from EVERY
-  `onNewObservation`) is the one that advances between keyframes in a
-  LIO+SharedKeyframeMap setup: there the mapper's only dense inputs are the
-  high-rate IMU/wheels (no dense odometry `fuse_pose()` source), so the newest
-  keyframe stamp alone advances only at the keyframe cadence. This mirrors the
-  smoother's `last_observation_stamp` / `get_current_extrapolated_stamp()`.
-- The GUI "camera follows vehicle" (`updateCameraFollow()`, called every
-  `spinOnce` and self-throttled to ~30 Hz, ABOVE the throttled scene rebuild)
-  centers the viewport on `freshest_vehicle_pose_in_map()`: the freshest dense
-  `fuse_pose()` anchor (LIO pushes one per scan, between keyframes) composed into
-  {map} via its source's `T_map_to_odom` and extrapolated to the current instant
-  with the source's own filtered twist. This is deliberately GATE-FREE, unlike
-  `estimated_navstate()` whose {map} path returns nullopt when the nearest
-  keyframe is unsolved or outside the velocity-model window — which made the
-  camera fall back to the last solved keyframe and jump at the keyframe cadence
-  even while dense poses were available. Falls back to `estimated_navstate()`
-  then the last solved keyframe only when no raw anchor exists. Rendered in the
-  selected viz frame; works with no external subscriber.
-- IMU never creates keyframes nor inserts per-sample factors: each raw
-  reading is lever-arm-corrected to the vehicle frame and pushed into one
-  global `LocalVelocityBuffer`; the gravity/attitude/gyro factors are built
-  ONCE per real keyframe, draining that buffer's window since the previous
-  keyframe.
-- IMU preintegration (the RELATIVE half), `imu_preintegration_enabled` (default
-  OFF): on keyframe close, `emit_imu_preintegration_factor_locked()` integrates
-  the interval's accel+gyro into a `gtsam::PreintegratedCombinedMeasurements`
-  and adds a stock `CombinedImuFactor(T,Vw,T,Vw,B,B)` between consecutive
-  keyframes. Adds per-keyframe in-graph variables `Vw(kf)` (world velocity,
-  symbol `'u'`) and `B(kf)` (`imuBias::ConstantBias`, symbol `B`) — DISTINCT
-  from the body-frame kinematic `V/W`. Nav frame = `{map}` ("Option B"): the
-  gravity vector is `R_enu_to_map*(0,0,-g)`, exactly correct while `{map}` is
-  gravity-aligned (F0 ~ identity), which REQUIRES LIO to start level via IMU
-  initialization in pure-IMU / no-GNSS runs. This propagates a gravity anchor
-  forward through the gyro-integrated rotation, so keyframes far from any
-  low-dynamics stop are still leveled; the absolute
-  `MeasuredGravityFactor`/`Pose3RotationFactor` stay as the sparse anchors. The
-  bias linearization point `imu_bias_hat_` (a plain 6-array; GTSAM kept out of
-  the public header) is refreshed from the newest optimized `B(kf)` each solve.
-  Two nav-frame options (`imu_preint_gravity_in_enu`, default true = "Option A"):
-  A uses `MapFramePreintegratedImuFactor` (module/src/, a 7-key custom factor
-  composing `F(0)` so gravity is EXACT in `{enu}` regardless of `{map}` tilt;
-  numerical Jacobians); B uses the stock `gtsam::CombinedImuFactor` with gravity
-  baked in `{map}`. CRITICAL: these factors integrate the WHOLE inter-keyframe
-  interval, which on a distance-gated central map is many seconds, so the
-  `LocalVelocityBuffer` retention is raised to
-  `imu_integration_buffer_retention_sec` (60 s) and a coverage guard
-  (`imu_integration_min_interval_coverage`, 0.9) SKIPS the factor if the
-  integrated time does not span the interval. Without this the buffer's short
-  retention silently yields a partial delta attributed to the whole gap, which
-  corrupts every constraint (this caused a 20 m APE blow-up before it was found).
-  REAL-DATA RESULT (Oxford, raw accel+gyro IMU, no AHRS): full preintegration
-  levels every keyframe to **0.35 deg vs 2.64 deg without it (7.5x)**, horizontal
-  error -32%, yaw -36%; total APE is flat only because the undamped vertical
-  channel regresses (0.565 -> 0.729 m). A lighter gyro-only relative-rotation
-  factor also exists (`Pose3RelativeRotationFactor`,
-  `imu_relative_rotation_enabled`): cheaper, no gravity term, but levels far less
-  (2.20 deg). Keep default OFF until the vertical channel is damped. NOTE the
-  corrected attitude does NOT currently reach LIO (its subscription is gated on
-  `initial_localization.method == FromStateEstimator`, and the continuous
-  `estimated_navstate()` prior is frame-local by design). See
-  `~/plans/900_mola_mapper.md` (IMU preintegration section) for full numbers.
-- High-rate wheels are aggregated the same way when
-  `aggregate_high_rate_into_edges` is on: no `{odom_wheels}` frame variable,
-  one relative-pose edge per keyframe transition from the net wheel motion.
-- Odometry is fused as a SINGLE chain of CONSECUTIVE relative-pose edges, not
-  absolute `Between(F(i), T(kf))` ties — this is the key fix for `{map}`
-  tilt/z deformation. Every time-adjacent keyframe pair, regardless of
-  source, is linked by exactly one `BetweenFactor`. `T_map_to_odom_i` is a
-  DERIVED, instantaneous readout each solve, not a fusion unknown.
-- Chain-edge noise is DATA-DRIVEN from the propagated relative covariance
-  (faithful port of `mola_sm_loop_closure::add_odometry_edges`), not a
-  hardcoded isotropic sigma — this is what lets the absolute IMU-gravity/GNSS
-  factors actually level the map.
-- `estimated_navstate(t, {odom_i})` is frame-local: anchored on the source's
-  own last raw pose, extrapolated with a finite-difference twist from that
-  source's own consecutive raw poses (kinematic-model-aware). It does NOT
-  reconstruct through `{map}` and does NOT use the graph `V(kf)/W(kf)` (both
-  are re-jittered every solve by absolute factors, which would otherwise leak
-  into the short-term prediction LIO/VIO depend on for ICP initial guesses).
-  Falls back to the global conversion only before a source's first
-  `fuse_pose()` lands.
-- The extrapolation VELOCITY is low-passed (`predict_twist_filter_enabled`,
-  `predict_twist_filter_time_const`, dt-aware EMA in `TwistLowPass`), on both
-  velocity sources: the newest keyframe's graph `V/W` and each source's
-  `local_twist`. Raw, either one hands a jittery motion prior to LIO, which
-  starts ICP from a bad guess and drops scans under real-time load. A
-  non-advancing timestamp must leave the EMA untouched (the solver re-runs at
-  an unchanged newest-keyframe stamp; refreshing there would wipe the history
-  and pass the raw value through). Paired with moderate
-  `sigma_random_walk_acceleration_*` defaults (0.5 / 1.0): a loose angular
-  sigma lets the boundary keyframe's yaw rate swing and rotate the prediction.
-- `estimated_navstate()` never throws: it degrades to `nullopt`. A keyframe
-  exists in `time_to_kf_id` at CREATION but only in `last_estimated_states`
-  after a solve commits, so the query path routinely sees not-yet-solved
-  keyframes (`get_latest_state_and_covariance()` would throw). The body lives
-  in `estimated_navstate_impl()` so the public entry point can catch.
-- Out-of-order keyframe guard (mandatory): in
-  `create_or_get_keyframe_by_timestamp_locked()`, a request older than the
-  newest keyframe snaps to the nearest existing keyframe instead of inserting
-  a past variable.
-- Frame model mirrors `mola_state_estimation_smoother`: one `{odom_i}` per
-  source, plus `{map}` and `{enu}`; the graph estimates `T_enu_to_map`.
-- Keyframe-creation gating (`KeyframeCreationSource`: Auto / SharedMapOnly /
-  SensorClock): only `requestInsertKeyframe()` (or a sensor-only clock with
-  no LIO/VIO producer) creates graph keyframe variables. Dense `fuse_pose()`,
-  rate-capped IMU/wheels, and GNSS feed the predictor anchor and/or
-  accumulate into inter-keyframe constraints; they never spawn a variable.
-  `Auto` mode runs legacy per-call creation until the first
-  `requestInsertKeyframe()` lands, then flips to `SharedMapOnly`.
-- The mapper does NOT gate keyframe insertion: whatever a front end pushes
-  becomes a keyframe. WHICH poses get pushed is entirely the front end's
-  policy, and in `mola_lidar_odometry` that policy was purely spatial, so
-  revisiting a mapped area created NO keyframes (the previous pass' ones are
-  the nearest neighbors) and loop closure never got the second endpoint of the
-  loop it was supposed to close. Every launcher here therefore `$define`s
-  `MOLA_SIMPLEMAP_KF_TIME_WINDOW` (env-overridable), which bounds that check to
-  recent keyframes only: 15 s on the faster vehicle datasets (KITTI, MulRan,
-  generic rosbag), 30 s on the slow-moving ones (Oxford Spires, ConSLAM,
-  BotanicGarden), where the same stretch of path takes longer to traverse.
-  Needs a mola_lidar_odometry with
-  `nearby_keyframe_time_window` support; on an older one the `$define` is
-  simply an unused variable.
-- Geo-ref convergence is MODE-AWARE, and the two modes use different criteria.
-  Live (`estimate_geo_reference: true`): `optimize_and_refresh()` publishes
-  `state_.geo_reference` only once `T_enu_to_map`'s own position+orientation
-  sigmas (plus the latest keyframe's ORIENTATION sigma) clear
-  `convergence_max_position_sigma` / `convergence_max_orientation_sigma_deg`,
-  and `has_converged_localization()` is then sticky on that. It deliberately
-  does NOT gate on the keyframe's ABSOLUTE position sigma: the central map
-  pins a far-away gauge anchor, so that grows with distance and would block
-  convergence forever on long trajectories. Relocalize
-  (`estimate_geo_reference: false` + a fixed geo-ref): the geo-reference is
-  known up front and says nothing about being localized, so
-  `has_converged_localization()` gates on the latest keyframe's own pose
-  sigma. Gating on `estimate_geo_reference` alone made relocalize mode
-  unconditionally "never converged".
-- `set_geo_reference()` (front end loaded a geo-referenced map) MUST be
-  implemented, not inherited: an unpinned `T_enu_to_map` leaves the absolute
-  rotation a gauge freedom (gravity/attitude factors only measure rotation
-  relative to it) and iSAM2 throws. With no keyframes yet it rebuilds the
-  graph (after `state_.clear()`, or the still-pending `symbol_T_enu_to_map`
-  is inserted twice); with keyframes present it pins the existing variable
-  with an extra prior, since the central map must survive the call.
-- `reset()` resets only the short-term per-source integration anchors
-  (wheel/IMU/ingestion chains), never the keyframes/graph/geo-ref/diagnostic
-  counters — the central map is shared, persistent state and must survive one
-  front end relocalizing.
+- `requestInsertKeyframe()`: rejects keyframes not newer than the last; initial guess = newest
+  estimate + front end increment.
+- GNSS (`gnss_sensor_labels_re`, readings with GGA only): attached to the nearest keyframe
+  within `gnss_max_time_offset`, only once a keyframe at or after the reading exists (pending
+  queue). No time interpolation: the fix is applied at the keyframe pose.
+- Gravity (`imu_sensor_labels_re`, first matching label): accelerometer averaged over
+  `imu_gravity_window` before each keyframe, stored as a CObservationIMU in the keyframe aux frame.
+- Gyro (`gyro_sensor_labels_re`, first matching label): readings integrated between
+  consecutive keyframes (`integrate_gyro()`, exact tick-based durations), bias from the first
+  `ImuBiasSource` with an estimate (else 0 with `gyro_bias_sigma`), rotated to the vehicle
+  frame. Sigma: noise density * sqrt(T), bias sigma * T, scale sigma * accumulated angle. The
+  bias error is modeled as independent per factor, though it is common to all of them.
+- The bias sources are queried before taking `state_mtx_`.
 
-- Loop closure is FIRE-AND-FORGET unless you say otherwise.
-  `request_loop_closure_scan()` returns immediately and the scan lands whenever
-  the background thread gets to it -- fine for the GUI button it was written
-  for, useless for anything that has to ACT on the result (a test asserting on
-  edges, a caller about to save a map, a run being compared against another).
-  `wait_for_loop_closure_idle(timeoutSeconds)` closes that: it blocks until no
-  scan is requested-but-not-started AND none is running, and returns true
-  immediately when there is no LC thread at all (loop closure off, or
-  `enable_loop_closure_thread` false, where the caller owns the schedule
-  already) -- nothing to wait for is not a failure. `lc_busy_` is set BEFORE
-  `lc_force_scan_` is cleared in the thread loop, deliberately: the other order
-  leaves a window where a waiter sampling both flags concludes "idle" and
-  returns before its own scan ran. Covered by `test-lc-wait-idle`.
+## Global graph (GlobalGraph.cpp)
 
-- Loop closure is a LIBRARY, not a running module: the `mola_sm_loop_closure`
-  F2F engine is linked and driven from a mapper-owned background thread
-  (`loop_closure_enabled`, off by default). The thread snapshots the central
-  map, runs the detector-only `analyze()` OFF the state lock (streaming +
-  abortable), and merges accepted edges as robust (Huber) `BetweenFactor`s,
-  then wakes the optimizer. Keyframes carry the raw lidar scan plus a "metadata"
-  comment observation with the per-keyframe velocity window, so the LC pipeline
-  can deskew when the sensor provides per-point timestamps (use a deskew-free
-  pipeline for sensors that don't). GNC-in-parallel and the LC-event
-  notification to front ends are still open.
+Keys `P(i)` (keyframe poses in `{map}`), `T(0)` (T_enu_to_map). Factors:
+- odometry chain (same source frame): stiff by default, sigma = floor + per sqrt(m) + per
+  radian turned (`odometry_noise_ang_per_rad`: LIO heading errors concentrate in turns);
+  different source frames are joined by a weak edge;
+- loop closures: Huber, with sigma floors (the detector ICP covariance is overconfident);
+- GNSS: `FactorGnssMapEnu` with a selectable robust kernel (default Cauchy);
+- gravity: `mola_georeferencing::add_imu_gravity_factors`;
+- gyro: `BetweenFactor<Pose3>` with free translation (sigma 1e3 m);
+- weak prior on `T(0)`, prior on `P(0)` (gauge).
+The geo-reference is returned (published, saved) only once observable: `georef_min_gnss_factors`
+and a `T(0)` azimuth sigma below `georef_max_sigma_yaw_deg`.
 
-- LC is observable at runtime. `analyze()` reports per-scan stats via
-  `LoopClosureAnalyzeOptions::on_progress` (live done/total, so the consumer
-  derives a per-scan pending-queue depth) and `out_stats`
-  (`LoopClosureAnalyzeStats`: candidates generated/evaluated, edges accepted,
-  aborted) — guarded by `MOLA_SM_LOOP_CLOSURE_HAS_ANALYZE_STATS`. The mapper
-  keeps cumulative + current-scan counters in `lc_ui_` (atomics, read lock-free
-  by the viz thread) and surfaces them three ways: a GUI "Loop Closure" tab
-  (loops accepted, candidates checked, current-scan progress / finalize round,
-  last-scan summary, a highlight toggle, and a "Run LC scan now" button that
-  wakes the LC thread via `request_loop_closure_scan()` — never runs `analyze()`
-  off-thread, since the engine is single-thread-per-instance); live metric plots
-  (`mapper/lc_*`, guarded by `MOLA_KERNEL_VIZ_HAS_METRICS`); and `getDiagnostics()`
-  values (`lc_loops_accepted`, `lc_queue_depth`, ...). Accepted loop edges render
-  green (vs the blue odometry chain) in the 3D scene.
+## Threads
 
-- LC pipeline config lives in `params/loop-closure-f2f-mapper.yaml`, which
-  `$import`s the package's f2f pipeline and overrides ONLY the ICP registration
-  core (point-to-point instead of cov2cov; wider initial pairing sigma), so
-  mola_sm_loop_closure keeps its own defaults. Both are needed for real loops to
-  pass acceptance at all. The KITTI, MulRan, Oxford Spires, BotanicGarden and
-  ConSLAM launchers enable LC by default and point at it. BotanicGarden and
-  ConSLAM both use a Velodyne VLP-16 with per-point timestamps (confirmed on
-  the recorded PointCloud2 fields), so they use the shared, non-widened
-  pipeline (`loop-closure-f2f-mapper.yaml`), same as MulRan; only Oxford
-  Spires' dense Hesai needs the widened-final-sigma variant (see below).
-  KITTI scans carry NO per-point timestamps, so its launcher points at
-  `params/loop-closure-f2f-mapper-kitti.yaml`, a thin `$import` of the shared
-  file that additionally `$define`s `MOLA_DESKEW_IGNORE_NO_TIMESTAMPS: true` (a
-  hook exposed by mola_sm_loop_closure's own pipeline): the imported deskew
-  filter throws by default when a cloud lacks per-point timestamps, and this
-  makes it pass such a cloud through unmodified instead. The flag only changes
-  behavior for timestamp-less clouds, so it is harmless if ever imported by a
-  launcher whose sensor does have timestamps, but is kept KITTI-only since
-  that is the one case among the datasets above that needs it. This avoids
-  requiring the user to export the env var by hand.
+- Optimizer thread: re-solves after new data, at most every `optimizer_min_period`.
+- Loop closure thread: `mola_sm_loop_closure` `analyze()` (detection only) over the keyframe
+  map, incremental scans plus a full one every `loop_closure_full_scan_every_n`; new edges
+  merged in order. One scan at a time (`lc_scan_mtx_`). `finalize()` (also from `onQuit()`)
+  runs extra full scans and solves; each step and output is guarded, so one failure does not
+  lose the other outputs.
+- `state_mtx_` guards keyframes, loops and pending data; never call other modules with it held.
+- Feedback to the state estimator: the newest keyframe pose, once per keyframe.
+- Limitations: one front end chain (keyframes of interleaved sources only get weak edges);
+  all keyframe observations stay in RAM; every solve is a full batch.
 
-- Dense high-resolution LiDARs need a wider ICP FINAL pairing sigma too. The base
-  pipeline evaluates ICP quality as the paired-point ratio at the final annealed
-  threshold (`force_final_pairings_for_quality`, default 0.05 m). On the dense
-  Hesai clouds of Oxford Spires, even a correct cross-pass alignment lands few
-  points within 5 cm, so quality collapses to ~0% and every loop is rejected.
-  The shared `params/loop-closure-f2f-mapper.yaml` therefore raises
-  `threshold_sigma_final` to 0.3 m (env `LC_ICP_FINAL_SIGMA`) for every
-  launcher. This is a registration-resolution setting for dense sensors, NOT a
-  change to the `min_icp_goodness` acceptance level. Validated on
-  observatory-quarter-01 (real-time, zero drops, under the prior pickier
-  candidate defaults below): 5 loops closed, APE RMSE 0.47 m vs 1.53 m with LC
-  off. Note the real-time pipeline is non-deterministic (async optimizer + LC
-  threads, scan drops under time-warp), so the absolute APE varies run-to-run
-  (~0.25-0.5 m LC-on in good runs); LC helps in every fair same-playback
-  comparison.
+## Reference results
 
-- Candidate generation in the shared pipeline defaults to a nearby-node,
-  map-refinement-friendly setup rather than the pickier upstream values:
-  `min_frames_between_lc: 2` (env `MIN_FRAMES_BETWEEN_LC`, vs. the base
-  pipeline's 20), so topologically close keyframes -- e.g. adjacent legs of a
-  path -- are eligible as candidates, not just far-away-in-time revisits, and
-  `max_distance_for_lc_candidate: 20 m` (env `MAX_LC_DISTANCE`, down from 50 m).
-  `lc_candidate_strategy` stays at the base `MULTI_OBJECTIVE` (env
-  `LC_SELECTION_METHOD`, `PROXIMITY_ONLY` also available). Raise
-  `MIN_FRAMES_BETWEEN_LC` (e.g. 20) for a lower-compute, real-time-only run (single-scan ICP
-  only bridges its own convergence basin, so a wide-open candidate search costs
-  more without necessarily closing more real loops online; the finalize cascade
-  is what recovers far genuine loops as drift shrinks).
+- 1.3 km ground robot loop, low-cost GNSS only (RTK as ground truth), mapper feeding back to the
+  smoother: absolute horizontal RMSE 5.4 m initially; 4.6 m with smoother bias tracking and
+  the per-radian odometry sigma; 4.35 m adding gyro factors. LIO alone drifts ~11 m.
+- KITTI 00 (3.7 km, loop closures only): LIO APE RMSE 6.85 m, mapper 2.21 m (50 loops).
 
-- LC can also serve as an offline map-refinement stage: a dense keyframe graph
-  plus aggressive candidate generation (now the Oxford Spires default) yields
-  thousands of edges and the best accuracy, but is much heavier (enabled via
-  the env-var bundle documented in the Oxford Spires launcher header). Denser
-  keyframes or denser candidates ALONE regress; both together win.
+## Tests
 
-- Online LC scans alone close few loops: a pair only closes once BOTH endpoints
-  exist AND drift is small enough, which for big revisits happens near the end of
-  the run. Hence `loop_closure_finalize_rounds` (default 8): at destruction,
-  repeat full scan + synchronous re-optimization until a round finds nothing new,
-  each round's correction bringing further candidates into ICP's basin. Rounds
-  pass the already-closed pairs via `LoopClosureAnalyzeOptions::exclude_pairs`,
-  without which a scan just re-proposes them and burns its candidate budget.
-  Validated on KITTI-00: 8 loops closed (4 online + 4 in finalize, then
-  converged), vs 0 loops and 8.95 m absolute pose error with LC off.
-
-- `mola-mapper-cli` is the OFFLINE front end, and it exists for
-  reproducibility. It replays a front end's keyframe simplemap through
-  `requestInsertKeyframe()`, closes loops, optimizes, and writes the corrected
-  map out. A live run is paced by the optimizer thread, the LC thread and a
-  wall-clock scan period, so replaying one dataset twice need not give the same
-  map; the CLI forces `enable_optimizer_thread` and `enable_loop_closure_thread`
-  false OVER the config file (a YAML cannot reintroduce a racing path into a run
-  whose point is to be reproducible) and triggers each LC scan after a fixed
-  NUMBER OF KEYFRAMES, not after a number of seconds.
-  That covers what the mapper owns, and NOT the loop-closure detector, which has
-  its own parallelism: `run_loop_closure_scan()` collects accepted edges and
-  merges them sorted by keyframe id (fixing an observable order dependence and a
-  data race on the `merged` counter), but the detector's per-candidate ICP still
-  varied. So the CLI also turns on the ENGINE's own reproducibility switch,
-  `mola_sm_loop_closure`'s `deterministic`, by binding `LC_DETERMINISTIC=true`
-  in its own process before `initialize()` -- NOT by editing
-  `params/loop-closure-f2f-mapper.yaml`, which the online launchers share and
-  where this must stay off (it is one thread all the way down, and those runs
-  are paced by a real-time clock). `--no-deterministic` takes the fast path.
-  Verified: 3/3 bit-identical on KITTI-07 with it, 3/3 different without; same
-  APE either way (0.3056), ~8x wall clock.
-  `enable_loop_closure_thread: false` keeps the engine but not the thread: this
-  is what makes a synchronous LC path exist at all, since
-  `finalize_loop_closures()` early-returns unless `start_loop_closure_thread()`
-  created the engine.
-  It writes TWO trajectories. The keyframe one is one pose per keyframe, ~10x
-  sparser than the front end's on a distance-gated map; given the dense
-  front-end trajectory (`--input-trajectory`), it also applies the optimized
-  keyframe poses to it as a LEFT-composed, SLERP-interpolated correction field
-  (`--output-corrected-trajectory`), which keeps the front end's sampling and
-  local detail while picking up the global correction. Score that one against a
-  sensor-rate ground truth; the keyframe one is not comparable with a dense
-  front-end trajectory.
-  This is the job `mapper-lio` in the server's SLAM-eval pipeline
-  (`plans-mola-server`, `run-single-test.sh`'s `run_job_mapper_lio()`), which
-  reuses the `lio` job's LO run verbatim as its first stage so the two rows
-  differ only by the back end.
-
-See `~/plans/900_mola_mapper.md` for the rationale behind each of these (the
-real-data failure modes that drove each design choice), the GNC-bootstrap
-geo-ref rewire, IMU preintegration, remaining loop-closure work (GNC, LC
-event), save/load, relocalization and spatial-paging designs that are not yet
-implemented, and the full task checklist.
-
-## Build / test
-
-```bash
-cd ~/ros2_ws
-colcon build --packages-select mola_mapper
-colcon test  --packages-select mola_mapper && colcon test-result --verbose
-```
-
-## Retuning an imported pipeline: prefer `$define`
-
-When a launcher `$import`s `mola_lidar_odometry`'s pipeline YAML into the
-`lidar_odom` module, prefer `$define` (mola_yaml) over a sibling override to
-retune it: it binds the `${VAR|default}` hooks the imported file already
-exposes, with priority `environment > $define > the file's inline default`.
-The Oxford Spires and ConSLAM launchers use it for `MOLA_DESKEW_METHOD` and
-`MOLA_LO_INITIAL_LOCALIZATION_METHOD`.
-
-This avoids two traps that both previously landed a launcher silently running
-`FixedPose` and linear deskew. First, a sibling override must match the
-imported file's OWN nesting: `initial_localization` is a TOP-LEVEL key there
-(sibling of `params:`, not inside it), so nesting the override under the
-launcher's `params:` lands it in an unused `params.initial_localization`
-(deep-merge only reaches keys at the same nesting level). Second,
-`observations_deskew_pass` is a YAML sequence, which deep-merge replaces
-wholesale rather than patching, so overriding one field used to require
-duplicating the whole filter step verbatim. Use `$define` when the setting has
-a hook; fall back to a sibling override (at the right nesting level) when it
-does not, and verify the result with `mola-yaml-parser` on the merged config.
-The same pattern simplifies `params/loop-closure-f2f-mapper.yaml`: every scalar
-retune is `$define`d instead of restated as a `params:` key. If a launcher ever
-needs a dataset-specific override file importing that one and retuning the same
-variable, note that mola_yaml (MOLAorg/mola#182) makes an outer file's
-`$define` win over a more deeply imported file's own `$define` for the same
-variable name. Before that fix, nested `$define` blocks for the SAME name did
-NOT compose across `$import` levels -- the more deeply imported file's own
-`$define` silently won, discarding the outer file's override (the opposite of
-the documented `environment > $define > inline default` priority, which only
-ever held within a single `$define` scope). If a launcher needs this fix and
-mola_yaml has not been rebuilt/released with it yet, fall back to an explicit
-`params:` key at at least one of the levels (a plain sibling-key override
-always wins regardless of nesting) and verify with `mola-yaml-parser`.
-
-## Real-dataset runs
-
-```bash
-export KITTI_BASE_DIR=/path/to/kitti_root
-export MOLA_ODOMETRY_PIPELINE_YAML=$(ros2 pkg prefix mola_lidar_odometry)/share/mola_lidar_odometry/pipelines/lidar3d-default.yaml
-KITTI_SEQ=04 MOLA_LINK_FIRST_POSE_SIGMA=1e-6 \
-  mola-cli mola-cli-launchs/lidar_odometry_mapper_from_kitti.yaml
-# MOLA_WITH_GUI=false for headless; MOLA_TIME_WARP=N to speed up/slow down.
-```
-
-```bash
-export OXFORD_SPIRES_ROSBAG2=/path/to/sequence/raw/ros2bag/<segment>
-MOLA_WITH_GUI=false MOLA_MAPPER_TUM_TRAJECTORY_OUTPUT=/tmp/obs01.tum \
-  mola-cli mola-cli-launchs/lidar_odometry_mapper_from_oxford_spires.yaml
-# LiDAR+IMU only (no GNSS). Loop closure is ON by default (Hesai has per-point
-# timestamps, so the LC pipeline deskews normally). GT trajectories ship as TUM
-# under each sequence's processed/trajectory/gt-tum.txt.
-# Multi-segment sequences: override rosbag_filename in the YAML with a list
-# (Rosbag2Dataset supports multi-bag playback).
-```
-
-```bash
-export BOTANICGARDEN_LIO_BAG=$HOME/datasets/botanic/1018_00_LIO.bag
-export MOLA_ODOMETRY_PIPELINE_YAML=$(ros2 pkg prefix mola_lidar_odometry)/share/mola_lidar_odometry/pipelines/lidar3d-default.yaml
-mola-cli mola-cli-launchs/lidar_odometry_mapper_from_botanicgarden.yaml
-```
-Reads a ROS 1 `.bag` directly via `mola::Rosbag1Dataset` (`mola_input_rosbag1`,
-no ROS 1 install needed); use that package's `rosbag1-info <bag>` CLI to
-confirm a dataset's sensor inventory before wiring a new launcher (don't trust
-a dataset's own README blindly).
-
-```bash
-export CONSLAM_BAG=$HOME/datasets/ConSLAM/sequence2.bag
-mola-cli mola-cli-launchs/lidar_odometry_mapper_from_conslam.yaml
-```
-Hand-held-scanner construction dataset (Velodyne VLP-16 + Xsens MTi-610 IMU,
-no GNSS): another pure LiDAR+IMU `Rosbag1Dataset` case. The dataset's own
-extrinsic calibration files (`calib_lidar2imu.txt` etc.) ship in a separate
-`data_calib.zip`, not in the software repo or a plain sequence `.bag`
-download, so the LiDAR/IMU `fixed_sensor_pose` only encodes the rotation the
-paper documents (180 deg yaw between the two mounting frames); translation
-defaults to zero pending the real calibration file.
-
-`lidar_odometry_mapper_from_rosbag.yaml` is the generic entry point for any
-ROS 1 or ROS 2 bag: lidar/imu/gps/wheel-odometry topics are all optional, set via
-`MOLA_LIDAR_TOPIC`/`MOLA_IMU_TOPIC`/`MOLA_GNSS_TOPIC`/`MOLA_ODOMETRY_TOPIC`
-(unset = that sensor is skipped, no crash).
-
-MulRan launcher (`lidar_odometry_mapper_from_mulran.yaml`,
-`MULRAN_BASE_DIR=... MULRAN_SEQ=DCC01`) is the LiDAR+IMU+GNSS reference case;
-self-contains `estimate_geo_reference: true` and
-`link_first_pose_to_reference_origin_sigma: 1e-6`.
-
-A pure-odometry or `estimate_geo_reference` run needs
-`link_first_pose_to_reference_origin_sigma` set (e.g. `1e-6`), or the whole
-graph stays gauge-free and `LidarOdometry` discards its motion model.
-
-## Call graph
-
-`docs/call-graph.md` traces every major public-API method down to its
-internal helpers, state stores, and the background optimizer. Keep it in sync
-whenever you add/rename/rewire a public method, the call chain inside
-`fuse_pose_locked()` / `request_insert_keyframe_locked()` /
-`optimize_and_refresh()` / `estimated_navstate()`, a new hot-path helper, the
-`sensor_kf_creation_allowed()` gate, or the locking model.
-
-## Code style
-
-clang-format-14; no one-line `if`; one variable per line; no em/en dashes;
-American spelling; anonymous namespaces over `static`. clang-tidy per the
-repo `.clang-tidy`. Don't sign commits as an AI agent. Keep this file, the
-plan, and `docs/call-graph.md` in sync with the code.
-</content>
+`test/`: test-global-graph (loop closure, GNSS georef and its observability, gyro vs turn
+heading errors), test-gyro-integration, test-mapper-ingestion (GNSS/gravity/gyro attachment,
+feedback, outputs), test-lc-wait-idle.

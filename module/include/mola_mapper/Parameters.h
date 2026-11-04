@@ -3,7 +3,6 @@
 | '_ ` _ \ / _ \| |/ _` | Modular Optimization framework for
 | | | | | | (_) | | (_| | Localization and mApping (MOLA)
 |_| |_| |_|\___/|_|\__,_| https://github.com/MOLAorg/mola
-
  Copyright (C) 2018-2026 Jose Luis Blanco, University of Almeria,
                          and individual contributors.
  SPDX-License-Identifier: GPL-3.0
@@ -11,476 +10,173 @@
  Closed-source licenses available upon request, for this package
  alone or in combination with the complete SLAM system.
 */
-
 /**
  * @file   Parameters.h
- * @brief  Parameters for the Mapper central 3D SLAM module.
+ * @brief  Parameters of mola::mapper::Mapper, loaded from YAML.
  * @author Jose Luis Blanco Claraco
  * @date   2026
  */
 #pragma once
 
-#include <mola_kernel/Georeferencing.h>
 #include <mrpt/containers/yaml.h>
-#include <mrpt/math/TTwist3D.h>
-#include <mrpt/typemeta/TEnumType.h>
 
 #include <cstdint>
-#include <optional>
 #include <string>
 
 namespace mola::mapper
 {
-/** Kinematic motion model used to build the inter-keyframe factors. */
-enum class KinematicModel : uint8_t
+/** Parameters of the global pose graph (see GlobalGraph.h). */
+struct GlobalGraphParams
 {
-  ConstantVelocity,  //!< Hand-held / flying: full SE(3) constant velocity.
-  Tricycle,          //!< Ground vehicle: Ackermann / tricycle constraints.
-};
-
-/** Controls which code paths are allowed to create new keyframe variables in
- *  the GTSAM graph (plan 4.13 Phase A).
- *
- *  - Auto: acts like SharedMapOnly once any requestInsertKeyframe() call is
- *    received; before that, falls back to legacy creation (all paths create KFs
- *    at min_time_difference_to_create_new_frame). Suitable for typical
- *    LIO+mapper deployments: the first sparse KF from LIO flips the mode.
- *  - SharedMapOnly: ONLY requestInsertKeyframe() creates keyframe GTSAM
- *    variables. Dense fuse_pose(), fuse_imu(), fuse_odometry(), fuse_gnss()
- *    only record the predictor anchor and snap to the nearest EXISTING keyframe
- *    for sensor factors. Requires a SharedKeyframeMap producer (LIO/VIO).
- *  - SensorClock: sensor paths create KFs at a bounded rate governed by
- *    sensor_clock_min_period_s. For sensor-only runs (wheels + IMU + GNSS
- *    with NO LIO/VIO front end).
- */
-enum class KeyframeCreationSource : uint8_t
-{
-  Auto,           //!< Legacy until first requestInsertKeyframe(); then SharedMapOnly.
-  SharedMapOnly,  //!< Only requestInsertKeyframe() creates KF graph variables.
-  SensorClock,    //!< Sensor paths create KFs at sensor_clock_min_period_s rate.
-};
-
-/** All configuration parameters of Mapper, loaded from a YAML map node.
- *
- * The navigation-state fusion group mirrors
- * `mola::state_estimation_smoother::Parameters` so existing tuning carries over.
- *
- * \ingroup mola_mapper_grp
- */
-class Parameters
-{
-public:
-  Parameters() = default;
-
-  /// Loads all parameters from a YAML map node (the `params:` subtree).
-  void loadFrom(const mrpt::containers::yaml & cfg);
-
-  /** @name Reference frame IDs
+  /** @name Odometry chain (consecutive keyframes of the same source)
+   *  Stiff by default: the front end is accurate locally, and only its slow drift
+   *  must give way to GNSS and loop closures. Each edge sigma is a floor plus a
+   *  random walk with the keyframe step, per sqrt(m).
    * @{ */
+  /// Multiplier of the relative covariance from the front end poses (0: ignored).
+  double odometry_uncertainty_multiplier = 0.0;
+  double odometry_additional_noise_xyz = 0.002;     ///< [m]
+  double odometry_additional_noise_ang_deg = 0.01;  ///< [deg]
+  double odometry_noise_xyz_per_sqrt_m = 0.01;      ///< [m/sqrt(m)]
+  double odometry_noise_ang_deg_per_sqrt_m = 0.05;  ///< [deg/sqrt(m)]
+  /// Extra rotation sigma per radian rotated in the edge: LiDAR odometry heading
+  /// errors concentrate in turns (e.g. short range sensors in open areas).
+  double odometry_noise_ang_per_rad = 0.02;
+  /** @} */
 
-  /// Vehicle/robot base frame, used when publishing timely pose updates.
-  std::string vehicle_frame_name = "base_link";
+  /** @name Gyroscope rotation between consecutive keyframes (if present)
+     * @{ */
+  bool use_gyro = true;
+  double gyro_min_sigma_deg = 0.02;  ///< floor of each factor sigma
+  /** @} */
 
-  /// Reference frame for pose publication. Typically 'map' or 'enu'.
+  /** @name GNSS (CObservationGPS in the keyframes)
+     * @{ */
+  bool use_gnss = true;
+  double gnss_minimum_uncertainty = 0.5;  ///< [m] per-axis floor of the GNSS sigmas
+  double gnss_uncertainty_multiplier = 1.0;
+  double gnss_max_uncertainty_horiz = 20.0;  ///< [m] readings above this are not used
+  /// Robust kernel of the GNSS factors: "huber", "cauchy", "geman_mcclure" or
+  /// "tukey". The redescending ones (all but Huber) stop pulling at outliers,
+  /// e.g. low-cost receivers meters off under trees with a small reported sigma.
+  std::string gnss_robust_kernel = "cauchy";
+  double gnss_robust_k = 1.5;  ///< kernel parameter, in sigmas
+
+  /// The geo-reference is returned only once observable: at least this many GNSS
+  /// factors, and an azimuth sigma below this.
+  uint32_t georef_min_gnss_factors = 3;
+  double georef_max_sigma_yaw_deg = 10.0;  ///< [deg]
+  /** @} */
+
+  /** @name Gravity (averaged accelerometer, CObservationIMU in the keyframes)
+     * @{ */
+  bool use_imu_gravity = true;
+  double imu_gravity_sigma_deg = 3.0;
+  /** @} */
+
+  /** @name Loop closure edges
+   * @{ */
+  double loop_closure_robust_huber_k = 1.5;
+  /// Floors of their sigmas: the detector ICP covariance is overconfident.
+  double loop_closure_min_sigma_xyz = 0.05;      ///< [m]
+  double loop_closure_min_sigma_ang_deg = 0.25;  ///< [deg]
+  /** @} */
+
+  /// Gauge: sigma of the prior on the first keyframe [m] and [rad].
+  double first_pose_prior_sigma = 1e-4;
+
+  int max_iterations = 100;
+
+  void loadFrom(const mrpt::containers::yaml & cfg);
+};
+
+/** Parameters of mola::mapper::Mapper. */
+struct Parameters
+{
+  /// Reference frame of the global map, the same as the state estimator's.
   std::string reference_frame_name = "map";
 
-  /// The ENU geo-reference frame.
-  std::string enu_frame_name = "enu";
+  /** @name Sensors attached to the keyframes
+     * @{ */
+  /// Regex of the sensor labels of the GNSS readings to use (empty: none).
+  std::string gnss_sensor_labels_re = ".*";
+  /// A GNSS reading is attached to the keyframe nearest in time, if within this [s].
+  double gnss_max_time_offset = 0.5;
 
+  /// Regex of the sensor labels of the IMU used for gravity (empty: none).
+  std::string imu_sensor_labels_re;
+  /// Accelerometer readings averaged before each keyframe [s].
+  double imu_gravity_window = 1.0;
+  /// Minimum readings in that window to attach a gravity observation.
+  uint32_t imu_gravity_min_samples = 10;
+
+  /** Regex of the sensor label of the IMU whose gyroscope gives the rotation
+   *  between consecutive keyframes (empty: none). Its bias comes from a
+   *  mola::ImuBiasSource (e.g. the state estimator with imu_bias_tracking), if
+   *  there is one with an estimate for it; else it is taken as zero, with
+   *  sigma gyro_bias_sigma. */
+  std::string gyro_sensor_labels_re;
+  double gyro_noise_density = 3e-4;  ///< [rad/s/sqrt(Hz)]
+  double gyro_bias_sigma = 0.005;    ///< [rad/s] without a bias source estimate
+  double gyro_scale_sigma = 0.005;   ///< relative scale factor error
+  double gyro_max_gap = 0.1;         ///< [s] longer gaps between readings: no factor
   /** @} */
 
-  /** @name Kinematic factors and keyframe creation (motion model)
-   * @{ */
-
-  KinematicModel kinematic_model = KinematicModel::ConstantVelocity;
-
-  /// Valid estimations are extrapolated only up to this time since the last
-  /// incorporated observation; farther queries return std::nullopt.
-  double max_time_to_use_velocity_model = 2.0;  // [s]
-
-  /// Minimum time difference between two keyframes to create a new one.
-  double min_time_difference_to_create_new_frame = 0.01;  // [s]
-
-  /// Warn (but keep going) if the gap between two keyframes exceeds this.
-  double time_between_frames_to_warning = 3.0;  // [s]
-
-  /// Permissive temporal tolerance to attach GNSS factors to a nearby keyframe.
-  double gnss_nearby_keyframe_stamp_tolerance = 1.0;  // [s]
-
-  /// Maximum rate [Hz] of wheel-odometry increments inserted into the graph
-  /// (0 = disabled = insert every reading). Readings arriving sooner than 1/rate
-  /// after the last kept one are dropped WITHOUT advancing the integration anchor
-  /// (so the next kept reading fuses the full accumulated motion + covariance);
-  /// no information is thrown away, only the factor/keyframe cadence is bounded.
-  double odometry_max_insert_rate_hz = 5.0;  // [Hz]
-
-  /// When true, high-rate IMU and wheel odometry do NOT each spawn their own
-  /// keyframe. They share keyframes created at a bounded cadence
-  /// (sensor_keyframe_min_period), and wheel odometry is aggregated into a
-  /// single relative-pose edge between consecutive keyframes (the "consecutive
-  /// frame edge" model) instead of one absolute factor per sample. This bounds
-  /// central-graph growth from direct high-rate sensors. Keyframes requested by
-  /// LIO/VIO via SharedKeyframeMap are unaffected (still inserted as requested);
-  /// dense per-scan LIO/VIO fuse_pose() is a separate concern (predictor
-  /// separation, plan 6.2b).
-  bool aggregate_high_rate_into_edges = false;
-
-  /// Keyframe "close enough" window for direct high-rate sensors when
-  /// aggregate_high_rate_into_edges is on: a sample within this period of an
-  /// existing keyframe reuses it (a common coarse keyframe clock shared by IMU
-  /// and wheels), so direct-sensor keyframes are created at most ~1/this rate.
-  double sensor_keyframe_min_period = 0.5;  // [s]
-
-  /// How keyframe-variable creation is gated (plan 4.13 Phase A). Default
-  /// 'auto' keeps existing tests passing while automatically switching to
-  /// SharedMapOnly behavior once an LIO/VIO SharedKeyframeMap producer is
-  /// detected (i.e. after the first requestInsertKeyframe() call).
-  KeyframeCreationSource keyframe_creation_source = KeyframeCreationSource::Auto;
-
-  /// Minimum time [s] between keyframes created by the SENSOR CLOCK path
-  /// (SensorClock mode). Governs the coarse KF clock for sensor-only runs
-  /// (wheels + IMU + GNSS without LIO/VIO).
-  double sensor_clock_min_period_s = 0.5;  // [s]
-
-  /// Acceleration random-walk sigmas of the kinematic (constant-velocity)
-  /// factors, and of the twist/pose covariance growth in the short-term
-  /// prediction. Moderate by default: a loose angular sigma lets the newest
-  /// keyframe's yaw rate swing between solves, which rotates the predicted
-  /// pose. Loosen only for platforms with genuinely high linear/angular
-  /// acceleration.
-  double sigma_random_walk_acceleration_linear = 0.5;   // [m/s^2]
-  double sigma_random_walk_acceleration_angular = 1.0;  // [rad/s^2]
-  double sigma_integrator_position = 0.10;              // [m]
-  double sigma_integrator_orientation = 0.10;           // [rad]
-
-  /// If true, the velocity used for short-term extrapolation in
-  /// estimated_navstate() is a low-pass-filtered twist instead of the raw one.
-  /// Applies to BOTH velocity sources: the newest keyframe's optimized V/W
-  /// (re-jittered by every absolute factor over the non-windowed central map)
-  /// and each source's own finite-difference `local_twist` (a single-interval
-  /// difference of consecutive raw poses, hence noisy). Extrapolating either
-  /// un-damped feeds a jittery motion prior to a LiDAR front end, which starts
-  /// ICP from a bad guess and, under real-time load, drops scans. A plain
-  /// dt-aware EMA, so it stays deterministic.
-  bool predict_twist_filter_enabled = true;
-
-  /// [s] Time constant of the predict-twist low-pass. Larger = smoother prior
-  /// but more lag behind genuine acceleration.
-  double predict_twist_filter_time_const = 0.3;
-
-  double sigma_twist_from_consecutive_poses_linear = 1.0;   // [m/s]
-  double sigma_twist_from_consecutive_poses_angular = 1.0;  // [rad/s]
-
-  mrpt::math::TTwist3D initial_twist;
-  double initial_twist_sigma_lin = 0.1;  // [m/s]
-  double initial_twist_sigma_ang = 0.1;  // [rad/s]
-
-  bool enforce_planar_motion = false;
-
-  /// If set, the first frame gets an SE(3) prior toward the reference origin
-  /// with this sigma. Use a small number (e.g. 1e-6) for pure-odometry runs or
-  /// when estimating geo-referencing. Leave empty for pre-built geo-ref maps.
-  std::optional<double> link_first_pose_to_reference_origin_sigma;
-
+  /** @name Global graph optimization
+     * @{ */
+  GlobalGraphParams graph;
+  /// Run the optimizer in a background thread (false: only on optimize_now()).
+  bool enable_optimizer_thread = true;
+  /// Minimum period between solves [s].
+  double optimizer_min_period = 1.0;
   /** @} */
 
-  /** @name Keyframe ingestion (SharedKeyframeMap sink)
-   * @{ */
-
-  /// Noise of the tight, consecutive-keyframe relative-pose factor chaining
-  /// requestInsertKeyframe() calls from the same source (2.8 drift-fix design:
-  /// local LIO/VIO accuracy, NOT the absolute drift of the source over time).
-  /// Divided by the request's `quality` field (clamped away from zero).
-  double keyframe_ingestion_sigma_lin = 0.02;     // [m]
-  double keyframe_ingestion_sigma_ang_deg = 0.5;  // [deg]
-
-  /// Consecutive-keyframe odometry-edge noise is derived from the PROPAGATED
-  /// relative-pose covariance of the two source pose PDFs (cov_to (-) cov_from),
-  /// mirroring mola_sm_loop_closure::add_odometry_edges. The per-DOF sigma is
-  /// sqrt(diag) * odometry_edge_uncertainty_multiplier, with a small additive
-  /// floor below. This makes the edge anisotropic: tight in the well-observed
-  /// DOFs (x/y/yaw) and soft in the drift-prone ones (z/roll/pitch) so IMU
-  /// gravity / GNSS can level the map. Falls back to the floor alone when the
-  /// source provides no (or zero) covariance. Defaults match
-  /// mola_sm_loop_closure::OdometryEdgeParams (multiplier 1.0, additive floor
-  /// 1e-3 m / 1e-3 deg).
-  double odometry_edge_uncertainty_multiplier = 1.0;
-  double odometry_edge_min_sigma_xyz = 1e-3;      // [m]   additive floor
-  double odometry_edge_min_sigma_ang_deg = 1e-3;  // [deg] additive floor
-  /// If > 0, RAISES the odometry-edge roll/pitch floor to this many degrees
-  /// (yaw stays at odometry_edge_min_sigma_ang_deg), making the orientation
-  /// chain compliant in roll/pitch so an IMU gravity factor can level the map.
-  /// 0 disables it. ONLY enable together with the IMU gravity-leveling factor;
-  /// otherwise roll/pitch would drift unconstrained.
-  double odometry_edge_min_sigma_rollpitch_deg = 0.0;
-
+  /** @name Feedback to the state estimator (mola::NavStateFilter)
+     * @{ */
+  /** If true, after each solve the optimized pose of the newest keyframe is
+     *  fused into the state estimator as an absolute pose in reference_frame_name,
+     *  so loop closures and GNSS reach the live estimate. */
+  bool feedback_to_state_estimator = false;
+  /// Floors of the sigmas of that pose [m] and [deg].
+  double feedback_min_sigma_xyz = 0.10;
+  double feedback_min_sigma_ang_deg = 0.5;
   /** @} */
 
-  /** @name IMU related
-   * @{ */
-
-  /// Absolute-attitude (Pose3RotationFactor) sigma [deg]. Set to 0 to disable
-  /// the attitude factor. This factor is added at every keyframe whenever the
-  /// IMU provides an orientation quaternion, REGARDLESS of geo-referencing: the
-  /// absolute attitude is itself an azimuth reference, so it lets iSAM2 estimate
-  /// the geo-reference (T_enu_to_map yaw) automatically even with GNSS off (the
-  /// no-geo-ref F0 prior is yaw-free; see Mapper::reinitialize_gtsam_locked).
-  double imu_attitude_sigma_deg = 2.0;
-  double imu_attitude_azimuth_offset_deg = 0.0;
-  /// If > 0 and the IMU provides angular velocity, add a body-frame gyro prior
-  /// on the keyframe's W variable with this sigma [deg/s] (built from the
-  /// interval-averaged angular velocity). 0 disables it.
-  double imu_angular_velocity_sigma_deg = 0.0;
-
-  /// IMU gravity-leveling reducer (see agents.md "IMU gravity leveling"). The
-  /// proper-acceleration samples accumulated between two keyframes are pooled,
-  /// motion-contaminated ones (|a| far from g, high |w|) rejected, and ONE
-  /// MeasuredGravityFactor with a DATA-EARNED sigma is emitted on the keyframe.
-  /// Length of the gravity-pooling window [s]. ~1 s @ 100 Hz IMU -> ~100 samples.
-  double imu_gravity_window_sec = 1.0;
-  /// Accept a sample only if | ‖a‖ - g | <= this fraction of g.
-  double imu_gravity_accel_tol_frac = 0.05;
-  /// Accept a sample only if the angular rate magnitude is below this [deg/s].
-  double imu_gravity_gyro_tol_deg = 3.0;
-  /// Minimum accepted samples in a window to emit a gravity factor.
-  std::size_t imu_gravity_min_samples = 10;
-  /// Reject a window whose accepted samples disagree by more than this RMS
-  /// angular spread [deg] (motion-contaminated; would tilt the map). <=0 off.
-  double imu_gravity_max_spread_deg = 3.0;
-  /// Reject a window unless at least this fraction of raw samples passed the
-  /// low-dynamics gates (a hard-accel/turning epoch accepts very few). <=0 off.
-  /// Off by default: a high-vibration IMU accepts only a few percent of samples
-  /// even when stationary, so this would block the clean stops too; the
-  /// spread gate is the robust discriminator. Useful for low-noise IMUs.
-  double imu_gravity_min_accept_fraction = 0.0;
-  /// Lower / upper clamp on the earned gravity-factor sigma [deg].
-  double imu_gravity_sigma_floor_deg = 0.5;
-  double imu_gravity_sigma_ceil_deg = 5.0;
-
-  /// IMU preintegration (the RELATIVE half): between consecutive keyframes,
-  /// preintegrate accel+gyro into a gtsam CombinedImuFactor tying
-  /// {T,Vw,B}(i)->{T,Vw,B}(j). This propagates a gravity-leveling anchor forward
-  /// through the gyro-integrated rotation, so keyframes far from any stop are
-  /// still leveled (the absolute MeasuredGravityFactor/Pose3RotationFactor stay
-  /// as the sparse anchors). Nav frame = {map} (see plan: "Option B"): correct
-  /// while {map} is gravity-aligned (F0 ~ identity), which REQUIRES LIO to start
-  /// level via IMU initialization in pure-IMU / no-GNSS runs.
-  bool imu_preintegration_enabled = false;
-  /// Nav frame for the preintegration gravity. true (Option A, default): a
-  /// custom factor composes F(0)=T_enu_to_map so gravity is EXACT in {enu}
-  /// regardless of {map} tilt (correct for raw accel+gyro IMUs with no attitude
-  /// anchor, where {map} is not gravity-aligned). false (Option B): stock GTSAM
-  /// CombinedImuFactor with gravity baked as R_enu_to_map*(0,0,-g) in {map};
-  /// cheaper but only correct while {map} is gravity-aligned.
-  bool imu_preint_gravity_in_enu = true;
-  /// Accelerometer white-noise sigma [m/s^2 / sqrt(Hz)] (continuous-time).
-  double imu_preint_accel_noise_sigma = 0.02;
-  /// Gyroscope white-noise sigma [rad/s / sqrt(Hz)] (continuous-time).
-  double imu_preint_gyro_noise_sigma = 0.0017;
-  /// Accelerometer bias random-walk sigma [m/s^3 / sqrt(Hz)].
-  double imu_preint_accel_bias_rw_sigma = 1e-4;
-  /// Gyroscope bias random-walk sigma [rad/s^2 / sqrt(Hz)].
-  double imu_preint_gyro_bias_rw_sigma = 1e-5;
-  /// Integration-uncertainty sigma [m/s^2] folded into the position covariance.
-  double imu_preint_integration_sigma = 1e-3;
-  /// Expected gravity magnitude [m/s^2].
-  double imu_preint_gravity_magnitude = 9.81;
-  /// Prior sigma on the initial IMU bias: accel [m/s^2], gyro [rad/s].
-  double imu_preint_initial_bias_sigma_accel = 0.1;
-  double imu_preint_initial_bias_sigma_gyro = 0.01;
-  /// Prior sigma on the first keyframe's world-frame velocity [m/s].
-  double imu_preint_initial_velocity_sigma = 1.0;
-  /// Velocity prior sigma [m/s] used ONLY on the fallback path, when no IMU
-  /// factor could be built for a keyframe (empty / undercovered window, e.g. an
-  /// IMU dropout) and Vw/B would otherwise be unconstrained. Deliberately loose:
-  /// it exists to keep the graph well-posed, not to inform the solution, so a
-  /// stale velocity seed cannot bias it.
-  double imu_preint_dropout_velocity_sigma = 10.0;
-
-  /// Lightweight gyro relative-rotation factor between consecutive keyframes
-  /// (Pose3RelativeRotationFactor): constrains only the RELATIVE rotation from
-  /// the gyro preintegration (deltaRij = prod Exp(w*dt)), with NO position/
-  /// velocity double-integral and NO gravity term. Robust over the mapper's
-  /// long keyframe intervals, unlike the full CombinedImuFactor; it propagates
-  /// the sparse absolute gravity/attitude anchors forward through the
-  /// gyro-integrated rotation to level the keyframes far from any stop.
-  /// Independent of imu_preintegration_enabled (they can be used separately).
-  bool imu_relative_rotation_enabled = false;
-  /// Angular random-walk noise density [deg/sqrt(s)]: the factor's 3-DOF sigma
-  /// is this times sqrt(interval), modeling integrated gyro white noise.
-  double imu_relative_rotation_sigma_deg_per_sqrt_s = 0.5;
-  /// Lower clamp on the resulting relative-rotation sigma [deg].
-  double imu_relative_rotation_sigma_floor_deg = 0.2;
-
-  /// LocalVelocityBuffer retention [s] used when the relative-rotation or
-  /// preintegration factors are enabled. They integrate the WHOLE inter-keyframe
-  /// interval, which on a distance-gated central map can be tens of seconds, so
-  /// the buffer must not prune the early part of it. Cheap: a few hundred Hz
-  /// times this window is a small map.
-  double imu_integration_buffer_retention_sec = 60.0;
-  /// Minimum fraction of the keyframe interval that must actually be covered by
-  /// integrated IMU samples for the relative-rotation / preintegration factor to
-  /// be emitted. Below this the delta spans only part of the gap and would be a
-  /// corrupted constraint, so the factor is skipped (with a throttled warning).
-  double imu_integration_min_interval_coverage = 0.9;
-
-  /** @} */
-
-  /** @name Geo-referencing
-   * @{ */
-
-  bool estimate_geo_reference = false;
-  std::optional<mola::Georeferencing> fixed_geo_reference;
-  /// Isotropic prior sigma used to PIN T_enu_to_map to identity when neither
-  /// estimate_geo_reference nor fixed_geo_reference is set (pure IMU/odometry).
-  /// Tight so {map}=={enu} and IMU gravity levels the {map} keyframes directly
-  /// (units: rad for rotation DOFs / m for translation; see agents.md).
-  double enu_to_map_prior_sigma_no_georef = 1e-3;
-  double convergence_max_position_sigma = 1.0;         // [m]
-  double convergence_max_orientation_sigma_deg = 5.0;  // [deg]
-  bool publish_estimated_georef_on_convergence = true;
-  double gnss_huber_threshold = 1.5;  // [sigmas]
-
-  /** @} */
-
-  /** @name Nonlinear optimization
-   * @{ */
-
-  /// Each new keyframe triggers an iSAM2 update plus this many refining steps.
-  uint32_t additional_isam2_update_steps = 3;
-
-  /// If true, the (growing) iSAM2 solve runs on a dedicated background thread,
-  /// so estimated_navstate() and the high-rate publisher return immediately
-  /// from cached estimates instead of paying the solve cost on the calling
-  /// thread. Recommended for any real online run. Keep false for deterministic
-  /// single-threaded use (e.g. unit tests), where every query first flushes and
-  /// solves synchronously so it reflects all data fused so far.
-  bool enable_optimizer_thread = false;
-
-  /** @} */
-
-  /** @name Loop closure
-   * @{ */
-
-  /// Master switch: when true, a background thread periodically runs the
-  /// loop-closure detector (mola_sm_loop_closure) on a snapshot of the central
-  /// map and merges the accepted edges into the live graph.
+  /** @name Loop closure (mola_sm_loop_closure engine, detector only)
+     * @{ */
   bool loop_closure_enabled = false;
-
-  /// If true, the periodic loop-closure scans run on their own background
-  /// thread. Set to false to keep the engine but let the caller decide when
-  /// each scan happens (run_loop_closure_scan_now()): the scan schedule is
-  /// then driven by the data instead of by the wall clock, which is what makes
-  /// an offline run reproducible. The end-of-run finalize pass is synchronous
-  /// either way. Mirrors enable_optimizer_thread.
+  /// Scans driven by a background thread (false: by the caller).
   bool enable_loop_closure_thread = true;
-
-  /// Path to the loop-closure engine's own YAML (the mola_sm_loop_closure F2F
-  /// pipeline: ICP + candidate selection). Env-var substitution is applied.
-  /// Required when loop_closure_enabled is true.
   std::string loop_closure_pipeline_file;
-
-  /// The loop-closure thread wakes at most this often to consider a new scan.
-  double loop_closure_check_period_sec = 5.0;  // [s]
-
-  /// A new scan only runs once at least this many keyframes were added since
-  /// the previous scan (avoids re-scanning on tiny map growth).
+  double loop_closure_check_period_sec = 5.0;  ///< [s]
   uint32_t loop_closure_min_new_keyframes = 10;
-
-  /// If true, pass the count of keyframes present at the previous scan as the
-  /// detector's `first_new_keyframe` hint, so it only tests pairs involving a
-  /// new keyframe. A periodic full scan is still run every
-  /// loop_closure_full_scan_every_n incremental scans to recover loops that
-  /// only become geometrically plausible after re-optimization.
   bool loop_closure_incremental = true;
-
-  /// Every N incremental scans, run one full (non-incremental) scan. 0 disables
-  /// full scans (pure incremental). Ignored when loop_closure_incremental=false.
   uint32_t loop_closure_full_scan_every_n = 10;
-
-  /// After the dataset ends, run up to this many batch loop-closure rounds (full
-  /// scan + synchronous re-optimization each) until no new loops are found. This
-  /// recovers loops that online scans miss because both endpoints only exist
-  /// late in the run. 0 disables the finalize pass.
-  uint32_t loop_closure_finalize_rounds = 8;
-
-  /// Wall-clock budget for the whole finalize pass, checked before each round.
-  /// 0 disables the budget (rounds are only bounded by
-  /// loop_closure_finalize_rounds and convergence).
-  double loop_closure_finalize_max_seconds = 0.0;  // [s]
-
-  /// Huber robust-kernel threshold applied to merged loop-closure edges, so a
-  /// single bad edge cannot deform the map. In whitened (sigma) units.
-  double loop_closure_edge_robust_param = 1.5;
-
+  /// End-of-run passes (full scan + re-optimization) until no new loop.
+  uint32_t loop_closure_finalize_rounds = 4;
   /** @} */
 
-  /** @name High-rate pose publisher
-   * @{ */
-
-  /// Rate at which to publish the extrapolated reference-frame pose. 0=disabled.
-  double high_rate_pose_publish_rate_hz = 0.0;  // [Hz]
-
-  /// If true, fold the latest IMU/wheels readings (since the anchor) into the
-  /// extrapolation; otherwise extrapolate the anchor with the kinematic model.
-  bool high_rate_use_latest_sensors = true;
-
+  /** @name Outputs, written at the end (empty: not written)
+     * @{ */
+  /// Keyframe poses in reference_frame_name, TUM format.
+  std::string output_tum_trajectory;
+  /// Simplemap with the optimized keyframes and all their observations.
+  std::string output_simplemap;
+  /// Geo-reference (YAML: datum, T_enu_to_map and its covariance).
+  std::string output_georeference;
+  /// Loop closure edges, one per line: "kf_from kf_to x y z yaw pitch roll".
+  std::string output_loop_closures;
+  /** The trajectory of the state estimator (its estimated_trajectory(), e.g.
+   *  the smoother with keep_finalized_trajectory) and its geo-reference, for
+   *  comparisons. */
+  std::string output_state_estimator_tum;
+  std::string output_state_estimator_georeference;
+  /** Prefix of the files with the global graph input (see GlobalGraphIO.h), to
+   *  re-optimize it offline with other parameters (mola-mapper-reoptimize). */
+  std::string output_graph_input;
   /** @} */
 
-  /** @name Map save/load (single externalized .simplemap)
-   * @{ */
-
-  /// If non-empty, load this .simplemap at startup (localization / continue).
-  std::string load_simplemap_file;
-
-  /// If non-empty, save the map here on shutdown.
-  std::string save_simplemap_file;
-
-  /// If enabled, a directory will be created alongside save_simplemap_file
-  /// and keyframe point clouds will be externally serialized there, for much
-  /// faster loading and processing of the saved simplemap.
-  bool generate_lazy_load_scan_files = false;
-
-  /// Seconds a keyframe's raw observations stay in RAM before being
-  /// externalized (flushed to the sidecar directory). 0 = never externalize.
-  double externalize_after_seconds = 30.0;  // [s]
-
-  /** @} */
-
-  /** @name Sensor input names (regex)
-   * @{ */
-
-  std::string do_process_imu_labels_re = ".*";
-  std::string do_process_odometry_labels_re = ".*";
-  std::string do_process_gnss_labels_re = ".*";
-
-  /** @} */
-
-  /** @name Output trajectory
-   * @{ */
-
-  /// If non-empty, save the estimated robot trajectory (in {reference_frame})
-  /// as a TUM-format file at shutdown, and on demand via the GUI.
-  /// Set via env var MOLA_MAPPER_TUM_TRAJECTORY_OUTPUT (empty = don't save).
-  std::string save_trajectory_to_file;
-
-  /** @} */
+  void loadFrom(const mrpt::containers::yaml & cfg);
 };
 
 }  // namespace mola::mapper
-
-MRPT_ENUM_TYPE_BEGIN_NAMESPACE(mola::mapper, mola::mapper::KinematicModel)
-MRPT_FILL_ENUM(KinematicModel::ConstantVelocity);
-MRPT_FILL_ENUM(KinematicModel::Tricycle);
-MRPT_ENUM_TYPE_END()
-
-MRPT_ENUM_TYPE_BEGIN_NAMESPACE(mola::mapper, mola::mapper::KeyframeCreationSource)
-// Short lower-case aliases accepted in YAML; canonical C++ name registered last
-// so enum->string (logs/diagnostics) returns the full scoped name.
-MRPT_FILL_ENUM_CUSTOM_NAME(KeyframeCreationSource::Auto, "auto");
-MRPT_FILL_ENUM_CUSTOM_NAME(KeyframeCreationSource::SharedMapOnly, "shared_map_only");
-MRPT_FILL_ENUM_CUSTOM_NAME(KeyframeCreationSource::SensorClock, "sensor_clock");
-MRPT_FILL_ENUM(KeyframeCreationSource::Auto);
-MRPT_FILL_ENUM(KeyframeCreationSource::SharedMapOnly);
-MRPT_FILL_ENUM(KeyframeCreationSource::SensorClock);
-MRPT_ENUM_TYPE_END()

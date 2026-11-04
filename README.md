@@ -5,30 +5,79 @@
 
 # mola_mapper
 
-Central SLAM map for the [MOLA](https://github.com/MOLAorg/mola) framework,
-compatible with ROS 2.
+Global back end of a [MOLA](https://github.com/MOLAorg/mola) system, compatible
+with ROS 2.
 
-`mola_mapper` holds **one global, optimized representation of the world**,
-fusing multiple odometry sources (wheels, LiDAR-odometry, visual-odometry),
-IMU and GNSS into a single keyframe-based map (a `mrpt::maps::CSimpleMap` backed
-by a GTSAM iSAM2 factor graph), with anytime loop closure, geo-referencing,
-lifelong keyframe management, and relocalization.
+`mola::mapper::Mapper` is a MOLA module that runs next to a front end (LiDAR
+odometry) and its state estimator. It keeps a central map of keyframes, looks
+for loop closures, and optimizes a global pose graph with GNSS, gravity and
+gyroscope factors, which also yields the geo-reference. It does little
+estimation of its own and is not a `mola::NavStateFilter`.
 
-## Contents
+## Module topology
 
-This repository provides a C++ library `mola_mapper` implementing the central
-3D SLAM back-end.  It exposes the following `mola_kernel` interfaces:
+- `mola::LidarOdometry` (LIO) uses the state estimator
+  (`mola::state_estimation_smoother::StateEstimationSmoother`) as its only
+  `NavStateFilter`, and pushes sparse keyframes to the mapper through
+  `mola::SharedKeyframeMap`.
+- `mola::mapper::Mapper` receives those keyframes, and GNSS and IMU readings
+  from the raw data source as a `mola::RawDataConsumer`. It also implements
+  `mola::MapSourceBase` (geo-reference), `mola::DiagnosticsProvider` and
+  `mola::ExecutableBase`.
+- Optionally (`feedback_to_state_estimator`), the optimized pose of the newest
+  keyframe is fused into the state estimator as an absolute pose in the map
+  frame.
 
-| Interface | Role |
+See [docs/call-graph.md](docs/call-graph.md) for the threads and call flow.
+
+## Running with a rosbag2
+
+`mola-cli-launchs/lio_smoother_mapper_from_rosbag2.yaml` composes LIO, the
+state estimator, the mapper and a rosbag2 dataset reader:
+
+```bash
+export MOLA_INPUT_ROSBAG2=/path/to/bag
+export MOLA_LIDAR_TOPIC=/ouster/points
+export MOLA_IMU_TOPIC=/ouster/imu
+export MOLA_GNSS_TOPIC=/gps/fix          # optional
+export MOLA_MAPPER_OUTPUT_TUM=/tmp/mapper.tum
+export MOLA_MAPPER_OUTPUT_GEOREF=/tmp/mapper_georef.yaml
+mola-cli $(ros2 pkg prefix mola_mapper)/share/mola_mapper/mola-cli-launchs/lio_smoother_mapper_from_rosbag2.yaml
+```
+
+Every mapper setting is in `params/mapper.yaml` with an environment variable
+(`MOLA_MAPPER_*`). `MOLA_WITH_MAPPER=false` runs LIO and the state estimator
+only.
+
+## Main outputs
+
+Written at the end of the run, if the corresponding path is set:
+
+| Parameter | Content |
 |---|---|
-| `mola::NavStateFilter` | Single source of truth for short-term pose prediction queried by LIO/VIO front-ends |
-| `mola::LocalizationSourceBase` | Fused vehicle localization (published at high rate) |
-| `mola::MapSourceBase` | Map and geo-referencing |
-| `mola::SharedKeyframeMap` | Receives keyframe-insert requests from LIO/VIO front-ends |
-| `mola::DiagnosticsProvider` | Structured diagnostics |
+| `output_tum_trajectory` | Optimized keyframe poses in the map frame (TUM format) |
+| `output_simplemap` | `mrpt::maps::CSimpleMap` with the optimized keyframes and all their observations |
+| `output_georeference` | Geo-reference (YAML: datum, `T_enu_to_map` and its sigmas) |
+| `output_loop_closures` | Loop closure edges, one per line |
+| `output_state_estimator_tum`, `output_state_estimator_georeference` | Trajectory and geo-reference of the state estimator, for comparisons |
+| `output_graph_input` | Prefix of the files with the global graph input, for `mola-mapper-reoptimize` |
 
-ROS 2 example launch files are provided in [ros2-launchs](ros2-launchs/) and
-[mola-cli-launchs](mola-cli-launchs/).
+The geo-reference is also published through `mola::MapSourceBase` when GNSS
+factors are solved.
+
+## mola-mapper-reoptimize
+
+Offline tool that re-solves a global graph saved with `output_graph_input`,
+using other graph parameters:
+
+```bash
+mola-mapper-reoptimize INPUT_PREFIX MAPPER_YAML OUTPUT_PREFIX [--no-loops] [--keep-initial]
+```
+
+It reads the `params.graph` section of `MAPPER_YAML` and writes
+`OUTPUT_PREFIX.tum` and `OUTPUT_PREFIX_georef.yaml`. `--no-loops` ignores the
+loop closures, and `--keep-initial` starts from the saved initial guesses
+instead of chaining the front end increments from the first keyframe.
 
 ## Build and install
 
@@ -52,14 +101,13 @@ See: https://docs.mola-slam.org/latest/mola_mapper.html
 ## Repository layout
 
 ```
-module/include/mola_mapper/   Public headers (Mapper, Parameters, WorldModelState)
-module/src/                      Implementation (split by concern)
-apps/                            mola-mapper-cli (offline front-end)
-params/                          Default YAML configuration
-mola-cli-launchs/                mola-cli launch files
-ros2-launchs/                    ROS 2 launch files
-docs/                            Sphinx/RST documentation pages
-test/                            Unit tests
+module/include/mola_mapper/   Public headers (Mapper, GlobalGraph, GlobalGraphIO, GyroIntegration, Parameters)
+module/src/                   Implementation
+apps/                         mola-mapper-reoptimize
+params/                       Mapper parameters and loop closure detector pipelines
+mola-cli-launchs/             mola-cli launch files
+docs/                         Sphinx/RST documentation pages
+test/                         Unit tests
 ```
 
 ## Citation

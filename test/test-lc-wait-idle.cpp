@@ -81,14 +81,7 @@ std::string params_yaml(bool loopClosure, const std::string & pipelineFile)
 {
   std::string s = R"###(
 params:
-  vehicle_frame_name: "base_link"
   reference_frame_name: "map"
-  kinematic_model: KinematicModel::ConstantVelocity
-  max_time_to_use_velocity_model: 2.0
-  sigma_random_walk_acceleration_linear: 1.0
-  sigma_random_walk_acceleration_angular: 1.0
-  link_first_pose_to_reference_origin_sigma: 1e-6
-  min_time_difference_to_create_new_frame: 0.01
   enable_optimizer_thread: false
 )###";
   if (loopClosure) {
@@ -185,9 +178,7 @@ void test_wait_covers_a_forced_scan()
   const auto scansAfter = std::stoull(diagnostic_value(m, "lc_scans"));
   std::cout << "    lc_scans " << scansBefore << " -> " << scansAfter << "\n";
   ASSERTMSG_(
-    scansAfter > scansBefore,
-    "the forced scans were waited on but none of them completed -- the wait is "
-    "returning without the scan having run");
+    scansAfter == scansBefore + 10, "each forced scan must have completed when its wait returns");
 
   mrpt::system::deleteFile(pipelineFile);
   std::cout << "    OK\n";

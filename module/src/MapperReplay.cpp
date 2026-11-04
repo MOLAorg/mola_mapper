@@ -56,8 +56,9 @@ ReplayStats replay_mapper_input(
         using T = std::decay_t<decltype(e)>;
         if constexpr (std::is_same_v<T, RecordedKeyframe>) {
           now = e.request.timestamp;
-          (void)mapper.insert_keyframe(e.request, e.gyro_bias);
-          stats.keyframes++;
+          if (mapper.insert_keyframe(e.request, e.gyro_bias)) {
+            stats.keyframes++;
+          }
         } else {
           now = e->timestamp;
           mapper.onNewObservation(e);

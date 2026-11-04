@@ -119,6 +119,12 @@ void Mapper::initialize(const mrpt::containers::yaml & cfg)
 #endif
   }
 
+  // Before attaching the sources, so their first readings are recorded too:
+  if (!params_.record_input.empty()) {
+    recorder_ = std::make_unique<MapperInputRecorder>(params_.record_input);
+    MRPT_LOG_INFO_STREAM("Recording the mapper input to: " << params_.record_input);
+  }
+
   // Raw sensor input (GNSS, IMU), as any other RawDataConsumer module:
   if (cfg.has("raw_data_source")) {
     std::vector<std::string> sources;
@@ -137,11 +143,6 @@ void Mapper::initialize(const mrpt::containers::yaml & cfg)
         src, mrpt::format("Cannot find a raw data source module named `%s`", name.c_str()));
       src->attachToDataConsumer(*this);
     }
-  }
-
-  if (!params_.record_input.empty()) {
-    recorder_ = std::make_unique<MapperInputRecorder>(params_.record_input);
-    MRPT_LOG_INFO_STREAM("Recording the mapper input to: " << params_.record_input);
   }
 
   if (params_.enable_optimizer_thread) {

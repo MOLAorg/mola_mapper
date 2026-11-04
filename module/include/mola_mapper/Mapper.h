@@ -221,7 +221,10 @@ private:
 
   void attach_gnss_locked(const mrpt::obs::CObservationGPS::Ptr & gps);
   void retry_pending_gnss_locked();
-  void attach_gravity_locked(Keyframe & kf);
+  /// Returns false if the IMU readings before the keyframe are not enough.
+  bool attach_gravity_locked(Keyframe & kf);
+  /// Keyframes inserted before the IMU readings of their window arrived.
+  std::deque<std::size_t> pending_gravity_;
 
   /** @name Global graph optimizer
      * @{ */

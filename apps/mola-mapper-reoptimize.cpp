@@ -23,6 +23,7 @@
 #include <mrpt/core/exceptions.h>
 #include <mrpt/system/COutputLogger.h>
 
+#include <cstdio>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -107,6 +108,9 @@ int main(int argc, char ** argv)
     mola::mapper::save_tum_trajectory(poses, outPrefix + ".tum");
     if (r.georeferencing) {
       mola::mapper::save_georeference(*r.georeferencing, outPrefix + "_georef.yaml");
+    } else {
+      // Not one of an earlier run with the same prefix:
+      std::remove((outPrefix + "_georef.yaml").c_str());
     }
     std::cout << "keyframes: " << r.poses.size() << ", odometry: " << r.num_odometry_factors
               << ", loops: " << r.num_loop_factors << ", GNSS: " << r.num_gnss_factors

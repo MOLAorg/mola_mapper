@@ -38,6 +38,7 @@ apps/mola-mapper-reoptimize.cpp   re-solves a saved graph input with other param
 params/mapper.yaml                every setting with a MOLA_MAPPER_* environment hook
 params/loop-closure-f2f-mapper*.yaml  mola_sm_loop_closure detector pipelines
 mola-cli-launchs/lio_smoother_mapper_from_rosbag2.yaml  rosbag2 -> LIO + smoother + mapper
+mola-cli-launchs/lio_smoother_mapper_from_kitti.yaml    KITTI odometry (params/mapper-kitti.yaml)
 ```
 
 ## Keyframes and attached data
@@ -78,6 +79,8 @@ Keys `P(i)` (keyframe poses in `{map}`), `T(0)` (T_enu_to_map). Factors:
 Owner mode, absolute horizontal RMSE: 5.4 m initially; 4.6 m with smoother bias tracking and
 the per-radian odometry sigma; 4.35 m adding gyro factors (HandsFree or Ouster IMU, similar).
 Gyro factors mostly cut p90/max and the revisit error. LIO alone (Ouster OS0) drifts ~11 m.
+
+KITTI 00 (3.7 km, loop closures only): LIO APE RMSE 6.85 m, mapper 2.21 m (50 loops).
 
 ## Tests
 

@@ -33,6 +33,7 @@ find_package(mola_sm_loop_closure REQUIRED)
 # define lib:
 set(LIB_SOURCES
   module/src/GlobalGraph.cpp
+  module/src/GyroIntegration.cpp
   module/src/GlobalGraphIO.cpp
   module/src/Mapper.cpp
   module/src/Mapper_LoopClosure.cpp
@@ -42,6 +43,7 @@ set(LIB_SOURCES
 set(LIB_PUBLIC_HEADERS
   module/include/mola_mapper/GlobalGraph.h
   module/include/mola_mapper/GlobalGraphIO.h
+  module/include/mola_mapper/GyroIntegration.h
   module/include/mola_mapper/Mapper.h
   module/include/mola_mapper/Parameters.h
 )

@@ -22,6 +22,15 @@ params:
   imu_gravity_window: ${MOLA_MAPPER_GRAVITY_WINDOW|1.0}  # [s] before each keyframe
   imu_gravity_min_samples: 10
 
+  # IMU whose gyroscope gives the rotation between consecutive keyframes (regex;
+  # empty: none). Bias from a mola::ImuBiasSource (e.g. the state estimator with
+  # MOLA_NAVSTATE_IMU_BIAS_TRACKING=true), else taken as zero with gyro_bias_sigma:
+  gyro_sensor_labels_re: "${MOLA_MAPPER_GYRO_LABELS|}"
+  gyro_noise_density: ${MOLA_MAPPER_GYRO_NOISE_DENSITY|3e-4}  # [rad/s/sqrt(Hz)]
+  gyro_bias_sigma: 0.005  # [rad/s]
+  gyro_scale_sigma: ${MOLA_MAPPER_GYRO_SCALE_SIGMA|0.005}
+  gyro_max_gap: 0.1  # [s]
+
   graph:
     # LIO keyframe chain: stiff (the front end is locally accurate; only its slow
     # drift gives way to GNSS and loops). Sigmas: floor + random walk per sqrt(m):
@@ -30,6 +39,11 @@ params:
     odometry_additional_noise_ang_deg: ${MOLA_MAPPER_ODOM_SIGMA_ANG|0.01}       # [deg]
     odometry_noise_xyz_per_sqrt_m: ${MOLA_MAPPER_ODOM_SIGMA_XYZ_PER_SQRT_M|0.01}
     odometry_noise_ang_deg_per_sqrt_m: ${MOLA_MAPPER_ODOM_SIGMA_ANG_PER_SQRT_M|0.05}
+    # plus per radian turned (LiDAR odometry heading errors concentrate in turns):
+    odometry_noise_ang_per_rad: ${MOLA_MAPPER_ODOM_SIGMA_ANG_PER_RAD|0.02}
+
+    use_gyro: ${MOLA_MAPPER_USE_GYRO|true}
+    gyro_min_sigma_deg: 0.02
 
     use_gnss: ${MOLA_MAPPER_USE_GNSS|true}
     gnss_minimum_uncertainty: ${MOLA_MAPPER_GNSS_MIN_SIGMA|0.5}  # [m]

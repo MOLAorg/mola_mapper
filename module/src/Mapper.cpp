@@ -20,10 +20,13 @@
 #include <mola_kernel/interfaces/RawDataSourceBase.h>
 #include <mola_mapper/GlobalGraphIO.h>
 #include <mola_mapper/Mapper.h>
+#include <mrpt/core/bits_math.h>
 #include <mrpt/core/lock_helper.h>
+#include <mrpt/math/CMatrixFixed.h>
 #include <mrpt/poses/CPose3DQuat.h>
 #include <mrpt/system/datetime.h>
 
+#include <Eigen/Dense>
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -88,6 +91,18 @@ void Mapper::initialize(const mrpt::containers::yaml & cfg)
   if (use_imu_input_) {
     imu_labels_re_ = std::regex(params_.imu_sensor_labels_re);
   }
+  use_gyro_input_ = !params_.gyro_sensor_labels_re.empty();
+  if (use_gyro_input_) {
+    gyro_labels_re_ = std::regex(params_.gyro_sensor_labels_re);
+#if defined(MOLA_MAPPER_HAS_IMU_BIAS_SOURCE)
+    imu_bias_sources_.clear();
+    for (const auto & m : findService<mola::ImuBiasSource>()) {
+      if (auto src = std::dynamic_pointer_cast<mola::ImuBiasSource>(m); src) {
+        imu_bias_sources_.push_back(src);
+      }
+    }
+#endif
+  }
 
   // Raw sensor input (GNSS, IMU), as any other RawDataConsumer module:
   if (cfg.has("raw_data_source")) {
@@ -119,6 +134,8 @@ void Mapper::initialize(const mrpt::containers::yaml & cfg)
     "Initialized: GNSS=" << (use_gnss_input_ ? params_.gnss_sensor_labels_re : "none")
                          << ", gravity IMU="
                          << (use_imu_input_ ? params_.imu_sensor_labels_re : "none")
+                         << ", gyro IMU="
+                         << (use_gyro_input_ ? params_.gyro_sensor_labels_re : "none")
                          << ", loop closure=" << (params_.loop_closure_enabled ? "on" : "off")
                          << ", feedback to the state estimator="
                          << (params_.feedback_to_state_estimator ? "on" : "off"));
@@ -143,6 +160,31 @@ void Mapper::onNewObservation(const CObservation::ConstPtr & o)
       auto lck = mrpt::lockHelper(state_mtx_);
       attach_gnss_locked(std::const_pointer_cast<mrpt::obs::CObservationGPS>(gps));
       return;
+    }
+  }
+  if (use_gyro_input_) {
+    if (auto imu = std::dynamic_pointer_cast<const mrpt::obs::CObservationIMU>(o);
+        imu && imu->has(mrpt::obs::IMU_WX) && imu->has(mrpt::obs::IMU_WY) &&
+        imu->has(mrpt::obs::IMU_WZ) && std::regex_match(imu->sensorLabel, gyro_labels_re_)) {
+      auto lck = mrpt::lockHelper(state_mtx_);
+      if (gyro_label_.empty()) {
+        gyro_label_ = imu->sensorLabel;
+      }
+      if (
+        imu->sensorLabel == gyro_label_ &&
+        (gyro_samples_.empty() || gyro_samples_.back().stamp < imu->timestamp)) {
+        gyro_samples_.push_back(
+          {imu->timestamp,
+           {imu->get(mrpt::obs::IMU_WX), imu->get(mrpt::obs::IMU_WY),
+            imu->get(mrpt::obs::IMU_WZ)}});
+        gyro_sensor_pose_ = imu->sensorPose;
+        // Keep enough for keyframes arriving late:
+        constexpr double GYRO_KEEP = 60.0;  // [s]
+        while (mrpt::system::timeDifference(gyro_samples_.front().stamp, imu->timestamp) >
+               GYRO_KEEP) {
+          gyro_samples_.pop_front();
+        }
+      }
     }
   }
   if (use_imu_input_) {
@@ -212,6 +254,40 @@ void Mapper::retry_pending_gnss_locked()
   }
 }
 
+void Mapper::attach_gyro_rotation_locked(Keyframe & kf)
+{
+  if (!use_gyro_input_ || keyframes_.empty() || gyro_samples_.empty()) {
+    return;
+  }
+  const auto & prev = keyframes_.back();
+
+  // Bias: from a bias source, if any has an estimate for this IMU.
+  mrpt::math::TVector3D bias(0, 0, 0);
+  double biasSigma = params_.gyro_bias_sigma;
+#if defined(MOLA_MAPPER_HAS_IMU_BIAS_SOURCE)
+  for (const auto & src : imu_bias_sources_) {
+    if (const auto b = src->imu_bias(gyro_label_, kf.stamp); b && b->last_update) {
+      bias = b->gyro;
+      biasSigma = std::sqrt(std::max({b->gyro_cov(0, 0), b->gyro_cov(1, 1), b->gyro_cov(2, 2)}));
+      break;
+    }
+  }
+#endif
+  const auto g = integrate_gyro(gyro_samples_, prev.stamp, kf.stamp, bias, params_.gyro_max_gap);
+  if (!g) {
+    return;
+  }
+  // From the sensor to the vehicle frame: R_v = R_vs * R_s * R_vs^T.
+  const auto Rvs = gyro_sensor_pose_.getRotationMatrix();
+  const mrpt::math::CMatrixDouble33 Rv(Rvs.asEigen() * g->R.asEigen() * Rvs.asEigen().transpose());
+  mrpt::poses::CPose3D rot;
+  rot.setRotationMatrix(Rv);
+  kf.gyro_rotation_from_prev = rot;
+  kf.gyro_rotation_sigma = std::sqrt(
+    mrpt::square(params_.gyro_noise_density) * g->duration + mrpt::square(biasSigma * g->duration) +
+    mrpt::square(params_.gyro_scale_sigma * g->angle));
+}
+
 void Mapper::attach_gravity_locked(Keyframe & kf)
 {
   if (!last_imu_) {
@@ -274,6 +350,7 @@ std::optional<SharedKeyframeMap::KeyFrameID> Mapper::requestInsertKeyframe(
     }
 
     attach_gravity_locked(kf);
+    attach_gyro_rotation_locked(kf);
     keyframes_.push_back(std::move(kf));
     id = keyframes_.size() - 1;
 
@@ -343,6 +420,8 @@ GlobalGraphInput Mapper::graph_input_locked() const
     g.source_frame = kf.source_frame;
     g.pose_in_source = kf.pose_in_source;
     g.initial_guess = kf.pose_in_map;
+    g.gyro_rotation_from_prev = kf.gyro_rotation_from_prev;
+    g.gyro_rotation_sigma = kf.gyro_rotation_sigma;
     // A copy: the original may get new GNSS readings while solving.
     g.aux_observations = std::make_shared<mrpt::obs::CSensoryFrame>(*kf.aux);
     in.keyframes.push_back(std::move(g));
@@ -402,9 +481,11 @@ bool Mapper::solve_global_graph()
 
   MRPT_LOG_THROTTLE_INFO_FMT(
     10.0,
-    "Global graph: %zu keyframes, %zu loops, %zu GNSS%s, %zu gravity factors, solved in %.0f ms",
+    "Global graph: %zu keyframes, %zu loops, %zu GNSS%s, %zu gravity, %zu gyro factors, solved "
+    "in %.0f ms",
     in.keyframes.size(), r.num_loop_factors, r.num_gnss_factors,
-    r.gnss_degenerate ? " (degenerate, unused)" : "", r.num_gravity_factors, 1e3 * dt);
+    r.gnss_degenerate ? " (degenerate, unused)" : "", r.num_gravity_factors, r.num_gyro_factors,
+    1e3 * dt);
 
   if (r.georeferencing) {
     publish_georeference(*r.georeferencing);
@@ -511,6 +592,7 @@ void Mapper::getDiagnostics(std::vector<mola::DiagnosticStatusMsg> & status)
     s.values.push_back({"loop_closures", std::to_string(loops_.size())});
     s.values.push_back({"gnss_factors", std::to_string(last_result_.num_gnss_factors)});
     s.values.push_back({"gravity_factors", std::to_string(last_result_.num_gravity_factors)});
+    s.values.push_back({"gyro_factors", std::to_string(last_result_.num_gyro_factors)});
     s.values.push_back({"geo_referenced", georef_ ? "yes" : "no"});
     s.message = mrpt::format(
       "%zu keyframes, %zu loop closures%s", keyframes_.size(), loops_.size(),

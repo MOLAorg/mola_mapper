@@ -30,6 +30,7 @@
 #include <mrpt/core/exceptions.h>
 #include <mrpt/maps/CSimpleMap.h>
 #include <mrpt/math/gtsam_wrappers.h>
+#include <mrpt/poses/Lie/SO.h>
 #include <mrpt/poses/gtsam_wrappers.h>
 
 #include <cmath>
@@ -51,10 +52,13 @@ gtsam::Vector6 odometry_edge_sigmas(
   s *= p.odometry_uncertainty_multiplier;
 
   const double sqrtStep = std::sqrt(rel.mean.translation().norm());
+  const double turned = mrpt::poses::Lie::SO<3>::log(rel.mean.getRotationMatrix()).norm();
   for (int k = 0; k < 3; k++) {
     s[k] += p.odometry_additional_noise_xyz + p.odometry_noise_xyz_per_sqrt_m * sqrtStep;
-    s[3 + k] += mrpt::DEG2RAD(
-      p.odometry_additional_noise_ang_deg + p.odometry_noise_ang_deg_per_sqrt_m * sqrtStep);
+    s[3 + k] +=
+      mrpt::DEG2RAD(
+        p.odometry_additional_noise_ang_deg + p.odometry_noise_ang_deg_per_sqrt_m * sqrtStep) +
+      p.odometry_noise_ang_per_rad * turned;
   }
   gtsam::Vector6 sigmas;
   sigmas << s[5], s[4], s[3], s[0], s[1], s[2];
@@ -82,6 +86,33 @@ void add_odometry_factors(
         gtsam::noiseModel::Isotropic::Sigma(6, 10.0));
     }
     out.num_odometry_factors++;
+  }
+}
+
+/// Gyroscope rotations between consecutive keyframes: a relative pose factor
+/// with an unconstrained translation.
+void add_gyro_factors(
+  gtsam::NonlinearFactorGraph & fg, const GlobalGraphInput & in, const GlobalGraphParams & params,
+  GlobalGraphResult & out)
+{
+  if (!params.use_gyro) {
+    return;
+  }
+  constexpr double FREE_TRANSLATION_SIGMA = 1e3;  // [m]
+  for (std::size_t i = 1; i < in.keyframes.size(); i++) {
+    const auto & cur = in.keyframes[i];
+    if (!cur.gyro_rotation_from_prev) {
+      continue;
+    }
+    const double sigma =
+      std::max(cur.gyro_rotation_sigma, mrpt::DEG2RAD(params.gyro_min_sigma_deg));
+    gtsam::Vector6 sigmas;
+    sigmas << sigma, sigma, sigma, FREE_TRANSLATION_SIGMA, FREE_TRANSLATION_SIGMA,
+      FREE_TRANSLATION_SIGMA;
+    fg.emplace_shared<gtsam::BetweenFactor<gtsam::Pose3>>(
+      P(i - 1), P(i), mrpt::gtsam_wrappers::toPose3(*cur.gyro_rotation_from_prev),
+      gtsam::noiseModel::Diagonal::Sigmas(sigmas));
+    out.num_gyro_factors++;
   }
 }
 
@@ -204,6 +235,7 @@ GlobalGraphResult optimize_global_graph(
 
   add_odometry_factors(fg, in, params, out);
   add_loop_factors(fg, in, params, out);
+  add_gyro_factors(fg, in, params, out);
 
   // GNSS and gravity, from the observations attached to the keyframes, through
   // the extractors of mola_georeferencing (they read a CSimpleMap):
@@ -281,11 +313,11 @@ GlobalGraphResult optimize_global_graph(
   if (logger != nullptr) {
     logger->logFmt(
       mrpt::system::LVL_DEBUG,
-      "[GlobalGraph] %zu keyframes, %zu odometry, %zu loop, %zu GNSS%s, %zu gravity factors: "
-      "error %.3e -> %.3e",
+      "[GlobalGraph] %zu keyframes, %zu odometry, %zu loop, %zu GNSS%s, %zu gravity, %zu gyro "
+      "factors: error %.3e -> %.3e",
       N, out.num_odometry_factors, out.num_loop_factors, out.num_gnss_factors,
       out.gnss_degenerate ? " (degenerate, unused)" : "", out.num_gravity_factors,
-      out.initial_error, out.final_error);
+      out.num_gyro_factors, out.initial_error, out.final_error);
   }
   return out;
 }

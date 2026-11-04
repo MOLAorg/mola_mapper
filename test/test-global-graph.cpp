@@ -18,7 +18,9 @@
  */
 
 #include <mola_mapper/GlobalGraph.h>
+#include <mrpt/core/bits_math.h>
 #include <mrpt/core/exceptions.h>
+#include <mrpt/math/wrap2pi.h>
 #include <mrpt/obs/CObservationGPS.h>
 #include <mrpt/topography/conversions.h>
 
@@ -174,10 +176,69 @@ void test_gnss_georeference_and_drift()
 
 }  // namespace
 
+/** LiDAR odometry that loses 2 deg of heading in each 90 deg turn (as a short
+ *  range LiDAR does in open areas), with a gyroscope that measures the turns
+ *  (0.5 % scale error): the gyro factors keep the heading right. */
+void test_gyro_fixes_turn_heading_errors()
+{
+  const auto gt = ground_truth();
+  GlobalGraphInput in;
+  std::mt19937 rng(3);
+  std::normal_distribution<double> noise(0.0, 1.0);
+  CPose3D odo = gt.front();
+  for (std::size_t i = 0; i < gt.size(); i++) {
+    GlobalGraphKeyframe kf;
+    kf.stamp = mrpt::Clock::fromDouble(1000.0 + static_cast<double>(i));
+    kf.source_frame = "lidar_odom";
+    if (i > 0) {
+      const CPose3D step = gt[i] - gt[i - 1];
+      const bool turn = std::abs(step.yaw()) > mrpt::DEG2RAD(45.0);
+      odo = odo + step + CPose3D(0, 0, 0, turn ? mrpt::DEG2RAD(2.0) : 0.0, 0, 0);
+      // Gyro: the true rotation, with a scale error and noise, sigma as the mapper computes it.
+      const double scaleErr = 0.005;
+      const double sigma =
+        std::sqrt(mrpt::square(3e-4) * 1.0 + mrpt::square(scaleErr * std::abs(step.yaw())));
+      kf.gyro_rotation_from_prev =
+        CPose3D(0, 0, 0, step.yaw() * (1.0 + scaleErr) + sigma * 0.5 * noise(rng), 0, 0);
+      kf.gyro_rotation_sigma = sigma;
+    }
+    kf.pose_in_source.mean = odo;
+    kf.pose_in_source.cov.setDiagonal(1e-6);
+    kf.initial_guess = odo;
+    in.keyframes.push_back(kf);
+  }
+
+  GlobalGraphParams p;
+  p.use_gnss = false;
+  p.use_imu_gravity = false;
+
+  p.use_gyro = false;
+  const auto noGyro = mola::mapper::optimize_global_graph(in, p);
+  p.use_gyro = true;
+  const auto withGyro = mola::mapper::optimize_global_graph(in, p);
+
+  const auto yawErr = [&](const CPose3D & e) {
+    return std::abs(mrpt::math::wrapToPi(e.yaw() - gt.back().yaw()));
+  };
+  std::cout << "Gyro: final heading error " << mrpt::RAD2DEG(yawErr(noGyro.poses.back()))
+            << " deg without, " << mrpt::RAD2DEG(yawErr(withGyro.poses.back()))
+            << " deg with gyro factors; end position error "
+            << position_error(noGyro.poses.back(), gt.back()) << " vs "
+            << position_error(withGyro.poses.back(), gt.back()) << " m\n";
+  ASSERT_EQUAL_(noGyro.num_gyro_factors, 0U);
+  ASSERT_EQUAL_(withGyro.num_gyro_factors, gt.size() - 1);
+  ASSERT_GT_(yawErr(noGyro.poses.back()), mrpt::DEG2RAD(7.0));
+  ASSERT_LT_(yawErr(withGyro.poses.back()), mrpt::DEG2RAD(2.5));
+  ASSERT_LT_(
+    position_error(withGyro.poses.back(), gt.back()),
+    0.5 * position_error(noGyro.poses.back(), gt.back()));
+}
+
 int main()
 {
   try {
     test_loop_closure_removes_drift();
+    test_gyro_fixes_turn_heading_errors();
     test_gnss_georeference_and_drift();
     std::cout << "All tests passed.\n";
     return 0;

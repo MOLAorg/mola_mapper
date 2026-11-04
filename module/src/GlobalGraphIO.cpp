@@ -24,6 +24,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <fstream>
 #include <iomanip>
 #include <sstream>
@@ -117,6 +118,8 @@ void save_global_graph_input(const GlobalGraphInput & in, const std::string & pr
     ASSERTMSG_(f.is_open(), "Cannot write " + prefix + ".datum.txt");
     f << std::setprecision(15) << in.geodetic_datum->lat.decimal_value << " "
       << in.geodetic_datum->lon.decimal_value << " " << in.geodetic_datum->height << "\n";
+  } else {
+    std::remove((prefix + ".datum.txt").c_str());
   }
   if (in.T_enu_to_map_guess) {
     std::ofstream f(prefix + ".enu_to_map_guess.txt");
@@ -124,6 +127,9 @@ void save_global_graph_input(const GlobalGraphInput & in, const std::string & pr
     f << std::setprecision(15);
     write_pose(f, *in.T_enu_to_map_guess);
     f << "\n";
+  } else {
+    // Not one of an earlier input saved with the same prefix:
+    std::remove((prefix + ".enu_to_map_guess.txt").c_str());
   }
 }
 

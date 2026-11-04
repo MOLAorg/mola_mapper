@@ -352,6 +352,15 @@ void test_graph_input_round_trip()
   ASSERT_LT_((*out.T_enu_to_map_guess - T_ENU_TO_MAP).translation().norm(), 1e-9);
   ASSERT_LT_(std::abs(out.T_enu_to_map_guess->yaw() - T_ENU_TO_MAP.yaw()), 1e-9);
 
+  // Saved again without the optional values, with the same prefix: they do
+  // not come back from the earlier files.
+  in.T_enu_to_map_guess.reset();
+  in.geodetic_datum.reset();
+  mola::mapper::save_global_graph_input(in, prefix);
+  const auto out2 = mola::mapper::load_global_graph_input(prefix);
+  ASSERT_(!out2.T_enu_to_map_guess.has_value());
+  ASSERT_(!out2.geodetic_datum.has_value());
+
   // A file that cannot be written is an error, not a silent no-op:
   bool threw = false;
   try {

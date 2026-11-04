@@ -145,6 +145,11 @@ every `optimizer_min_period`. With `enable_optimizer_thread: false`, only
    `NavStateFilter` module and calls `fuse_pose(stamp, pose, reference_frame_name)`
    with the optimized pose of the newest keyframe, its marginal covariance
    floored by `feedback_min_sigma_xyz` and `feedback_min_sigma_ang_deg`.
+6. If the solve added loop closures and `local_map_corrections` is true,
+   `advertise_local_map_correction()` (`mola::LocalMapCorrectionSource`), still
+   under `solve_mtx_` but not `state_mtx_`. Subscribers (LIO) then call
+   `local_map_keyframes()`, which copies the keyframes near a reference one
+   under `state_mtx_`.
 
 ## Loop closure thread
 

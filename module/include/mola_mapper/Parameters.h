@@ -143,6 +143,11 @@ struct Parameters
   double feedback_min_sigma_ang_deg = 0.5;
   /** @} */
 
+  /** If true, after each solve with new loop closures the front ends are told
+   *  (mola::LocalMapCorrectionSource), so they can rebuild their local maps
+   *  from the corrected keyframes. */
+  bool local_map_corrections = true;
+
   /** @name Loop closure (mola_sm_loop_closure engine, detector only)
      * @{ */
   bool loop_closure_enabled = false;

@@ -33,3 +33,18 @@ mola_add_test(
   LINK_LIBRARIES
     mola::mola_mapper
 )
+
+# Loop closures on a simulated run (mola_test_datasets), as local map corrections:
+find_package(mola_test_datasets QUIET)
+if(mola_test_datasets_FOUND)
+  mola_add_test(
+    TARGET  test-local-map-corrections
+    SOURCES test-local-map-corrections.cpp
+    LINK_LIBRARIES
+      mola::mola_mapper
+  )
+  target_compile_definitions(test-local-map-corrections PRIVATE
+    MOLA_TEST_WAREHOUSE_SIMPLEMAP="${mola_test_datasets_DIR}/../datasets/simplemaps/mvsim-warehouse01.simplemap"
+    MOLA_MAPPER_LC_PIPELINE="${PROJECT_SOURCE_DIR}/params/loop-closure-f2f-mapper.yaml"
+  )
+endif()

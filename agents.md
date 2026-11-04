@@ -16,7 +16,10 @@ Separate MOLA modules, composed by `mola-cli-launchs/*.yaml`:
   corrections). Optionally it tracks IMU biases (`MOLA_NAVSTATE_IMU_BIAS_TRACKING`) and
   offers them as `mola::ImuBiasSource`.
 - `mola::mapper::Mapper` (ExecutableBase, RawDataConsumer, MapSourceBase,
-  DiagnosticsProvider, SharedKeyframeMap) is NOT a NavStateFilter.
+  DiagnosticsProvider, SharedKeyframeMap, LocalMapCorrectionSource) is NOT a NavStateFilter.
+  After solves with new loops it advertises a `LocalMapCorrection`; LIO then pulls
+  the keyframes around its newest one (ids are indices in `keyframes_`, poses
+  relative to it) and rebuilds its local map.
 
 The mapper owns GNSS and the geo-reference: in owner mode the smoother runs without GNSS and
 without absolute attitude, and gets the optimized newest keyframe pose with

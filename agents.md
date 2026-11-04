@@ -35,8 +35,12 @@ module/include/mola_mapper/
   GlobalGraphIO.h   save/load the graph input (offline re-optimization), TUM, georef
   GyroIntegration.h integrate_gyro(): rotation between keyframes from gyro readings
   Parameters.h      Parameters (module) and GlobalGraphParams (graph)
+  MapperInputLog.h  record (record_input, background writer) / read the mapper input
+  MapperReplay.h    replay_mapper_input(): feeds a thread-less Mapper, scans and solves
+                    at fixed periods of data time (bit-exact with one TBB thread)
 module/src/         Mapper.cpp, Mapper_LoopClosure.cpp, GlobalGraph*.cpp, ...
 apps/mola-mapper-reoptimize.cpp   re-solves a saved graph input with other parameters
+apps/mola-mapper-cli.cpp          replays a recorded mapper input (tuning, reproducible runs)
 params/mapper.yaml                every setting with a MOLA_MAPPER_* environment hook
 params/loop-closure-f2f-mapper*.yaml  mola_sm_loop_closure detector pipelines
 mola-cli-launchs/lio_smoother_mapper_from_rosbag2.yaml  rosbag2 -> LIO + smoother + mapper

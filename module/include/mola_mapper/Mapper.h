@@ -32,6 +32,7 @@
 #include <mola_mapper/GlobalGraph.h>
 #include <mola_mapper/GyroIntegration.h>
 #include <mola_mapper/LoopOdometryCheck.h>
+#include <mola_mapper/MapperInputLog.h>
 #include <mola_mapper/Parameters.h>
 #include <mrpt/maps/CSimpleMap.h>
 #include <mrpt/obs/CObservationGPS.h>
@@ -145,6 +146,12 @@ public:
   /// Solves the global graph now, in the calling thread.
   void optimize_now();
 
+  /** Inserts a keyframe with the given gyroscope bias, instead of the one of a
+   *  bias source (requestInsertKeyframe() queries it): to replay recorded runs.
+   *  A bias not from a source is replaced by the configured gyro_bias_sigma. */
+  std::optional<KeyFrameID> insert_keyframe(
+    const KeyframeInsertRequest & req, const RecordedGyroBias & gyroBias);
+
   /// Wakes the loop closure thread for one full scan (returns immediately).
   void request_loop_closure_scan();
 
@@ -186,6 +193,7 @@ private:
   {
     mrpt::math::TVector3D bias{0, 0, 0};
     double sigma = 0;
+    bool from_source = false;
   };
   /// Queries the bias sources: call without state_mtx_ held.
   [[nodiscard]] GyroBias query_gyro_bias(
@@ -242,8 +250,15 @@ private:
 
   void attach_gnss_locked(const mrpt::obs::CObservationGPS::Ptr & gps);
   void retry_pending_gnss_locked();
+  std::optional<KeyFrameID> insert_keyframe_impl(
+    const KeyframeInsertRequest & req, const RecordedGyroBias & bias,
+    const mrpt::serialization::CSerializable::Ptr & recordEntry);
+  void add_gyro_sample_locked(const mrpt::obs::CObservationIMU & imu);
+  void add_gravity_sample_locked(const mrpt::obs::CObservationIMU & imu);
   /// Returns false if the IMU readings before the keyframe are not enough.
   bool attach_gravity_locked(Keyframe & kf);
+  /// See Parameters::record_input.
+  std::unique_ptr<MapperInputRecorder> recorder_;
   /// Keyframes inserted before the IMU readings of their window arrived.
   std::deque<std::size_t> pending_gravity_;
 

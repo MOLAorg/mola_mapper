@@ -139,6 +139,11 @@ void Mapper::initialize(const mrpt::containers::yaml & cfg)
     }
   }
 
+  if (!params_.record_input.empty()) {
+    recorder_ = std::make_unique<MapperInputRecorder>(params_.record_input);
+    MRPT_LOG_INFO_STREAM("Recording the mapper input to: " << params_.record_input);
+  }
+
   if (params_.enable_optimizer_thread) {
     optimizer_should_exit_.store(false);
     optimizer_thread_ = std::thread(&Mapper::optimizer_thread_loop, this);
@@ -169,67 +174,84 @@ void Mapper::onNewObservation(const CObservation::ConstPtr & o)
   if (!o) {
     return;
   }
-  if (use_gnss_input_) {
-    if (auto gps = std::dynamic_pointer_cast<const mrpt::obs::CObservationGPS>(o);
-        gps && gps->has_GGA_datum() && std::regex_match(gps->sensorLabel, gnss_labels_re_)) {
-      auto lck = mrpt::lockHelper(state_mtx_);
-      attach_gnss_locked(std::const_pointer_cast<mrpt::obs::CObservationGPS>(gps));
-      return;
-    }
+  const auto gps = std::dynamic_pointer_cast<const mrpt::obs::CObservationGPS>(o);
+  const bool isGnss = use_gnss_input_ && gps && gps->has_GGA_datum() &&
+                      std::regex_match(gps->sensorLabel, gnss_labels_re_);
+  const auto imu = std::dynamic_pointer_cast<const mrpt::obs::CObservationIMU>(o);
+  const bool isGyro = use_gyro_input_ && imu && imu->has(mrpt::obs::IMU_WX) &&
+                      imu->has(mrpt::obs::IMU_WY) && imu->has(mrpt::obs::IMU_WZ) &&
+                      std::regex_match(imu->sensorLabel, gyro_labels_re_);
+  const bool isGravity = use_imu_input_ && imu && imu->has(mrpt::obs::IMU_X_ACC) &&
+                         std::regex_match(imu->sensorLabel, imu_labels_re_);
+  if (!isGnss && !isGyro && !isGravity) {
+    return;
   }
-  if (use_gyro_input_) {
-    if (auto imu = std::dynamic_pointer_cast<const mrpt::obs::CObservationIMU>(o);
-        imu && imu->has(mrpt::obs::IMU_WX) && imu->has(mrpt::obs::IMU_WY) &&
-        imu->has(mrpt::obs::IMU_WZ) && std::regex_match(imu->sensorLabel, gyro_labels_re_)) {
-      auto lck = mrpt::lockHelper(state_mtx_);
-      if (gyro_label_.empty()) {
-        gyro_label_ = imu->sensorLabel;
-      }
-      if (
-        imu->sensorLabel == gyro_label_ &&
-        (gyro_samples_.empty() || gyro_samples_.back().stamp < imu->timestamp)) {
-        gyro_samples_.push_back(
-          {imu->timestamp,
-           {imu->get(mrpt::obs::IMU_WX), imu->get(mrpt::obs::IMU_WY),
-            imu->get(mrpt::obs::IMU_WZ)}});
-        gyro_sensor_pose_ = imu->sensorPose;
-        // Keep enough for keyframes arriving late:
-        constexpr double GYRO_KEEP = 60.0;  // [s]
-        while (mrpt::system::timeDifference(gyro_samples_.front().stamp, imu->timestamp) >
-               GYRO_KEEP) {
-          gyro_samples_.pop_front();
-        }
-      }
-    }
+
+  // Recorded and applied in one critical section, so the recorded order is the
+  // order in which the state changed:
+  auto lck = mrpt::lockHelper(state_mtx_);
+  if (finalized_) {
+    return;
   }
-  if (use_imu_input_) {
-    if (auto imu = std::dynamic_pointer_cast<const mrpt::obs::CObservationIMU>(o);
-        imu && imu->has(mrpt::obs::IMU_X_ACC) &&
-        std::regex_match(imu->sensorLabel, imu_labels_re_)) {
-      auto lck = mrpt::lockHelper(state_mtx_);
-      if (gravity_label_.empty()) {
-        gravity_label_ = imu->sensorLabel;
-      }
-      if (imu->sensorLabel != gravity_label_) {
-        return;
-      }
-      imu_samples_.push_back(
-        {imu->timestamp,
-         {imu->get(mrpt::obs::IMU_X_ACC), imu->get(mrpt::obs::IMU_Y_ACC),
-          imu->get(mrpt::obs::IMU_Z_ACC)}});
-      gravity_sensor_pose_ = imu->sensorPose;
-      while (!pending_gravity_.empty() &&
-             keyframes_.at(pending_gravity_.front()).stamp < imu->timestamp) {
-        attach_gravity_locked(keyframes_.at(pending_gravity_.front()));
-        pending_gravity_.pop_front();
-      }
-      // Keep a bit more than the window, in case keyframes arrive late:
-      const double keep = params_.imu_gravity_window + 5.0;
-      while (!imu_samples_.empty() &&
-             mrpt::system::timeDifference(imu_samples_.front().stamp, imu->timestamp) > keep) {
-        imu_samples_.pop_front();
-      }
-    }
+  if (recorder_) {
+    recorder_->record(o);
+  }
+  if (isGnss) {
+    attach_gnss_locked(std::const_pointer_cast<mrpt::obs::CObservationGPS>(gps));
+    return;
+  }
+  if (isGyro) {
+    add_gyro_sample_locked(*imu);
+  }
+  if (isGravity) {
+    add_gravity_sample_locked(*imu);
+  }
+}
+
+void Mapper::add_gyro_sample_locked(const mrpt::obs::CObservationIMU & imu)
+{
+  if (gyro_label_.empty()) {
+    gyro_label_ = imu.sensorLabel;
+  }
+  if (
+    imu.sensorLabel != gyro_label_ ||
+    (!gyro_samples_.empty() && gyro_samples_.back().stamp >= imu.timestamp)) {
+    return;
+  }
+  gyro_samples_.push_back(
+    {imu.timestamp,
+     {imu.get(mrpt::obs::IMU_WX), imu.get(mrpt::obs::IMU_WY), imu.get(mrpt::obs::IMU_WZ)}});
+  gyro_sensor_pose_ = imu.sensorPose;
+  // Keep enough for keyframes arriving late:
+  constexpr double GYRO_KEEP = 60.0;  // [s]
+  while (mrpt::system::timeDifference(gyro_samples_.front().stamp, imu.timestamp) > GYRO_KEEP) {
+    gyro_samples_.pop_front();
+  }
+}
+
+void Mapper::add_gravity_sample_locked(const mrpt::obs::CObservationIMU & imu)
+{
+  if (gravity_label_.empty()) {
+    gravity_label_ = imu.sensorLabel;
+  }
+  if (imu.sensorLabel != gravity_label_) {
+    return;
+  }
+  imu_samples_.push_back(
+    {imu.timestamp,
+     {imu.get(mrpt::obs::IMU_X_ACC), imu.get(mrpt::obs::IMU_Y_ACC),
+      imu.get(mrpt::obs::IMU_Z_ACC)}});
+  gravity_sensor_pose_ = imu.sensorPose;
+  while (!pending_gravity_.empty() &&
+         keyframes_.at(pending_gravity_.front()).stamp < imu.timestamp) {
+    attach_gravity_locked(keyframes_.at(pending_gravity_.front()));
+    pending_gravity_.pop_front();
+  }
+  // Keep a bit more than the window, in case keyframes arrive late:
+  const double keep = params_.imu_gravity_window + 5.0;
+  while (!imu_samples_.empty() &&
+         mrpt::system::timeDifference(imu_samples_.front().stamp, imu.timestamp) > keep) {
+    imu_samples_.pop_front();
   }
 }
 
@@ -295,6 +317,7 @@ Mapper::GyroBias Mapper::query_gyro_bias(
     if (const auto e = src->imu_bias(label, t); e && e->last_update) {
       b.bias = e->gyro;
       b.sigma = std::sqrt(std::max({e->gyro_cov(0, 0), e->gyro_cov(1, 1), e->gyro_cov(2, 2)}));
+      b.from_source = true;
       break;
     }
   }
@@ -360,19 +383,49 @@ std::optional<SharedKeyframeMap::KeyFrameID> Mapper::requestInsertKeyframe(
   ASSERTMSG_(!req.source_frame_id.empty(), "KeyframeInsertRequest::source_frame_id is empty.");
 
   // Other modules are queried without state_mtx_ held:
-  GyroBias gyroBias;
+  RecordedGyroBias gyroBias;
+  gyroBias.sigma = params_.gyro_bias_sigma;
   if (use_gyro_input_) {
     std::string label;
     {
       auto lck = mrpt::lockHelper(state_mtx_);
       label = gyro_label_;
     }
-    gyroBias = query_gyro_bias(label, req.timestamp);
+    const auto b = query_gyro_bias(label, req.timestamp);
+    gyroBias.bias = b.bias;
+    gyroBias.sigma = b.sigma;
+    gyroBias.from_source = b.from_source;
   }
+  // Encoded here (it copies the scans), recorded with the state change below:
+  const auto entry =
+    recorder_ ? MapperInputRecorder::encode(RecordedKeyframe{req, gyroBias}) : nullptr;
+  return insert_keyframe_impl(req, gyroBias, entry);
+}
+
+std::optional<SharedKeyframeMap::KeyFrameID> Mapper::insert_keyframe(
+  const KeyframeInsertRequest & req, const RecordedGyroBias & bias)
+{
+  return insert_keyframe_impl(req, bias, nullptr);
+}
+
+std::optional<SharedKeyframeMap::KeyFrameID> Mapper::insert_keyframe_impl(
+  const KeyframeInsertRequest & req, const RecordedGyroBias & bias,
+  const mrpt::serialization::CSerializable::Ptr & recordEntry)
+{
+  ASSERTMSG_(!req.source_frame_id.empty(), "KeyframeInsertRequest::source_frame_id is empty.");
+  // Without a bias source, the configured sigma (e.g. a replay with another one):
+  const GyroBias gyroBias = bias.from_source ? GyroBias{bias.bias, bias.sigma, true}
+                                             : GyroBias{{0, 0, 0}, params_.gyro_bias_sigma, false};
 
   KeyFrameID id = 0;
   {
     auto lck = mrpt::lockHelper(state_mtx_);
+    if (finalized_) {
+      return std::nullopt;
+    }
+    if (recordEntry && recorder_) {
+      recorder_->record(recordEntry);
+    }
     if (!keyframes_.empty() && req.timestamp <= keyframes_.back().stamp) {
       MRPT_LOG_WARN_STREAM(
         "Ignoring a keyframe older than the newest one: "
@@ -727,6 +780,12 @@ void Mapper::finalize()
       return;
     }
     finalized_ = true;
+  }
+  if (recorder_) {
+    // No more input to record: the end of the run.
+    recorder_->close();
+    MRPT_LOG_INFO_STREAM(
+      "Mapper input recorded: " << recorder_->written() << " entries in " << params_.record_input);
   }
   stop_loop_closure_thread();
   stop_optimizer_thread();

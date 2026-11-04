@@ -64,6 +64,7 @@ Written at the end of the run, if the corresponding path is set:
 | `output_loop_closures` | Loop closure edges, one per line |
 | `output_state_estimator_tum`, `output_state_estimator_georeference` | Trajectory and geo-reference of the state estimator, for comparisons |
 | `output_graph_input` | Prefix of the files with the global graph input, for `mola-mapper-reoptimize` |
+| `record_input` | Everything the mapper receives, in arrival order, for `mola-mapper-cli` |
 
 The geo-reference is also published through `mola::MapSourceBase` when GNSS
 factors are solved.
@@ -81,6 +82,26 @@ It reads the `params.graph` section of `MAPPER_YAML` and writes
 `OUTPUT_PREFIX.tum` and `OUTPUT_PREFIX_georef.yaml`. `--no-loops` ignores the
 loop closures, and `--keep-initial` starts from the saved initial guesses
 instead of chaining the front end increments from the first keyframe.
+
+## mola-mapper-cli
+
+Replays a mapper input recorded with `record_input` (`MOLA_MAPPER_RECORD_INPUT`) during
+a run: keyframes, GNSS and IMU readings, and the gyroscope biases they got, in
+arrival order. To tune the mapper (e.g. loop closure) without running the front end
+again, and with the same result every time:
+
+```bash
+mola-mapper-cli INPUT_LOG MAPPER_YAML OUTPUT_DIR [--lc-period S] [--solve-period S] \
+  [--save-simplemap] [--save-graph] [--threads N] [--quiet]
+```
+
+The mapper threads are disabled: loop closure scans and solves run at fixed periods
+of data time (by default, those of `MAPPER_YAML`). With the default `--threads 1`,
+two runs give the same output to the last bit; with more threads, parallel sums
+make them differ slightly, and even the accepted loops may change. It writes
+`mapper.tum`, `mapper_georef.yaml` and `loops.txt` into `OUTPUT_DIR`. The front end
+does not run, so its reactions to the mapper (e.g. a LIO local map rebuilt after
+loop closures) are those of the recorded run.
 
 ## Build and install
 
@@ -104,9 +125,10 @@ See: https://docs.mola-slam.org/latest/mola_mapper.html
 ## Repository layout
 
 ```
-module/include/mola_mapper/   Public headers (Mapper, GlobalGraph, GlobalGraphIO, GyroIntegration, Parameters)
+module/include/mola_mapper/   Public headers (Mapper, GlobalGraph, GlobalGraphIO, GyroIntegration,
+                              MapperInputLog, MapperReplay, Parameters)
 module/src/                   Implementation
-apps/                         mola-mapper-reoptimize
+apps/                         mola-mapper-reoptimize, mola-mapper-cli
 params/                       Mapper parameters and loop closure detector pipelines
 mola-cli-launchs/             mola-cli launch files
 docs/                         Sphinx/RST documentation pages

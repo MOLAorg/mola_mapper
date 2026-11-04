@@ -112,6 +112,7 @@ void Parameters::loadFrom(const mrpt::containers::yaml & cfg)
   MCP_LOAD_OPT(cfg, output_state_estimator_tum);
   MCP_LOAD_OPT(cfg, output_state_estimator_georeference);
   MCP_LOAD_OPT(cfg, output_graph_input);
+  MCP_LOAD_OPT(cfg, record_input);
 }
 
 }  // namespace mola::mapper

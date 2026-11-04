@@ -25,6 +25,10 @@
 #include <mola_kernel/interfaces/NavStateFilter.h>
 #include <mola_kernel/interfaces/RawDataConsumer.h>
 #include <mola_kernel/interfaces/SharedKeyframeMap.h>
+#if __has_include(<mola_kernel/interfaces/LocalMapCorrectionSource.h>)
+#include <mola_kernel/interfaces/LocalMapCorrectionSource.h>
+#define MOLA_MAPPER_HAS_LOCAL_MAP_CORRECTIONS 1
+#endif
 #include <mola_mapper/GlobalGraph.h>
 #include <mola_mapper/GyroIntegration.h>
 #include <mola_mapper/LoopOdometryCheck.h>
@@ -71,6 +75,9 @@ namespace mola::mapper
  *  - optionally feeds the optimized pose of the newest keyframe back to the state
  *    estimator, as an absolute pose in the map frame, so loop closures and GNSS
  *    correct the live estimate;
+ *  - after loop closures, tells the front ends (`mola::LocalMapCorrectionSource`)
+ *    and gives them the corrected keyframes around them, to rebuild their local
+ *    maps;
  *  - publishes the estimated geo-reference (`mola::MapSourceBase`) and writes the
  *    optimized map, trajectory and geo-reference at the end.
  *
@@ -80,6 +87,9 @@ namespace mola::mapper
  * \ingroup mola_mapper_grp
  */
 class Mapper : public mola::ExecutableBase,
+#if defined(MOLA_MAPPER_HAS_LOCAL_MAP_CORRECTIONS)
+               public mola::LocalMapCorrectionSource,
+#endif
                public mola::RawDataConsumer,
                public mola::MapSourceBase,
                public mola::DiagnosticsProvider,
@@ -106,6 +116,15 @@ public:
   std::optional<KeyFrameID> requestInsertKeyframe(const KeyframeInsertRequest & req) override;
   void getDiagnostics(std::vector<mola::DiagnosticStatusMsg> & status) override;
   /** @} */
+
+#if defined(MOLA_MAPPER_HAS_LOCAL_MAP_CORRECTIONS)
+private:
+  /// Keyframes within radius of keyframe `reference` (its index), oldest first.
+  [[nodiscard]] std::optional<std::vector<mola::LocalMapKeyframe>> local_map_keyframes_impl(
+    KeyFrameID reference, double radius) const override;
+
+public:
+#endif
 
   /** @name Queries and synchronous control (offline runs, tests)
      * @{ */
@@ -214,6 +233,8 @@ private:
   std::size_t last_num_gnss_factors_ = 0;
   std::size_t last_num_gravity_factors_ = 0;
   std::size_t last_num_gyro_factors_ = 0;
+  /// Loops in the last solve advertised as a local map correction (solve_mtx_).
+  std::size_t loops_in_last_correction_ = 0;
   /// Stamp of the last keyframe pose fed back to the state estimator.
   std::optional<mrpt::Clock::time_point> last_feedback_stamp_;
   bool finalized_ = false;

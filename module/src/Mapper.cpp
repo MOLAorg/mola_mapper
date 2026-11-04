@@ -550,7 +550,46 @@ void Mapper::solve_global_graph()
     publish_georeference(*r.georeferencing);
   }
   send_feedback(newestStamp, newestPose, r);
+
+#if defined(MOLA_MAPPER_HAS_LOCAL_MAP_CORRECTIONS)
+  // Only loop closures move the keyframes around the front end enough to
+  // rebuild its local map:
+  if (params_.local_map_corrections && in.loops.size() > loops_in_last_correction_) {
+    mola::LocalMapCorrection c;
+    c.timestamp = newestStamp;
+    c.new_loop_closures = in.loops.size() - loops_in_last_correction_;
+    loops_in_last_correction_ = in.loops.size();
+    advertise_local_map_correction(c);
+  }
+#endif
 }
+
+#if defined(MOLA_MAPPER_HAS_LOCAL_MAP_CORRECTIONS)
+std::optional<std::vector<mola::LocalMapKeyframe>> Mapper::local_map_keyframes_impl(
+  KeyFrameID reference, double radius) const
+{
+  auto lck = mrpt::lockHelper(state_mtx_);
+  if (reference >= keyframes_.size()) {
+    return std::nullopt;
+  }
+  const auto & ref = keyframes_.at(reference).pose_in_map;
+  std::vector<mola::LocalMapKeyframe> out;
+  for (std::size_t i = 0; i < keyframes_.size(); i++) {
+    const auto & kf = keyframes_[i];
+    if ((kf.pose_in_map.translation() - ref.translation()).norm() > radius) {
+      continue;
+    }
+    mola::LocalMapKeyframe k;
+    k.id = i;
+    k.timestamp = kf.stamp;
+    k.source_frame_id = kf.source_frame;
+    k.pose_from_reference = kf.pose_in_map - ref;
+    k.observations = kf.observations;
+    out.push_back(std::move(k));
+  }
+  return out;
+}
+#endif
 
 void Mapper::send_feedback(
   const mrpt::Clock::time_point & stamp, const mrpt::poses::CPose3D & pose,

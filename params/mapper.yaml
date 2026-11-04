@@ -70,6 +70,10 @@ params:
   feedback_min_sigma_xyz: ${MOLA_MAPPER_FEEDBACK_MIN_SIGMA_XYZ|0.10}  # [m]
   feedback_min_sigma_ang_deg: ${MOLA_MAPPER_FEEDBACK_MIN_SIGMA_ANG|0.5}  # [deg]
 
+  # After a solve with new loop closures, tell the front ends, so they can
+  # rebuild their local maps from the corrected keyframes:
+  local_map_corrections: ${MOLA_MAPPER_LOCAL_MAP_CORRECTIONS|true}
+
   # Loop closure detection (mola_sm_loop_closure):
   loop_closure_enabled: ${MOLA_MAPPER_LOOP_CLOSURE|true}
   loop_closure_pipeline_file: "${MOLA_MAPPER_LC_PIPELINE|$(ros2 pkg prefix mola_mapper)/share/mola_mapper/params/loop-closure-f2f-mapper.yaml}"

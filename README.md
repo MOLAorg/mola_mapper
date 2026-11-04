@@ -27,6 +27,9 @@ estimation of its own and is not a `mola::NavStateFilter`.
 - Optionally (`feedback_to_state_estimator`), the optimized pose of the newest
   keyframe is fused into the state estimator as an absolute pose in the map
   frame.
+- After loop closures, it tells the front ends (`mola::LocalMapCorrectionSource`),
+  which can then rebuild their local maps from the corrected keyframes around
+  them, including those of earlier visits.
 
 See [docs/call-graph.md](docs/call-graph.md) for the threads and call flow.
 

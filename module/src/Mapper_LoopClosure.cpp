@@ -190,15 +190,10 @@ std::size_t Mapper::run_loop_closure_scan(bool forceFullScan)
         mrpt::poses::CPose3DPDFGaussian::Create(kf.pose_in_map),
         std::make_shared<mrpt::obs::CSensoryFrame>(kf.observations));
     }
-    // Excluded pairs (snapshot indices are keyframe indices): the closed ones, and
-    // the rejected ones except in full scans, which retry them (the detector
-    // excludes whole blocks of keyframes, so a false match there could hide a
-    // genuine loop found later with better poses):
-    for (const auto & [a, b] : loop_pairs_) {
-      opts.exclude_pairs.insert({static_cast<uint32_t>(a), static_cast<uint32_t>(b)});
-    }
-    if (!fullScan) {
-      for (const auto & [a, b] : rejected_loop_pairs_) {
+    // Excluded pairs (snapshot indices are keyframe indices): the closed and the
+    // rejected ones.
+    for (const auto & pairs : {&loop_pairs_, &rejected_loop_pairs_}) {
+      for (const auto & [a, b] : *pairs) {
         opts.exclude_pairs.insert({static_cast<uint32_t>(a), static_cast<uint32_t>(b)});
       }
     }

@@ -33,9 +33,9 @@ The modules of a system are independent and composed by a launch file:
 * ``mola::mapper::Mapper`` receives those keyframes and, as a
   ``mola::RawDataConsumer``, the GNSS and IMU readings of the dataset.
 * Optionally (``feedback_to_state_estimator``), after each solve the mapper
-  fuses the optimized pose of the newest keyframe into the state estimator as an
-  absolute pose in the map frame (``fuse_pose()``), so loop closures and GNSS
-  reach the live estimate. In that mode, the state estimator should run without
+  fuses the optimized pose of the newest keyframe (once per keyframe) into the
+  state estimator as an absolute pose in the map frame (``fuse_pose()``), so loop
+  closures and GNSS reach the live estimate. In that mode, the state estimator should run without
   GNSS (``MOLA_NAVSTATE_GNSS_SENSOR_NAME=none``): the mapper owns it.
 
 The mapper:
@@ -108,10 +108,13 @@ covariance of the newest pose is computed. Its factors are:
 * **Loop closures**: Huber kernel, with floors on their sigmas
   (``loop_closure_min_sigma_xyz``, ``loop_closure_min_sigma_ang_deg``), since the
   detector covariance is overconfident.
-* **GNSS**: ENU position factors with a selectable robust kernel (default
-  Cauchy). Readings with a horizontal sigma above ``gnss_max_uncertainty_horiz``
-  are discarded. If the spread of the readings is too small for their sigmas,
-  they are not used.
+* **GNSS**: ENU position factors (readings with a GGA message) with a selectable
+  robust kernel (default Cauchy). Readings with a horizontal sigma above
+  ``gnss_max_uncertainty_horiz`` are discarded. If the spread of the readings is
+  too small for their sigmas, they are not used. The geo-reference is published
+  and saved only once observable: at least ``georef_min_gnss_factors`` GNSS
+  factors, and an azimuth sigma of ``T_enu_to_map`` below
+  ``georef_max_sigma_yaw_deg``.
 * **Gravity**: roll and pitch from the averaged accelerometer.
 * **Gyroscope**: relative rotation between consecutive keyframes, with free
   translation. The sigma combines the noise density, the bias sigma and the scale
@@ -192,6 +195,8 @@ with an environment variable (shown in parentheses below).
         gnss_max_uncertainty_horiz: 20.0   # [m]
         gnss_robust_kernel: "cauchy"    # huber, cauchy, geman_mcclure, tukey (MOLA_MAPPER_GNSS_ROBUST_KERNEL)
         gnss_robust_k: 1.5              # [sigmas] (MOLA_MAPPER_GNSS_ROBUST_K)
+        georef_min_gnss_factors: 3
+        georef_max_sigma_yaw_deg: 10.0  # [deg] (MOLA_MAPPER_GEOREF_MAX_SIGMA_YAW)
 
         use_imu_gravity: true           # (MOLA_MAPPER_USE_GRAVITY)
         imu_gravity_sigma_deg: 3.0      # (MOLA_MAPPER_GRAVITY_SIGMA_DEG)

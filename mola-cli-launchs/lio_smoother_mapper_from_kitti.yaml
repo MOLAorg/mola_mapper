@@ -1,0 +1,59 @@
+# =============================================================================
+# A complete LiDAR SLAM system on a KITTI odometry sequence: LIO + the state
+# estimation smoother + mola::mapper::Mapper (loop closures, global pose graph),
+# as lio_smoother_mapper_from_rosbag2.yaml. KITTI has no IMU nor GNSS: loop
+# closures are the only global information.
+#
+# Usage:
+#   export KITTI_BASE_DIR=/path/to/kitti   KITTI_SEQ=00
+#   mola-cli $(ros2 pkg prefix mola_mapper)/share/mola_mapper/mola-cli-launchs/lio_smoother_mapper_from_kitti.yaml
+#
+# Main switches: MOLA_WITH_MAPPER, MOLA_MAPPER_LOOP_CLOSURE, MOLA_MAPPER_FEEDBACK,
+# MOLA_MAPPER_OUTPUT_* (see params/mapper.yaml).
+# =============================================================================
+
+modules:
+  - name: viz
+    type: ${MOLA_GUI_MODULE|mola::MolaVizImGui}
+    enabled: ${MOLA_WITH_GUI|true}
+    verbosity_level: "${MOLA_VERBOSITY_MOLA_VIZ|INFO}"
+    params:
+      imgui_app_name: lio_smoother_mapper_kitti
+
+  - name: state_estimation
+    type: mola::state_estimation_smoother::StateEstimationSmoother
+    verbosity_level: "${MOLA_VERBOSITY_MOLA_STATE_ESTIMATOR|INFO}"
+    raw_data_source: "dataset_input"
+    params: "${MOLA_STATE_ESTIMATOR_YAML|$(ros2 pkg prefix mola_state_estimation_smoother)/share/mola_state_estimation_smoother/params/state-estimation-smoother.yaml}"
+
+  - name: mapper
+    type: mola::mapper::Mapper
+    enabled: ${MOLA_WITH_MAPPER|true}
+    verbosity_level: "${MOLA_VERBOSITY_MAPPER|INFO}"
+    raw_data_source: "dataset_input"
+    params: "${MOLA_MAPPER_YAML|../params/mapper-kitti.yaml}"
+
+  - name: lidar_odom
+    type: mola::LidarOdometry
+    verbosity_level: "${MOLA_VERBOSITY_MOLA_LO|INFO}"
+    raw_data_source: "dataset_input"
+    params: "${MOLA_ODOMETRY_PIPELINE_YAML|$(ros2 pkg prefix mola_lidar_odometry)/share/mola_lidar_odometry/pipelines/lidar3d-default.yaml}"
+
+  - name: dataset_input
+    type: mola::KittiOdometryDataset
+    execution_rate: 20 # Hz
+    quit_mola_app_on_dataset_end: ${MOLA_QUIT_ON_DATASET_END|false}
+    gui_preview_sensors:
+      - raw_sensor_label: lidar
+        decimation: 1
+        enabled: ${MOLA_WITH_GUI|true}
+        win_pos: 5 70 400 400
+    params:
+      base_dir: ${KITTI_BASE_DIR}
+      sequence: ${KITTI_SEQ}
+      time_warp_scale: ${MOLA_TIME_WARP|1.0}
+      start_paused: ${MOLA_DATASET_START_PAUSED|false}
+      publish_lidar: true
+      publish_image_0: false
+      publish_image_1: false
+      publish_ground_truth: true

@@ -1,0 +1,11 @@
+# ============================================================================
+# mapper.yaml for the KITTI odometry launcher: no GNSS nor IMU in the dataset,
+# and loop closure ICP that accepts clouds without per-point timestamps.
+# ============================================================================
+$define:
+  MOLA_MAPPER_GNSS_LABELS: ""
+  MOLA_MAPPER_USE_GNSS: false
+  MOLA_MAPPER_USE_GRAVITY: false
+  MOLA_MAPPER_LC_PIPELINE: "$(ros2 pkg prefix mola_mapper)/share/mola_mapper/params/loop-closure-f2f-mapper-kitti.yaml"
+
+$import: mapper.yaml

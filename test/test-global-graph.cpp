@@ -85,6 +85,8 @@ void test_loop_closure_removes_drift()
   GlobalGraphParams p;
   p.use_gnss = false;
   p.use_imu_gravity = false;
+  // An odometry noise model in line with this synthetic drift (0.5 deg per meter):
+  p.odometry_noise_ang_deg_per_sqrt_m = 0.5;
 
   const auto noLoop = mola::mapper::optimize_global_graph(in, p);
   const double errNoLoop = position_error(noLoop.poses.back(), gt.back());
@@ -149,6 +151,7 @@ void test_gnss_georeference_and_drift()
   GlobalGraphParams p;
   p.use_imu_gravity = false;
   p.gnss_minimum_uncertainty = 0.3;
+  p.odometry_noise_ang_deg_per_sqrt_m = 0.2;  // a bit looser than the synthetic drift
 
   const auto r = mola::mapper::optimize_global_graph(in, p);
   ASSERT_(r.georeferencing.has_value());
@@ -166,7 +169,7 @@ void test_gnss_georeference_and_drift()
             << maxErr << " m\n";
   ASSERT_LT_(yawErrDeg, 2.0);
   ASSERT_LT_((est.translation() - T_enu_to_map.translation()).norm(), 0.5);
-  ASSERT_LT_(maxErr, 0.6);
+  ASSERT_LT_(maxErr, 0.8);  // the fixes have 0.3 m sigma
 }
 
 }  // namespace

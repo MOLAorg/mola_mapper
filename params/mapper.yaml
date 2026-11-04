@@ -23,23 +23,27 @@ params:
   imu_gravity_min_samples: 10
 
   graph:
-    # LIO keyframe chain: sigmas of each increment, growing with its length:
-    odometry_uncertainty_multiplier: ${MOLA_MAPPER_ODOM_SIGMA_MULTIPLIER|1.0}
-    odometry_additional_noise_xyz: 0.01          # [m]
-    odometry_additional_noise_ang_deg: 0.1       # [deg]
-    odometry_noise_xyz_per_sqrt_m: ${MOLA_MAPPER_ODOM_SIGMA_XYZ_PER_SQRT_M|0.02}
-    odometry_noise_ang_deg_per_sqrt_m: ${MOLA_MAPPER_ODOM_SIGMA_ANG_PER_SQRT_M|0.2}
+    # LIO keyframe chain: stiff (the front end is locally accurate; only its slow
+    # drift gives way to GNSS and loops). Sigmas: floor + random walk per sqrt(m):
+    odometry_uncertainty_multiplier: ${MOLA_MAPPER_ODOM_SIGMA_MULTIPLIER|0.0}  # front end covariance (0: ignored)
+    odometry_additional_noise_xyz: ${MOLA_MAPPER_ODOM_SIGMA_XYZ|0.002}          # [m]
+    odometry_additional_noise_ang_deg: ${MOLA_MAPPER_ODOM_SIGMA_ANG|0.01}       # [deg]
+    odometry_noise_xyz_per_sqrt_m: ${MOLA_MAPPER_ODOM_SIGMA_XYZ_PER_SQRT_M|0.01}
+    odometry_noise_ang_deg_per_sqrt_m: ${MOLA_MAPPER_ODOM_SIGMA_ANG_PER_SQRT_M|0.05}
 
     use_gnss: ${MOLA_MAPPER_USE_GNSS|true}
     gnss_minimum_uncertainty: ${MOLA_MAPPER_GNSS_MIN_SIGMA|0.5}  # [m]
     gnss_uncertainty_multiplier: ${MOLA_MAPPER_GNSS_SIGMA_MULTIPLIER|1.0}
     gnss_max_uncertainty_horiz: 20.0  # [m]
-    gnss_robust_huber_k: 1.5
+    gnss_robust_kernel: "${MOLA_MAPPER_GNSS_ROBUST_KERNEL|cauchy}"  # huber, cauchy, geman_mcclure, tukey
+    gnss_robust_k: ${MOLA_MAPPER_GNSS_ROBUST_K|1.5}  # [sigmas]
 
     use_imu_gravity: ${MOLA_MAPPER_USE_GRAVITY|true}
     imu_gravity_sigma_deg: ${MOLA_MAPPER_GRAVITY_SIGMA_DEG|3.0}
 
     loop_closure_robust_huber_k: 1.5
+    loop_closure_min_sigma_xyz: ${MOLA_MAPPER_LC_MIN_SIGMA_XYZ|0.05}  # [m]
+    loop_closure_min_sigma_ang_deg: ${MOLA_MAPPER_LC_MIN_SIGMA_ANG|0.25}  # [deg]
 
   enable_optimizer_thread: true
   optimizer_min_period: ${MOLA_MAPPER_OPTIMIZER_PERIOD|1.0}  # [s]

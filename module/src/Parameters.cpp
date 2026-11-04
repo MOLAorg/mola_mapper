@@ -35,12 +35,15 @@ void GlobalGraphParams::loadFrom(const mrpt::containers::yaml & cfg)
   MCP_LOAD_OPT(cfg, gnss_minimum_uncertainty);
   MCP_LOAD_OPT(cfg, gnss_uncertainty_multiplier);
   MCP_LOAD_OPT(cfg, gnss_max_uncertainty_horiz);
-  MCP_LOAD_OPT(cfg, gnss_robust_huber_k);
+  MCP_LOAD_OPT(cfg, gnss_robust_kernel);
+  MCP_LOAD_OPT(cfg, gnss_robust_k);
 
   MCP_LOAD_OPT(cfg, use_imu_gravity);
   MCP_LOAD_OPT(cfg, imu_gravity_sigma_deg);
 
   MCP_LOAD_OPT(cfg, loop_closure_robust_huber_k);
+  MCP_LOAD_OPT(cfg, loop_closure_min_sigma_xyz);
+  MCP_LOAD_OPT(cfg, loop_closure_min_sigma_ang_deg);
   MCP_LOAD_OPT(cfg, first_pose_prior_sigma);
   MCP_LOAD_OPT(cfg, max_iterations);
 }

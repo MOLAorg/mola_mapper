@@ -204,8 +204,10 @@ private:
   std::string gyro_label_;
   mrpt::poses::CPose3D gyro_sensor_pose_;
   std::vector<GlobalGraphLoopEdge> loops_;
-  /// Keyframe pairs (min, max) of the loops proposed so far, merged or rejected.
+  /// Keyframe pairs (min, max) of the merged loops.
   std::set<std::pair<std::size_t, std::size_t>> loop_pairs_;
+  /// Keyframe pairs (min, max) of the loops rejected by the odometry check.
+  std::set<std::pair<std::size_t, std::size_t>> rejected_loop_pairs_;
   std::optional<mrpt::topography::TGeodeticCoords> geodetic_datum_;
   std::optional<mola::Georeferencing> georef_;
   /// Factor counts of the last solve, for diagnostics.

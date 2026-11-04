@@ -78,7 +78,8 @@ and a `T(0)` azimuth sigma below `georef_max_sigma_yaw_deg`.
   merged in order, except those contradicting the odometry chain between their keyframes
   (`check_loop_against_odometry()`: floor + fraction of the distance traveled; only within one
   source frame, so a front end that restarts must use a new `source_frame_id`). Rejected pairs
-  stay in `loop_pairs_` and are excluded from later scans. One scan at a
+  (`rejected_loop_pairs_`) are excluded from incremental scans; full scans retry them, since the
+  detector excludes whole blocks of keyframes. One scan at a
   time (`lc_scan_mtx_`). `finalize()` (also from `onQuit()`)
   runs extra full scans and solves; each step and output is guarded, so one failure does not
   lose the other outputs.

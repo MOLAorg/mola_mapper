@@ -167,7 +167,15 @@ std::size_t Mapper::run_loop_closure_scan(bool forceFullScan)
   }
   auto lckScan = mrpt::lockHelper(lc_scan_mtx_);
 
-  // 1) Snapshot: current keyframe poses and the front end observations only.
+  // 1) Incremental (only pairs with a new keyframe) or full scan:
+  bool fullScan = forceFullScan || !params_.loop_closure_incremental;
+  if (
+    params_.loop_closure_full_scan_every_n > 0 &&
+    lc_incremental_scans_ >= params_.loop_closure_full_scan_every_n) {
+    fullScan = true;
+  }
+
+  // 2) Snapshot: current keyframe poses and the front end observations only.
   mrpt::maps::CSimpleMap snapshot;
   mola::LoopClosureAnalyzeOptions opts;
   {
@@ -182,22 +190,23 @@ std::size_t Mapper::run_loop_closure_scan(bool forceFullScan)
         mrpt::poses::CPose3DPDFGaussian::Create(kf.pose_in_map),
         std::make_shared<mrpt::obs::CSensoryFrame>(kf.observations));
     }
-    // Already closed pairs (snapshot indices are keyframe indices):
+    // Excluded pairs (snapshot indices are keyframe indices): the closed ones, and
+    // the rejected ones except in full scans, which retry them (the detector
+    // excludes whole blocks of keyframes, so a false match there could hide a
+    // genuine loop found later with better poses):
     for (const auto & [a, b] : loop_pairs_) {
       opts.exclude_pairs.insert({static_cast<uint32_t>(a), static_cast<uint32_t>(b)});
+    }
+    if (!fullScan) {
+      for (const auto & [a, b] : rejected_loop_pairs_) {
+        opts.exclude_pairs.insert({static_cast<uint32_t>(a), static_cast<uint32_t>(b)});
+      }
     }
   }
   if (snapshot.size() < 2) {
     return 0;
   }
 
-  // 2) Incremental (only pairs with a new keyframe) or full scan:
-  bool fullScan = forceFullScan || !params_.loop_closure_incremental;
-  if (
-    params_.loop_closure_full_scan_every_n > 0 &&
-    lc_incremental_scans_ >= params_.loop_closure_full_scan_every_n) {
-    fullScan = true;
-  }
   if (fullScan) {
     lc_incremental_scans_ = 0;
   } else {
@@ -229,18 +238,19 @@ std::size_t Mapper::run_loop_closure_scan(bool forceFullScan)
       if (loop_pairs_.count(key) != 0) {
         continue;
       }
-      // Rejected pairs are remembered too, so they are excluded from later scans:
-      loop_pairs_.insert(key);
       if (params_.loop_closure_odometry_check) {
         if (const auto c = check_against_odometry_locked(key.first, key.second, e);
             c && !c->accepted) {
-          MRPT_LOG_INFO_FMT(
-            "Loop %zu-%zu rejected: %.2f m / %.1f deg off the odometry over %.1f m", key.first,
-            key.second, c->xyz_error, c->ang_error_deg, c->distance_traveled);
-          rejected++;
+          if (rejected_loop_pairs_.insert(key).second) {
+            MRPT_LOG_INFO_FMT(
+              "Loop %zu-%zu rejected: %.2f m / %.1f deg off the odometry over %.1f m", key.first,
+              key.second, c->xyz_error, c->ang_error_deg, c->distance_traveled);
+            rejected++;
+          }
           continue;
         }
       }
+      loop_pairs_.insert(key);
       loops_.push_back({e.from, e.to, e.relative_pose});
       merged++;
     }

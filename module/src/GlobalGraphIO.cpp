@@ -76,7 +76,7 @@ void save_global_graph_input(const GlobalGraphInput & in, const std::string & pr
 {
   {
     std::ofstream f(prefix + ".keyframes.txt");
-    ASSERT_(f.is_open());
+    ASSERTMSG_(f.is_open(), "Cannot write " + prefix + ".keyframes.txt");
     f << std::setprecision(15);
     f << "# idx stamp source pose_in_source(x y z yaw pitch roll) cov(36) initial_guess(6)"
          " [gyro_rotation_from_prev(yaw pitch roll) sigma]\n";
@@ -102,7 +102,7 @@ void save_global_graph_input(const GlobalGraphInput & in, const std::string & pr
   }
   {
     std::ofstream f(prefix + ".loops.txt");
-    ASSERT_(f.is_open());
+    ASSERTMSG_(f.is_open(), "Cannot write " + prefix + ".loops.txt");
     f << std::setprecision(15);
     f << "# from to relative_pose(x y z yaw pitch roll) cov(36)\n";
     for (const auto & lc : in.loops) {
@@ -114,8 +114,16 @@ void save_global_graph_input(const GlobalGraphInput & in, const std::string & pr
   }
   if (in.geodetic_datum) {
     std::ofstream f(prefix + ".datum.txt");
+    ASSERTMSG_(f.is_open(), "Cannot write " + prefix + ".datum.txt");
     f << std::setprecision(15) << in.geodetic_datum->lat.decimal_value << " "
       << in.geodetic_datum->lon.decimal_value << " " << in.geodetic_datum->height << "\n";
+  }
+  if (in.T_enu_to_map_guess) {
+    std::ofstream f(prefix + ".enu_to_map_guess.txt");
+    ASSERTMSG_(f.is_open(), "Cannot write " + prefix + ".enu_to_map_guess.txt");
+    f << std::setprecision(15);
+    write_pose(f, *in.T_enu_to_map_guess);
+    f << "\n";
   }
 }
 
@@ -179,12 +187,18 @@ GlobalGraphInput load_global_graph_input(const std::string & prefix)
     fd >> lat >> lon >> h;
     in.geodetic_datum = mrpt::topography::TGeodeticCoords(lat, lon, h);
   }
+
+  std::ifstream fg(prefix + ".enu_to_map_guess.txt");
+  if (fg.is_open()) {
+    in.T_enu_to_map_guess = read_pose(fg);
+  }
   return in;
 }
 
 void save_georeference(const mola::Georeferencing & g, const std::string & file)
 {
   std::ofstream f(file);
+  ASSERTMSG_(f.is_open(), "Cannot write " + file);
   f << std::setprecision(12);
   const auto & m = g.T_enu_to_map.mean;
   f << "latitude: " << g.geo_coord.lat.decimal_value << "\n"
@@ -203,6 +217,7 @@ void save_tum_trajectory(
   const std::string & file)
 {
   std::ofstream f(file);
+  ASSERTMSG_(f.is_open(), "Cannot write " + file);
   f << std::fixed << std::setprecision(6);
   for (const auto & [t, p] : poses) {
     const mrpt::poses::CPose3DQuat q(p);

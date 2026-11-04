@@ -81,10 +81,12 @@ int main(int argc, char ** argv)
       for (std::size_t i = 1; i < in.keyframes.size(); i++) {
         auto & kf = in.keyframes[i];
         const auto & prev = in.keyframes[i - 1];
-        kf.initial_guess =
-          kf.source_frame == prev.source_frame
-            ? prev.initial_guess + (kf.pose_in_source.mean - prev.pose_in_source.mean)
-            : prev.initial_guess;
+        // Chained within each front end source frame only; across a change of
+        // source frame the saved guess is kept, since it defines the weak edge.
+        if (kf.source_frame == prev.source_frame) {
+          kf.initial_guess =
+            prev.initial_guess + (kf.pose_in_source.mean - prev.pose_in_source.mean);
+        }
       }
     }
 

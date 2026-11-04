@@ -12,12 +12,14 @@
 */
 /**
  * @file   test-global-graph.cpp
- * @brief  optimize_global_graph() on a synthetic drifting square loop.
+ * @brief  optimize_global_graph() on a synthetic drifting square loop, and the
+ *         round trip of its saved input.
  * @author Jose Luis Blanco Claraco
  * @date   2026
  */
 
 #include <mola_mapper/GlobalGraph.h>
+#include <mola_mapper/GlobalGraphIO.h>
 #include <mrpt/core/bits_math.h>
 #include <mrpt/core/exceptions.h>
 #include <mrpt/math/wrap2pi.h>
@@ -25,6 +27,7 @@
 #include <mrpt/topography/conversions.h>
 
 #include <cmath>
+#include <filesystem>
 #include <iostream>
 #include <random>
 #include <vector>
@@ -304,6 +307,66 @@ void test_gyro_fixes_turn_heading_errors()
     0.5 * position_error(noGyro.poses.back(), gt.back()));
 }
 
+/** The saved graph input reloads with everything the solver uses, including
+ *  the geo-reference guess, so an offline re-optimization starts where the
+ *  online one did. */
+void test_graph_input_round_trip()
+{
+  const auto gt = ground_truth();
+  GlobalGraphInput in;
+  in.keyframes = drifting_odometry(gt, 0.1);
+  attach_gnss_fixes(in, gt, 0, 9, 0.3, 0.3);
+  in.keyframes[3].gyro_rotation_from_prev = CPose3D(0, 0, 0, 0.1, 0.02, -0.01);
+  in.keyframes[3].gyro_rotation_sigma = 0.002;
+  mola::mapper::GlobalGraphLoopEdge lc;
+  lc.from = 0;
+  lc.to = gt.size() - 1;
+  lc.relative_pose.mean = CPose3D(0.1, -0.2, 0, 0.05, 0, 0);
+  lc.relative_pose.cov.setDiagonal(1e-4);
+  in.loops.push_back(lc);
+  in.T_enu_to_map_guess = T_ENU_TO_MAP;
+
+  const auto prefix =
+    (std::filesystem::temp_directory_path() / "mola_mapper_test_graph_io").string();
+  mola::mapper::save_global_graph_input(in, prefix);
+  const auto out = mola::mapper::load_global_graph_input(prefix);
+
+  ASSERT_EQUAL_(out.keyframes.size(), in.keyframes.size());
+  for (std::size_t i = 0; i < in.keyframes.size(); i++) {
+    const auto & a = in.keyframes[i];
+    const auto & b = out.keyframes[i];
+    ASSERT_EQUAL_(a.source_frame, b.source_frame);
+    ASSERT_LT_(std::abs(mrpt::Clock::toDouble(a.stamp) - mrpt::Clock::toDouble(b.stamp)), 1e-5);
+    ASSERT_LT_(position_error(a.pose_in_source.mean, b.pose_in_source.mean), 1e-9);
+    ASSERT_LT_(position_error(a.initial_guess, b.initial_guess), 1e-9);
+    ASSERT_EQUAL_(a.gyro_rotation_from_prev.has_value(), b.gyro_rotation_from_prev.has_value());
+    // Keyframes without observations reload with an empty set:
+    ASSERT_EQUAL_(a.aux_observations ? a.aux_observations->size() : 0U, b.aux_observations->size());
+  }
+  ASSERT_LT_(std::abs(out.keyframes[3].gyro_rotation_from_prev->yaw() - 0.1), 1e-9);
+  ASSERT_EQUAL_(out.loops.size(), 1U);
+  ASSERT_EQUAL_(out.loops[0].to, lc.to);
+  ASSERT_(out.geodetic_datum.has_value());
+  ASSERT_LT_(std::abs(out.geodetic_datum->lat.decimal_value - DATUM.lat.decimal_value), 1e-9);
+  ASSERT_(out.T_enu_to_map_guess.has_value());
+  ASSERT_LT_((*out.T_enu_to_map_guess - T_ENU_TO_MAP).translation().norm(), 1e-9);
+  ASSERT_LT_(std::abs(out.T_enu_to_map_guess->yaw() - T_ENU_TO_MAP.yaw()), 1e-9);
+
+  // A file that cannot be written is an error, not a silent no-op:
+  bool threw = false;
+  try {
+    mola::mapper::save_tum_trajectory({}, "/nonexistent-dir/x.tum");
+  } catch (const std::exception &) {
+    threw = true;
+  }
+  ASSERT_(threw);
+
+  for (const char * ext :
+       {".keyframes.txt", ".loops.txt", ".datum.txt", ".enu_to_map_guess.txt", ".aux.simplemap"}) {
+    std::filesystem::remove(prefix + ext);
+  }
+}
+
 }  // namespace
 
 int main()
@@ -313,6 +376,7 @@ int main()
     test_gyro_fixes_turn_heading_errors();
     test_gnss_georeference_and_drift();
     test_georeference_only_once_observable();
+    test_graph_input_round_trip();
     std::cout << "All tests passed.\n";
     return 0;
   } catch (const std::exception & e) {

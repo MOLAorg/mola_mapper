@@ -507,6 +507,8 @@ void Mapper::solve_global_graph()
       const auto & prev = keyframes_[i - 1];
       if (prev.source_frame == kf.source_frame) {
         kf.pose_in_map = prev.pose_in_map + (kf.pose_in_source.mean - prev.pose_in_source.mean);
+      } else {
+        kf.pose_in_map = prev.pose_in_map;
       }
     }
     if (r.geodetic_datum) {

@@ -178,9 +178,7 @@ void test_wait_covers_a_forced_scan()
   const auto scansAfter = std::stoull(diagnostic_value(m, "lc_scans"));
   std::cout << "    lc_scans " << scansBefore << " -> " << scansAfter << "\n";
   ASSERTMSG_(
-    scansAfter > scansBefore,
-    "the forced scans were waited on but none of them completed -- the wait is "
-    "returning without the scan having run");
+    scansAfter == scansBefore + 10, "each forced scan must have completed when its wait returns");
 
   mrpt::system::deleteFile(pipelineFile);
   std::cout << "    OK\n";

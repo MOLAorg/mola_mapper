@@ -60,6 +60,7 @@ void Mapper::start_loop_closure_thread()
     return;
   }
   lc_should_exit_.store(false);
+  lc_thread_running_.store(true);
   lc_thread_ = std::thread(&Mapper::loop_closure_thread_loop, this);
   MRPT_LOG_INFO_STREAM(
     "Loop closure thread started, pipeline: " << params_.loop_closure_pipeline_file);
@@ -117,17 +118,18 @@ void Mapper::loop_closure_thread_loop()
   {
     auto lk = mrpt::lockHelper(lc_idle_mtx_);
     lc_busy_.store(false);
+    lc_thread_running_.store(false);
   }
   lc_idle_cv_.notify_all();
 }
 
 bool Mapper::wait_for_loop_closure_idle(double timeoutSeconds)
 {
-  if (!lc_thread_.joinable()) {
-    return true;
-  }
   std::unique_lock<std::mutex> lk(lc_idle_mtx_);
-  const auto isIdle = [this] { return !lc_force_scan_.load() && !lc_busy_.load(); };
+  // A request left pending by a thread that exited is never served: idle too.
+  const auto isIdle = [this] {
+    return !lc_thread_running_.load() || (!lc_force_scan_.load() && !lc_busy_.load());
+  };
   if (timeoutSeconds <= 0) {
     lc_idle_cv_.wait(lk, isIdle);
     return true;
@@ -145,6 +147,7 @@ std::size_t Mapper::run_loop_closure_scan(bool forceFullScan)
   if (!lc_engine_) {
     return 0;
   }
+  auto lckScan = mrpt::lockHelper(lc_scan_mtx_);
 
   // 1) Snapshot: current keyframe poses and the front end observations only.
   mrpt::maps::CSimpleMap snapshot;

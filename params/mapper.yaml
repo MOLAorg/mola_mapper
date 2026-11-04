@@ -51,6 +51,8 @@ params:
     gnss_max_uncertainty_horiz: 20.0  # [m]
     gnss_robust_kernel: "${MOLA_MAPPER_GNSS_ROBUST_KERNEL|cauchy}"  # huber, cauchy, geman_mcclure, tukey
     gnss_robust_k: ${MOLA_MAPPER_GNSS_ROBUST_K|1.5}  # [sigmas]
+    # The geo-reference is published once its azimuth sigma is below this:
+    georef_max_sigma_yaw_deg: ${MOLA_MAPPER_GEOREF_MAX_SIGMA_YAW|10.0}  # [deg]
 
     use_imu_gravity: ${MOLA_MAPPER_USE_GRAVITY|true}
     imu_gravity_sigma_deg: ${MOLA_MAPPER_GRAVITY_SIGMA_DEG|3.0}

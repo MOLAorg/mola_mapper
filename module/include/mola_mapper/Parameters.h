@@ -61,6 +61,11 @@ struct GlobalGraphParams
   /// e.g. low-cost receivers meters off under trees with a small reported sigma.
   std::string gnss_robust_kernel = "cauchy";
   double gnss_robust_k = 1.5;  ///< kernel parameter, in sigmas
+
+  /// The geo-reference is returned only once observable: at least this many GNSS
+  /// factors, and an azimuth sigma below this.
+  uint32_t georef_min_gnss_factors = 3;
+  double georef_max_sigma_yaw_deg = 10.0;  ///< [deg]
   /** @} */
 
   /** @name Gravity (averaged accelerometer, CObservationIMU in the keyframes)

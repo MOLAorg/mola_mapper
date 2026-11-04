@@ -33,6 +33,7 @@
 #include <mrpt/poses/Lie/SO.h>
 #include <mrpt/poses/gtsam_wrappers.h>
 
+#include <algorithm>
 #include <cmath>
 #include <set>
 
@@ -299,15 +300,20 @@ GlobalGraphResult optimize_global_graph(
     out.last_pose = pdf;
   }
 
-  if (out.num_gnss_factors > 0 && out.geodetic_datum) {
+  if (out.num_gnss_factors >= params.georef_min_gnss_factors && out.geodetic_datum && enuCov) {
     mola::Georeferencing g;
     g.geo_coord = *out.geodetic_datum;
     g.T_enu_to_map.mean =
       mrpt::poses::CPose3D(mrpt::gtsam_wrappers::toTPose3D(result.at<gtsam::Pose3>(T(0))));
-    if (enuCov) {
-      g.T_enu_to_map.cov = mrpt::gtsam_wrappers::to_mrpt_se3_cov6(*enuCov);
+    g.T_enu_to_map.cov = mrpt::gtsam_wrappers::to_mrpt_se3_cov6(*enuCov);
+    // Observable once the azimuth is: a single fix, or fixes close together for
+    // their sigmas (standing still), leave it undetermined.
+    // MRPT covariance order: x y z yaw pitch roll
+    const double sigmaYaw = std::sqrt(g.T_enu_to_map.cov(3, 3));
+    out.georef_sigma_yaw = sigmaYaw;
+    if (sigmaYaw <= mrpt::DEG2RAD(params.georef_max_sigma_yaw_deg)) {
+      out.georeferencing = g;
     }
-    out.georeferencing = g;
   }
 
   if (logger != nullptr) {

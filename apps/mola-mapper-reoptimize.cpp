@@ -86,7 +86,6 @@ int main(int argc, char ** argv)
             ? prev.initial_guess + (kf.pose_in_source.mean - prev.pose_in_source.mean)
             : prev.initial_guess;
       }
-      in.T_enu_to_map_guess.reset();
     }
 
     mrpt::system::COutputLogger logger("reoptimize");

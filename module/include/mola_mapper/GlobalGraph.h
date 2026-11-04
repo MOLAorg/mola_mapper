@@ -87,7 +87,8 @@ struct GlobalGraphResult
   /// The newest keyframe pose with its marginal covariance (if computable).
   std::optional<mrpt::poses::CPose3DPDFGaussian> last_pose;
 
-  /// Set if GNSS factors were used.
+  /// Set once observable: enough GNSS factors and a T_enu_to_map azimuth sigma
+  /// within the GlobalGraphParams limit.
   std::optional<mola::Georeferencing> georeferencing;
 
   /// The ENU origin used (input or first GNSS reading).
@@ -98,6 +99,10 @@ struct GlobalGraphResult
   std::size_t num_gravity_factors = 0;
   std::size_t num_gyro_factors = 0;
   std::size_t num_loop_factors = 0;
+
+  /// Azimuth sigma of T_enu_to_map [rad], compared against the observability
+  /// limit (if computed).
+  std::optional<double> georef_sigma_yaw;
 
   /// The GNSS readings were not used: their spread is too small for their sigmas.
   bool gnss_degenerate = false;

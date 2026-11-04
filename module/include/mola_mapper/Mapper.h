@@ -21,10 +21,6 @@
 #include <mola_kernel/Georeferencing.h>
 #include <mola_kernel/interfaces/DiagnosticsProvider.h>
 #include <mola_kernel/interfaces/ExecutableBase.h>
-#if __has_include(<mola_kernel/interfaces/ImuBiasSource.h>)
-#include <mola_kernel/interfaces/ImuBiasSource.h>
-#define MOLA_MAPPER_HAS_IMU_BIAS_SOURCE 1
-#endif
 #include <mola_kernel/interfaces/MapSourceBase.h>
 #include <mola_kernel/interfaces/NavStateFilter.h>
 #include <mola_kernel/interfaces/RawDataConsumer.h>
@@ -54,7 +50,8 @@
 namespace mola
 {
 class LoopClosureInterface;
-}
+class ImuBiasSource;
+}  // namespace mola
 
 namespace mola::mapper
 {
@@ -163,8 +160,18 @@ private:
     double gyro_rotation_sigma = 0;
   };
 
+  /// Gyroscope bias (and its sigma [rad/s]) at time t, from the bias sources.
+  struct GyroBias
+  {
+    mrpt::math::TVector3D bias{0, 0, 0};
+    double sigma = 0;
+  };
+  /// Queries the bias sources: call without state_mtx_ held.
+  [[nodiscard]] GyroBias query_gyro_bias(
+    const std::string & label, const mrpt::Clock::time_point & t) const;
+
   /// Gyroscope rotation from the previous keyframe to kf (state_mtx_ held).
-  void attach_gyro_rotation_locked(Keyframe & kf);
+  void attach_gyro_rotation_locked(Keyframe & kf, const GyroBias & b);
 
   struct ImuSample
   {
@@ -179,9 +186,7 @@ private:
   bool use_imu_input_ = false;
   std::regex gyro_labels_re_;
   bool use_gyro_input_ = false;
-#if defined(MOLA_MAPPER_HAS_IMU_BIAS_SOURCE)
   std::vector<std::shared_ptr<mola::ImuBiasSource>> imu_bias_sources_;
-#endif
 
   /** @name State, under state_mtx_
      * @{ */
@@ -189,7 +194,9 @@ private:
   std::vector<Keyframe> keyframes_;
   std::deque<mrpt::obs::CObservationGPS::Ptr> pending_gnss_;
   std::deque<ImuSample> imu_samples_;
-  mrpt::obs::CObservationIMU::Ptr last_imu_;
+  /// Accelerometer readings of the first IMU matching imu_sensor_labels_re.
+  std::string gravity_label_;
+  mrpt::poses::CPose3D gravity_sensor_pose_;
   /// Gyroscope readings of the first IMU matching gyro_sensor_labels_re.
   std::deque<GyroSample> gyro_samples_;
   std::string gyro_label_;
@@ -198,10 +205,12 @@ private:
   std::set<std::pair<std::size_t, std::size_t>> loop_pairs_;
   std::optional<mrpt::topography::TGeodeticCoords> geodetic_datum_;
   std::optional<mola::Georeferencing> georef_;
-  GlobalGraphResult last_result_;
-  /// Keyframes and loops already included in the last solve.
-  std::size_t solved_keyframes_ = 0;
-  std::size_t solved_loops_ = 0;
+  /// Factor counts of the last solve, for diagnostics.
+  std::size_t last_num_gnss_factors_ = 0;
+  std::size_t last_num_gravity_factors_ = 0;
+  std::size_t last_num_gyro_factors_ = 0;
+  /// Stamp of the last keyframe pose fed back to the state estimator.
+  std::optional<mrpt::Clock::time_point> last_feedback_stamp_;
   bool finalized_ = false;
   /** @} */
 
@@ -222,17 +231,23 @@ private:
   void optimizer_thread_loop();
   void notify_optimizer();
   void stop_optimizer_thread();
-  /// Returns false if there was nothing new to solve.
-  bool solve_global_graph();
+  void solve_global_graph();
   [[nodiscard]] GlobalGraphInput graph_input_locked() const;
-  void send_feedback(const Keyframe & kf, const GlobalGraphResult & r);
+  void send_feedback(
+    const mrpt::Clock::time_point & stamp, const mrpt::poses::CPose3D & pose,
+    const GlobalGraphResult & r);
   std::weak_ptr<mola::NavStateFilter> state_estimator_;
   /** @} */
 
   /** @name Loop closure
      * @{ */
   std::shared_ptr<mola::LoopClosureInterface> lc_engine_;
+  /// One scan at a time (the thread, run_loop_closure_scan_now(), finalize()).
+  std::mutex lc_scan_mtx_;
   std::thread lc_thread_;
+  /// True while lc_thread_ runs its loop (set before it starts, cleared on exit
+  /// under lc_idle_mtx_), so waiters never read lc_thread_ itself.
+  std::atomic_bool lc_thread_running_{false};
   std::mutex lc_wakeup_mtx_;
   std::condition_variable lc_wakeup_cv_;
   std::atomic_bool lc_should_exit_{false};
@@ -244,9 +259,9 @@ private:
   std::condition_variable lc_idle_cv_;
   std::atomic<std::size_t> lc_scans_{0};
   std::atomic<std::size_t> lc_candidates_checked_{0};
-  std::size_t lc_kf_count_at_last_scan_ = 0;       // LC thread only
-  std::size_t lc_snapshot_size_at_last_scan_ = 0;  // LC thread only
-  std::size_t lc_incremental_scans_ = 0;           // LC thread only
+  std::size_t lc_kf_count_at_last_scan_ = 0;       // under lc_scan_mtx_
+  std::size_t lc_snapshot_size_at_last_scan_ = 0;  // under lc_scan_mtx_
+  std::size_t lc_incremental_scans_ = 0;           // under lc_scan_mtx_
 
   void start_loop_closure_thread();
   void stop_loop_closure_thread();
@@ -256,6 +271,8 @@ private:
 
   void publish_georeference(const mola::Georeferencing & g);
   void save_outputs();
+  void save_state_estimator_outputs(const std::vector<Keyframe> & kfs);
+  [[nodiscard]] static mrpt::maps::CSimpleMap to_simple_map(const std::vector<Keyframe> & kfs);
 };
 
 }  // namespace mola::mapper

@@ -19,6 +19,11 @@
  */
 
 #include <mola_mapper/Parameters.h>
+#include <mrpt/core/exceptions.h>
+#include <mrpt/core/format.h>
+
+#include <set>
+#include <string>
 
 namespace mola::mapper
 {
@@ -40,6 +45,16 @@ void GlobalGraphParams::loadFrom(const mrpt::containers::yaml & cfg)
   MCP_LOAD_OPT(cfg, gnss_max_uncertainty_horiz);
   MCP_LOAD_OPT(cfg, gnss_robust_kernel);
   MCP_LOAD_OPT(cfg, gnss_robust_k);
+  MCP_LOAD_OPT(cfg, georef_min_gnss_factors);
+  MCP_LOAD_OPT(cfg, georef_max_sigma_yaw_deg);
+  {
+    const std::set<std::string> kernels = {"huber", "cauchy", "geman_mcclure", "tukey"};
+    ASSERTMSG_(
+      kernels.count(gnss_robust_kernel) != 0,
+      mrpt::format(
+        "Unknown gnss_robust_kernel '%s' (huber, cauchy, geman_mcclure or tukey)",
+        gnss_robust_kernel.c_str()));
+  }
 
   MCP_LOAD_OPT(cfg, use_imu_gravity);
   MCP_LOAD_OPT(cfg, imu_gravity_sigma_deg);

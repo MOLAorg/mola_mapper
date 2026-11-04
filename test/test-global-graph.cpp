@@ -90,41 +90,55 @@ void test_loop_closure_removes_drift()
   // An odometry noise model in line with this synthetic drift (0.5 deg per meter):
   p.odometry_noise_ang_deg_per_sqrt_m = 0.5;
 
-  const auto noLoop = mola::mapper::optimize_global_graph(in, p);
-  const double errNoLoop = position_error(noLoop.poses.back(), gt.back());
+  // Error of the loop end relative to its start (the drift the loop removes):
+  constexpr std::size_t LOOP_START = 5;
+  const auto loopError = [&](const std::vector<CPose3D> & est) {
+    return position_error(est.back() - est[LOOP_START], gt.back() - gt[LOOP_START]);
+  };
 
-  // The front end revisits the start: last keyframe seen from the first one.
+  const auto noLoop = mola::mapper::optimize_global_graph(in, p);
+  const double errNoLoop = loopError(noLoop.poses);
+
+  // The front end revisits the start: the last keyframe, seen from a keyframe 5 m
+  // into the first side (not the identity, so the edge direction matters).
   mola::mapper::GlobalGraphLoopEdge lc;
-  lc.from = 0;
+  lc.from = LOOP_START;
   lc.to = gt.size() - 1;
-  lc.relative_pose.mean = gt.back() - gt.front();
+  lc.relative_pose.mean = gt.back() - gt[lc.from];
   lc.relative_pose.cov.setDiagonal(1e-4);
   in.loops.push_back(lc);
 
   const auto withLoop = mola::mapper::optimize_global_graph(in, p);
-  const double errLoop = position_error(withLoop.poses.back(), gt.back());
+  const double errLoop = loopError(withLoop.poses);
 
-  std::cout << "Loop closure: end position error " << errNoLoop << " m without, " << errLoop
-            << " m with it\n";
+  // The same edge with from/to swapped is a different (wrong) constraint:
+  auto inSwapped = in;
+  std::swap(inSwapped.loops.back().from, inSwapped.loops.back().to);
+  const auto swapped = mola::mapper::optimize_global_graph(inSwapped, p);
+  const double errSwapped = loopError(swapped.poses);
+
+  std::cout << "Loop closure: loop end position error " << errNoLoop << " m without, " << errLoop
+            << " m with it, " << errSwapped << " m with it swapped\n";
   ASSERT_EQUAL_(withLoop.num_loop_factors, 1U);
   ASSERT_GT_(errNoLoop, 3.0);
   ASSERT_LT_(errLoop, 0.1);
+  ASSERT_GT_(errSwapped, 1.0);
 }
 
-void test_gnss_georeference_and_drift()
+// ENU <-> map: rotated 30 deg and shifted.
+const CPose3D T_ENU_TO_MAP(100.0, 50.0, 2.0, mrpt::DEG2RAD(30.0), 0, 0);
+const mrpt::math::TPoint3D ANTENNA(0.1, 0.2, 0.9);
+
+/// Attaches a GNSS fix (GGA, with that noise and reported sigma) to keyframes
+/// [first, last] of `in`, from their ground truth poses.
+void attach_gnss_fixes(
+  GlobalGraphInput & in, const std::vector<CPose3D> & gt, std::size_t first, std::size_t last,
+  double noiseSigma, double reportedSigma)
 {
-  const auto gt = ground_truth();
-  GlobalGraphInput in;
-  in.keyframes = drifting_odometry(gt, 0.1);
-
-  // ENU <-> map: rotated 30 deg and shifted.
-  const CPose3D T_enu_to_map(100.0, 50.0, 2.0, mrpt::DEG2RAD(30.0), 0, 0);
-  const mrpt::math::TPoint3D antenna(0.1, 0.2, 0.9);
-
   std::mt19937 rng(1);
-  std::normal_distribution<double> noise(0.0, 0.3);
-  for (std::size_t i = 0; i < gt.size(); i++) {
-    const auto enu = (T_enu_to_map + gt[i]).composePoint(antenna);
+  std::normal_distribution<double> noise(0.0, noiseSigma);
+  for (std::size_t i = first; i <= last; i++) {
+    const auto enu = (T_ENU_TO_MAP + gt[i]).composePoint(ANTENNA);
     const mrpt::math::TPoint3D enuNoisy(enu.x + noise(rng), enu.y + noise(rng), enu.z + noise(rng));
     mrpt::math::TPoint3D geocentric;
     mrpt::topography::ENUToGeocentric(enuNoisy, DATUM, geocentric, mrpt::topography::TEllipsoid());
@@ -139,16 +153,24 @@ void test_gnss_georeference_and_drift()
     gga.fields.HDOP = 1.0;
     auto obs = mrpt::obs::CObservationGPS::Create();
     obs->timestamp = in.keyframes[i].stamp;
-    obs->sensorPose = CPose3D(antenna.x, antenna.y, antenna.z, 0, 0, 0);
+    obs->sensorPose = CPose3D(ANTENNA.x, ANTENNA.y, ANTENNA.z, 0, 0, 0);
     obs->setMsg(gga);
     obs->covariance_enu.emplace();
-    obs->covariance_enu->setDiagonal(0.3 * 0.3);
+    obs->covariance_enu->setDiagonal(reportedSigma * reportedSigma);
 
     auto sf = mrpt::obs::CSensoryFrame::Create();
     sf->insert(obs);
     in.keyframes[i].aux_observations = sf;
   }
   in.geodetic_datum = DATUM;
+}
+
+void test_gnss_georeference_and_drift()
+{
+  const auto gt = ground_truth();
+  GlobalGraphInput in;
+  in.keyframes = drifting_odometry(gt, 0.1);
+  attach_gnss_fixes(in, gt, 0, gt.size() - 1, 0.3, 0.3);
 
   GlobalGraphParams p;
   p.use_imu_gravity = false;
@@ -161,20 +183,65 @@ void test_gnss_georeference_and_drift()
 
   const auto & est = r.georeferencing->T_enu_to_map.mean;
   const double yawErrDeg =
-    mrpt::RAD2DEG(std::abs(mrpt::math::wrapToPi(est.yaw() - T_enu_to_map.yaw())));
+    mrpt::RAD2DEG(std::abs(mrpt::math::wrapToPi(est.yaw() - T_ENU_TO_MAP.yaw())));
   double maxErr = 0;
   for (std::size_t i = 0; i < gt.size(); i++) {
     maxErr = std::max(maxErr, position_error(r.poses[i], gt[i]));
   }
   std::cout << "GNSS: T_enu_to_map yaw error " << yawErrDeg << " deg, translation error "
-            << (est.translation() - T_enu_to_map.translation()).norm() << " m, max keyframe error "
+            << (est.translation() - T_ENU_TO_MAP.translation()).norm() << " m, max keyframe error "
             << maxErr << " m\n";
   ASSERT_LT_(yawErrDeg, 2.0);
-  ASSERT_LT_((est.translation() - T_enu_to_map.translation()).norm(), 0.5);
+  ASSERT_LT_((est.translation() - T_ENU_TO_MAP.translation()).norm(), 0.5);
   ASSERT_LT_(maxErr, 0.8);  // the fixes have 0.3 m sigma
 }
 
-}  // namespace
+/** The geo-reference is only returned once observable: not from a single fix,
+ *  nor from fixes much closer together than their sigmas (standing still), even
+ *  if their reported sigmas are tiny (below the configured floor). */
+void test_georeference_only_once_observable()
+{
+  const auto gt = ground_truth();
+  GlobalGraphParams p;
+  p.use_imu_gravity = false;
+
+  {
+    GlobalGraphInput in;
+    in.keyframes = drifting_odometry(gt, 0.0);
+    attach_gnss_fixes(in, gt, 0, 0, 0.01, 0.01);
+    const auto r = mola::mapper::optimize_global_graph(in, p);
+    ASSERT_EQUAL_(r.num_gnss_factors, 1U);
+    ASSERT_(!r.georeferencing.has_value());
+  }
+  {
+    // Standing still: the vehicle creeps 2 cm per keyframe, fixes with 1 cm
+    // reported sigmas (floored to gnss_minimum_uncertainty = 0.5 m).
+    std::vector<CPose3D> still;
+    for (int i = 0; i < 5; i++) {
+      still.emplace_back(0.02 * i, 0, 0, 0, 0, 0);
+    }
+    GlobalGraphInput in;
+    in.keyframes = drifting_odometry(still, 0.0);
+    attach_gnss_fixes(in, still, 0, still.size() - 1, 0.01, 0.01);
+    const auto r = mola::mapper::optimize_global_graph(in, p);
+    std::cout << "Geo-reference standing still: azimuth sigma "
+              << mrpt::RAD2DEG(r.georef_sigma_yaw.value_or(-1)) << " deg\n";
+    ASSERT_(!r.georeferencing.has_value());
+  }
+  {
+    // Driving the first 20 m side: observable.
+    GlobalGraphInput in;
+    in.keyframes = drifting_odometry(gt, 0.0);
+    attach_gnss_fixes(in, gt, 0, 19, 0.01, 0.01);
+    const auto r = mola::mapper::optimize_global_graph(in, p);
+    ASSERT_(r.georeferencing.has_value());
+    const double yawErrDeg = mrpt::RAD2DEG(std::abs(
+      mrpt::math::wrapToPi(r.georeferencing->T_enu_to_map.mean.yaw() - T_ENU_TO_MAP.yaw())));
+    std::cout << "Geo-reference after a 20 m straight line: yaw error " << yawErrDeg
+              << " deg, sigma " << mrpt::RAD2DEG(*r.georef_sigma_yaw) << " deg\n";
+    ASSERT_LT_(yawErrDeg, 3.0);
+  }
+}
 
 /** LiDAR odometry that loses 2 deg of heading in each 90 deg turn (as a short
  *  range LiDAR does in open areas), with a gyroscope that measures the turns
@@ -196,8 +263,11 @@ void test_gyro_fixes_turn_heading_errors()
       odo = odo + step + CPose3D(0, 0, 0, turn ? mrpt::DEG2RAD(2.0) : 0.0, 0, 0);
       // Gyro: the true rotation, with a scale error and noise, sigma as the mapper computes it.
       const double scaleErr = 0.005;
-      const double sigma =
-        std::sqrt(mrpt::square(3e-4) * 1.0 + mrpt::square(scaleErr * std::abs(step.yaw())));
+      const double dt = 1.0;          // [s] between keyframes
+      const double biasSigma = 2e-4;  // [rad/s] from a bias source
+      const double sigma = std::sqrt(
+        mrpt::square(3e-4) * dt + mrpt::square(biasSigma * dt) +
+        mrpt::square(scaleErr * std::abs(step.yaw())));
       kf.gyro_rotation_from_prev =
         CPose3D(0, 0, 0, step.yaw() * (1.0 + scaleErr) + sigma * 0.5 * noise(rng), 0, 0);
       kf.gyro_rotation_sigma = sigma;
@@ -234,12 +304,15 @@ void test_gyro_fixes_turn_heading_errors()
     0.5 * position_error(noGyro.poses.back(), gt.back()));
 }
 
+}  // namespace
+
 int main()
 {
   try {
     test_loop_closure_removes_drift();
     test_gyro_fixes_turn_heading_errors();
     test_gnss_georeference_and_drift();
+    test_georeference_only_once_observable();
     std::cout << "All tests passed.\n";
     return 0;
   } catch (const std::exception & e) {

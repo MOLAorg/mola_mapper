@@ -18,6 +18,10 @@
  */
 
 #include <mola_kernel/interfaces/RawDataSourceBase.h>
+#if __has_include(<mola_kernel/interfaces/ImuBiasSource.h>)
+#include <mola_kernel/interfaces/ImuBiasSource.h>
+#define MOLA_MAPPER_HAS_IMU_BIAS_SOURCE 1
+#endif
 #include <mola_mapper/GlobalGraphIO.h>
 #include <mola_mapper/Mapper.h>
 #include <mrpt/core/bits_math.h>
@@ -31,6 +35,7 @@
 #include <chrono>
 #include <cmath>
 #include <fstream>
+#include <functional>
 #include <iomanip>
 
 IMPLEMENTS_MRPT_OBJECT(Mapper, mola::ExecutableBase, mola::mapper)
@@ -54,6 +59,16 @@ mrpt::obs::CSensoryFrame::Ptr without_gnss(const mrpt::obs::CSensoryFrame & sf)
     }
   }
   return out;
+}
+
+/// Runs one end-of-run step, so a failure in it does not prevent the others.
+void guarded(mrpt::system::COutputLogger & log, const char * what, const std::function<void()> & f)
+{
+  try {
+    f();
+  } catch (const std::exception & e) {
+    log.logFmt(mrpt::system::LVL_ERROR, "%s failed: %s", what, e.what());
+  }
 }
 
 }  // namespace
@@ -156,7 +171,7 @@ void Mapper::onNewObservation(const CObservation::ConstPtr & o)
   }
   if (use_gnss_input_) {
     if (auto gps = std::dynamic_pointer_cast<const mrpt::obs::CObservationGPS>(o);
-        gps && std::regex_match(gps->sensorLabel, gnss_labels_re_)) {
+        gps && gps->has_GGA_datum() && std::regex_match(gps->sensorLabel, gnss_labels_re_)) {
       auto lck = mrpt::lockHelper(state_mtx_);
       attach_gnss_locked(std::const_pointer_cast<mrpt::obs::CObservationGPS>(gps));
       return;
@@ -192,11 +207,17 @@ void Mapper::onNewObservation(const CObservation::ConstPtr & o)
         imu && imu->has(mrpt::obs::IMU_X_ACC) &&
         std::regex_match(imu->sensorLabel, imu_labels_re_)) {
       auto lck = mrpt::lockHelper(state_mtx_);
+      if (gravity_label_.empty()) {
+        gravity_label_ = imu->sensorLabel;
+      }
+      if (imu->sensorLabel != gravity_label_) {
+        return;
+      }
       imu_samples_.push_back(
         {imu->timestamp,
          {imu->get(mrpt::obs::IMU_X_ACC), imu->get(mrpt::obs::IMU_Y_ACC),
           imu->get(mrpt::obs::IMU_Z_ACC)}});
-      last_imu_ = std::const_pointer_cast<mrpt::obs::CObservationIMU>(imu);
+      gravity_sensor_pose_ = imu->sensorPose;
       // Keep a bit more than the window, in case keyframes arrive late:
       const double keep = params_.imu_gravity_window + 5.0;
       while (!imu_samples_.empty() &&
@@ -254,26 +275,35 @@ void Mapper::retry_pending_gnss_locked()
   }
 }
 
-void Mapper::attach_gyro_rotation_locked(Keyframe & kf)
+Mapper::GyroBias Mapper::query_gyro_bias(
+  [[maybe_unused]] const std::string & label,
+  [[maybe_unused]] const mrpt::Clock::time_point & t) const
+{
+  // From a bias source, if any has an estimate for this IMU:
+  GyroBias b;
+  b.sigma = params_.gyro_bias_sigma;
+#if defined(MOLA_MAPPER_HAS_IMU_BIAS_SOURCE)
+  if (label.empty()) {
+    return b;
+  }
+  for (const auto & src : imu_bias_sources_) {
+    if (const auto e = src->imu_bias(label, t); e && e->last_update) {
+      b.bias = e->gyro;
+      b.sigma = std::sqrt(std::max({e->gyro_cov(0, 0), e->gyro_cov(1, 1), e->gyro_cov(2, 2)}));
+      break;
+    }
+  }
+#endif
+  return b;
+}
+
+void Mapper::attach_gyro_rotation_locked(Keyframe & kf, const GyroBias & b)
 {
   if (!use_gyro_input_ || keyframes_.empty() || gyro_samples_.empty()) {
     return;
   }
   const auto & prev = keyframes_.back();
-
-  // Bias: from a bias source, if any has an estimate for this IMU.
-  mrpt::math::TVector3D bias(0, 0, 0);
-  double biasSigma = params_.gyro_bias_sigma;
-#if defined(MOLA_MAPPER_HAS_IMU_BIAS_SOURCE)
-  for (const auto & src : imu_bias_sources_) {
-    if (const auto b = src->imu_bias(gyro_label_, kf.stamp); b && b->last_update) {
-      bias = b->gyro;
-      biasSigma = std::sqrt(std::max({b->gyro_cov(0, 0), b->gyro_cov(1, 1), b->gyro_cov(2, 2)}));
-      break;
-    }
-  }
-#endif
-  const auto g = integrate_gyro(gyro_samples_, prev.stamp, kf.stamp, bias, params_.gyro_max_gap);
+  const auto g = integrate_gyro(gyro_samples_, prev.stamp, kf.stamp, b.bias, params_.gyro_max_gap);
   if (!g) {
     return;
   }
@@ -284,13 +314,13 @@ void Mapper::attach_gyro_rotation_locked(Keyframe & kf)
   rot.setRotationMatrix(Rv);
   kf.gyro_rotation_from_prev = rot;
   kf.gyro_rotation_sigma = std::sqrt(
-    mrpt::square(params_.gyro_noise_density) * g->duration + mrpt::square(biasSigma * g->duration) +
+    mrpt::square(params_.gyro_noise_density) * g->duration + mrpt::square(b.sigma * g->duration) +
     mrpt::square(params_.gyro_scale_sigma * g->angle));
 }
 
 void Mapper::attach_gravity_locked(Keyframe & kf)
 {
-  if (!last_imu_) {
+  if (gravity_label_.empty()) {
     return;
   }
   mrpt::math::TVector3D sum(0, 0, 0);
@@ -306,8 +336,8 @@ void Mapper::attach_gravity_locked(Keyframe & kf)
     return;
   }
   auto obs = mrpt::obs::CObservationIMU::Create();
-  obs->sensorLabel = last_imu_->sensorLabel;
-  obs->sensorPose = last_imu_->sensorPose;
+  obs->sensorLabel = gravity_label_;
+  obs->sensorPose = gravity_sensor_pose_;
   obs->timestamp = kf.stamp;
   obs->set(mrpt::obs::IMU_X_ACC, sum.x / n);
   obs->set(mrpt::obs::IMU_Y_ACC, sum.y / n);
@@ -322,6 +352,18 @@ std::optional<SharedKeyframeMap::KeyFrameID> Mapper::requestInsertKeyframe(
   const KeyframeInsertRequest & req)
 {
   ASSERTMSG_(!req.source_frame_id.empty(), "KeyframeInsertRequest::source_frame_id is empty.");
+
+  // Other modules are queried without state_mtx_ held:
+  GyroBias gyroBias;
+  if (use_gyro_input_) {
+    std::string label;
+    {
+      auto lck = mrpt::lockHelper(state_mtx_);
+      label = gyro_label_;
+    }
+    gyroBias = query_gyro_bias(label, req.timestamp);
+  }
+
   KeyFrameID id = 0;
   {
     auto lck = mrpt::lockHelper(state_mtx_);
@@ -350,7 +392,7 @@ std::optional<SharedKeyframeMap::KeyFrameID> Mapper::requestInsertKeyframe(
     }
 
     attach_gravity_locked(kf);
-    attach_gyro_rotation_locked(kf);
+    attach_gyro_rotation_locked(kf, gyroBias);
     keyframes_.push_back(std::move(kf));
     id = keyframes_.size() - 1;
 
@@ -434,7 +476,7 @@ GlobalGraphInput Mapper::graph_input_locked() const
   return in;
 }
 
-bool Mapper::solve_global_graph()
+void Mapper::solve_global_graph()
 {
   auto lckSolve = mrpt::lockHelper(solve_mtx_);
 
@@ -442,7 +484,7 @@ bool Mapper::solve_global_graph()
   {
     auto lck = mrpt::lockHelper(state_mtx_);
     if (keyframes_.empty()) {
-      return false;
+      return;
     }
     in = graph_input_locked();
   }
@@ -451,7 +493,8 @@ bool Mapper::solve_global_graph()
   GlobalGraphResult r = optimize_global_graph(in, params_.graph, this);
   const double dt = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
 
-  Keyframe newest;
+  mrpt::Clock::time_point newestStamp;
+  mrpt::poses::CPose3D newestPose;
   {
     auto lck = mrpt::lockHelper(state_mtx_);
     const std::size_t n = in.keyframes.size();
@@ -472,10 +515,11 @@ bool Mapper::solve_global_graph()
     if (r.georeferencing) {
       georef_ = r.georeferencing;
     }
-    solved_keyframes_ = n;
-    solved_loops_ = in.loops.size();
-    newest = keyframes_[n - 1];
-    last_result_ = r;
+    newestStamp = keyframes_[n - 1].stamp;
+    newestPose = keyframes_[n - 1].pose_in_map;
+    last_num_gnss_factors_ = r.num_gnss_factors;
+    last_num_gravity_factors_ = r.num_gravity_factors;
+    last_num_gyro_factors_ = r.num_gyro_factors;
   }
   solves_++;
 
@@ -490,13 +534,19 @@ bool Mapper::solve_global_graph()
   if (r.georeferencing) {
     publish_georeference(*r.georeferencing);
   }
-  send_feedback(newest, r);
-  return true;
+  send_feedback(newestStamp, newestPose, r);
 }
 
-void Mapper::send_feedback(const Keyframe & kf, const GlobalGraphResult & r)
+void Mapper::send_feedback(
+  const mrpt::Clock::time_point & stamp, const mrpt::poses::CPose3D & pose,
+  const GlobalGraphResult & r)
 {
   if (!params_.feedback_to_state_estimator) {
+    return;
+  }
+  // Each keyframe is fed back once: solves without a new keyframe (loops, late
+  // GNSS) would otherwise count the same information again.
+  if (last_feedback_stamp_ && *last_feedback_stamp_ >= stamp) {
     return;
   }
   auto se = state_estimator_.lock();
@@ -512,7 +562,7 @@ void Mapper::send_feedback(const Keyframe & kf, const GlobalGraphResult & r)
   }
 
   mrpt::poses::CPose3DPDFGaussian pdf;
-  pdf.mean = kf.pose_in_map;
+  pdf.mean = pose;
   if (r.last_pose) {
     pdf.cov = r.last_pose->cov;
   }
@@ -521,7 +571,8 @@ void Mapper::send_feedback(const Keyframe & kf, const GlobalGraphResult & r)
   for (int i = 0; i < 6; i++) {
     pdf.cov(i, i) = std::max(pdf.cov(i, i), i < 3 ? sXyz2 : sAng2);
   }
-  se->fuse_pose(kf.stamp, pdf, params_.reference_frame_name);
+  se->fuse_pose(stamp, pdf, params_.reference_frame_name);
+  last_feedback_stamp_ = stamp;
 }
 
 void Mapper::publish_georeference(const mola::Georeferencing & g)
@@ -570,8 +621,13 @@ std::optional<mola::Georeferencing> Mapper::georeferencing() const
 mrpt::maps::CSimpleMap Mapper::simple_map() const
 {
   auto lck = mrpt::lockHelper(state_mtx_);
+  return to_simple_map(keyframes_);
+}
+
+mrpt::maps::CSimpleMap Mapper::to_simple_map(const std::vector<Keyframe> & kfs)
+{
   mrpt::maps::CSimpleMap sm;
-  for (const auto & kf : keyframes_) {
+  for (const auto & kf : kfs) {
     auto sf = std::make_shared<mrpt::obs::CSensoryFrame>(kf.observations);
     for (const auto & o : *kf.aux) {
       sf->insert(o);
@@ -590,9 +646,9 @@ void Mapper::getDiagnostics(std::vector<mola::DiagnosticStatusMsg> & status)
     auto lck = mrpt::lockHelper(state_mtx_);
     s.values.push_back({"keyframes", std::to_string(keyframes_.size())});
     s.values.push_back({"loop_closures", std::to_string(loops_.size())});
-    s.values.push_back({"gnss_factors", std::to_string(last_result_.num_gnss_factors)});
-    s.values.push_back({"gravity_factors", std::to_string(last_result_.num_gravity_factors)});
-    s.values.push_back({"gyro_factors", std::to_string(last_result_.num_gyro_factors)});
+    s.values.push_back({"gnss_factors", std::to_string(last_num_gnss_factors_)});
+    s.values.push_back({"gravity_factors", std::to_string(last_num_gravity_factors_)});
+    s.values.push_back({"gyro_factors", std::to_string(last_num_gyro_factors_)});
     s.values.push_back({"geo_referenced", georef_ ? "yes" : "no"});
     s.message = mrpt::format(
       "%zu keyframes, %zu loop closures%s", keyframes_.size(), loops_.size(),
@@ -622,16 +678,18 @@ void Mapper::finalize()
   // The final scans below run in this thread and must not be aborted:
   lc_should_exit_.store(false);
 
-  optimize_now();
+  // Each step is guarded, so the outputs are written whatever fails before them:
+  guarded(*this, "Final solve", [this] { optimize_now(); });
   if (lc_engine_) {
     // Each correction may bring further loops within reach of the detector:
     for (uint32_t round = 0; round < params_.loop_closure_finalize_rounds; round++) {
-      const auto n = run_loop_closure_scan(true);
+      std::size_t n = 0;
+      guarded(*this, "Final loop closure pass", [&] { n = run_loop_closure_scan(true); });
       MRPT_LOG_INFO_STREAM("Final loop closure pass #" << round + 1 << ": " << n << " new loops");
       if (n == 0) {
         break;
       }
-      optimize_now();
+      guarded(*this, "Final solve", [this] { optimize_now(); });
     }
   }
   save_outputs();
@@ -639,99 +697,117 @@ void Mapper::finalize()
 
 void Mapper::save_outputs()
 {
+  // A single snapshot, so all the outputs agree:
   std::vector<Keyframe> kfs;
   std::vector<GlobalGraphLoopEdge> loops;
   std::optional<mola::Georeferencing> georef;
+  GlobalGraphInput in;
   {
     auto lck = mrpt::lockHelper(state_mtx_);
     kfs = keyframes_;
     loops = loops_;
     georef = georef_;
+    if (!params_.output_graph_input.empty()) {
+      in = graph_input_locked();
+    }
   }
 
   if (!params_.output_graph_input.empty()) {
-    GlobalGraphInput in;
-    {
-      auto lck = mrpt::lockHelper(state_mtx_);
-      in = graph_input_locked();
-    }
-    save_global_graph_input(in, params_.output_graph_input);
-    MRPT_LOG_INFO_STREAM("Saved the global graph input to " << params_.output_graph_input << ".*");
+    guarded(*this, "Saving the global graph input", [&] {
+      save_global_graph_input(in, params_.output_graph_input);
+      MRPT_LOG_INFO_STREAM(
+        "Saved the global graph input to " << params_.output_graph_input << ".*");
+    });
   }
 
   if (!params_.output_tum_trajectory.empty()) {
-    std::vector<std::pair<mrpt::Clock::time_point, mrpt::poses::CPose3D>> poses;
-    for (const auto & kf : kfs) {
-      poses.emplace_back(kf.stamp, kf.pose_in_map);
-    }
-    save_tum_trajectory(poses, params_.output_tum_trajectory);
-    MRPT_LOG_INFO_STREAM(
-      "Saved " << kfs.size() << " keyframe poses to " << params_.output_tum_trajectory);
+    guarded(*this, "Saving the TUM trajectory", [&] {
+      std::vector<std::pair<mrpt::Clock::time_point, mrpt::poses::CPose3D>> poses;
+      for (const auto & kf : kfs) {
+        poses.emplace_back(kf.stamp, kf.pose_in_map);
+      }
+      save_tum_trajectory(poses, params_.output_tum_trajectory);
+      MRPT_LOG_INFO_STREAM(
+        "Saved " << kfs.size() << " keyframe poses to " << params_.output_tum_trajectory);
+    });
   }
   if (!params_.output_georeference.empty() && georef) {
-    save_georeference(*georef, params_.output_georeference);
-    MRPT_LOG_INFO_STREAM("Saved the geo-reference to " << params_.output_georeference);
+    guarded(*this, "Saving the geo-reference", [&] {
+      save_georeference(*georef, params_.output_georeference);
+      MRPT_LOG_INFO_STREAM("Saved the geo-reference to " << params_.output_georeference);
+    });
   }
 
   // The state estimator view, for comparisons:
   const bool wantSe = !params_.output_state_estimator_tum.empty() ||
                       !params_.output_state_estimator_georeference.empty();
   if (wantSe && !kfs.empty()) {
-    const auto mods = findService<mola::NavStateFilter>();
-    auto se = mods.size() == 1 ? std::dynamic_pointer_cast<mola::NavStateFilter>(mods[0]) : nullptr;
-    if (!se) {
-      MRPT_LOG_WARN("No (single) NavStateFilter module: its outputs are not saved");
-    } else {
-      if (!params_.output_state_estimator_tum.empty()) {
-        const auto traj = se->estimated_trajectory(
-          kfs.front().stamp - std::chrono::seconds(10), kfs.back().stamp + std::chrono::seconds(10),
-          params_.reference_frame_name);
-        if (traj && !traj->empty()) {
-          std::vector<std::pair<mrpt::Clock::time_point, mrpt::poses::CPose3D>> poses;
-          for (const auto & [t, p] : *traj) {
-            poses.emplace_back(t, mrpt::poses::CPose3D(p));
-          }
-          save_tum_trajectory(poses, params_.output_state_estimator_tum);
-          MRPT_LOG_INFO_STREAM(
-            "Saved " << poses.size() << " state estimator poses to "
-                     << params_.output_state_estimator_tum);
-        } else {
-          MRPT_LOG_WARN(
-            "The state estimator returned no trajectory (smoother: keep_finalized_trajectory?)");
-        }
-      }
-#if defined(MOLA_KERNEL_NAVSTATE_FILTER_HAS_GEO_REFERENCE)
-      if (!params_.output_state_estimator_georeference.empty()) {
-        if (const auto g = se->get_geo_reference(); g) {
-          save_georeference(*g, params_.output_state_estimator_georeference);
-        }
-      }
-#endif
-    }
+    guarded(
+      *this, "Saving the state estimator outputs", [&] { save_state_estimator_outputs(kfs); });
   }
 
   if (!params_.output_loop_closures.empty()) {
-    std::ofstream f(params_.output_loop_closures);
-    f << "# kf_from kf_to x y z yaw pitch roll  (pose of kf_to seen from kf_from) t_from t_to\n";
-    f << std::fixed << std::setprecision(6);
-    for (const auto & lc : loops) {
-      const auto & p = lc.relative_pose.mean;
-      f << lc.from << " " << lc.to << " " << p.x() << " " << p.y() << " " << p.z() << " " << p.yaw()
-        << " " << p.pitch() << " " << p.roll() << " "
-        << mrpt::Clock::toDouble(kfs.at(lc.from).stamp) << " "
-        << mrpt::Clock::toDouble(kfs.at(lc.to).stamp) << "\n";
-    }
+    guarded(*this, "Saving the loop closures", [&] {
+      std::ofstream f(params_.output_loop_closures);
+      ASSERTMSG_(f.is_open(), "Cannot write to " + params_.output_loop_closures);
+      f << "# kf_from kf_to x y z yaw pitch roll  (pose of kf_to seen from kf_from) t_from t_to\n";
+      f << std::fixed << std::setprecision(6);
+      for (const auto & lc : loops) {
+        const auto & p = lc.relative_pose.mean;
+        f << lc.from << " " << lc.to << " " << p.x() << " " << p.y() << " " << p.z() << " "
+          << p.yaw() << " " << p.pitch() << " " << p.roll() << " "
+          << mrpt::Clock::toDouble(kfs.at(lc.from).stamp) << " "
+          << mrpt::Clock::toDouble(kfs.at(lc.to).stamp) << "\n";
+      }
+    });
   }
 
   if (!params_.output_simplemap.empty()) {
-    const auto sm = simple_map();
-    if (sm.saveToFile(params_.output_simplemap)) {
+    guarded(*this, "Saving the simplemap", [&] {
+      const auto sm = to_simple_map(kfs);
+      if (sm.saveToFile(params_.output_simplemap)) {
+        MRPT_LOG_INFO_STREAM(
+          "Saved the simplemap (" << sm.size() << " keyframes) to " << params_.output_simplemap);
+      } else {
+        MRPT_LOG_ERROR_STREAM("Could not save the simplemap to " << params_.output_simplemap);
+      }
+    });
+  }
+}
+
+void Mapper::save_state_estimator_outputs(const std::vector<Keyframe> & kfs)
+{
+  const auto mods = findService<mola::NavStateFilter>();
+  auto se = mods.size() == 1 ? std::dynamic_pointer_cast<mola::NavStateFilter>(mods[0]) : nullptr;
+  if (!se) {
+    MRPT_LOG_WARN("No (single) NavStateFilter module: its outputs are not saved");
+    return;
+  }
+  if (!params_.output_state_estimator_tum.empty()) {
+    const auto traj = se->estimated_trajectory(
+      kfs.front().stamp - std::chrono::seconds(10), kfs.back().stamp + std::chrono::seconds(10),
+      params_.reference_frame_name);
+    if (traj && !traj->empty()) {
+      std::vector<std::pair<mrpt::Clock::time_point, mrpt::poses::CPose3D>> poses;
+      for (const auto & [t, p] : *traj) {
+        poses.emplace_back(t, mrpt::poses::CPose3D(p));
+      }
+      save_tum_trajectory(poses, params_.output_state_estimator_tum);
       MRPT_LOG_INFO_STREAM(
-        "Saved the simplemap (" << sm.size() << " keyframes) to " << params_.output_simplemap);
+        "Saved " << poses.size() << " state estimator poses to "
+                 << params_.output_state_estimator_tum);
     } else {
-      MRPT_LOG_ERROR_STREAM("Could not save the simplemap to " << params_.output_simplemap);
+      MRPT_LOG_WARN(
+        "The state estimator returned no trajectory (smoother: keep_finalized_trajectory?)");
     }
   }
+#if defined(MOLA_KERNEL_NAVSTATE_FILTER_HAS_GEO_REFERENCE)
+  if (!params_.output_state_estimator_georeference.empty()) {
+    if (const auto g = se->get_geo_reference(); g) {
+      save_georeference(*g, params_.output_state_estimator_georeference);
+    }
+  }
+#endif
 }
 
 }  // namespace mola::mapper

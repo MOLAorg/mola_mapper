@@ -11,6 +11,12 @@
  Closed-source licenses available upon request, for this package
  alone or in combination with the complete SLAM system.
 */
+/**
+ * @file   GyroIntegration.cpp
+ * @brief  Integration of gyroscope readings between two instants.
+ * @author Jose Luis Blanco Claraco
+ * @date   2026
+ */
 
 #include <mola_mapper/GyroIntegration.h>
 #include <mrpt/poses/Lie/SO.h>

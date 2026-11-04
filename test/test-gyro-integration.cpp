@@ -24,6 +24,7 @@
 #include <mrpt/poses/CPose3D.h>
 #include <mrpt/poses/Lie/SO.h>
 
+#include <Eigen/Dense>
 #include <cmath>
 #include <iostream>
 #include <random>
@@ -95,6 +96,31 @@ void test_exact_for_constant_rate()
   ASSERT_NEAR_(g->angle, 0.3 * g->duration, 1e-9);
 }
 
+/** 90 deg about x, then 90 deg about z (body rates): the result is
+ *  R = Rx(90) * Rz(90), which differs from the other composition order. */
+void test_two_axis_composition_order()
+{
+  std::deque<GyroSample> s;
+  const double w = M_PI / 2;  // [rad/s], 1 s per axis
+  for (int i = 0; i <= 200; i++) {
+    const double t = i * 0.01;
+    const bool first = t <= 1.0;
+    s.push_back({at(t), first ? mrpt::math::TVector3D(w, 0, 0) : mrpt::math::TVector3D(0, 0, w)});
+  }
+  const auto g = integrate_gyro(s, at(0.0), at(2.0), {0, 0, 0}, 0.1);
+  ASSERT_(g.has_value());
+
+  const auto Rx = mrpt::poses::CPose3D::FromYawPitchRoll(0, 0, M_PI / 2).getRotationMatrix();
+  const auto Rz = mrpt::poses::CPose3D::FromYawPitchRoll(M_PI / 2, 0, 0).getRotationMatrix();
+  const mrpt::math::CMatrixDouble33 expected(Rx.asEigen() * Rz.asEigen());
+  const mrpt::math::CMatrixDouble33 reversed(Rz.asEigen() * Rx.asEigen());
+  const double err = (g->R.asEigen() - expected.asEigen()).norm();
+  const double errReversed = (g->R.asEigen() - reversed.asEigen()).norm();
+  ASSERT_LT_(err, 1e-6);
+  ASSERT_GT_(errReversed, 1.0);
+  ASSERT_NEAR_(g->angle, M_PI, 1e-9);
+}
+
 void test_not_covered()
 {
   std::deque<GyroSample> s;
@@ -118,6 +144,7 @@ int main()
   try {
     test_turn_with_bias_removed();
     test_exact_for_constant_rate();
+    test_two_axis_composition_order();
     test_not_covered();
     std::cout << "All tests passed.\n";
     return 0;

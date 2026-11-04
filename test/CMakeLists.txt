@@ -19,3 +19,10 @@ mola_add_test(
   LINK_LIBRARIES
     mola::mola_mapper
 )
+
+mola_add_test(
+  TARGET  test-mapper-ingestion
+  SOURCES test-mapper-ingestion.cpp
+  LINK_LIBRARIES
+    mola::mola_mapper
+)

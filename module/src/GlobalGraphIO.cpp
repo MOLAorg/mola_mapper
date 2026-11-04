@@ -83,7 +83,8 @@ void save_global_graph_input(const GlobalGraphInput & in, const std::string & pr
     mrpt::maps::CSimpleMap aux;
     for (std::size_t i = 0; i < in.keyframes.size(); i++) {
       const auto & kf = in.keyframes[i];
-      f << i << " " << mrpt::Clock::toDouble(kf.stamp) << " " << kf.source_frame;
+      f << i << " " << std::fixed << std::setprecision(6) << mrpt::Clock::toDouble(kf.stamp)
+        << std::defaultfloat << std::setprecision(15) << " " << kf.source_frame;
       write_pose(f, kf.pose_in_source.mean);
       write_cov(f, kf.pose_in_source.cov);
       write_pose(f, kf.initial_guess);

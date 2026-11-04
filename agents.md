@@ -4,8 +4,7 @@ The global back end of a MOLA system: a container next to a front end (LIO, late
 its state estimator (`mola_state_estimation_smoother`), adding a central keyframe map, loop
 closure detection and a global pose graph. It does little estimation of its own.
 
-Plan and task checklist: `~/plans/900_mola_mapper.md` (keep in sync; no plan section numbers
-in this repo). Use clang-format-14.
+Use clang-format-14.
 
 ## Topology
 
@@ -45,14 +44,17 @@ mola-cli-launchs/lio_smoother_mapper_from_kitti.yaml    KITTI odometry (params/m
 
 - `requestInsertKeyframe()`: rejects keyframes not newer than the last; initial guess = newest
   estimate + front end increment.
-- GNSS (`gnss_sensor_labels_re`): attached to the nearest keyframe within
-  `gnss_max_time_offset`, only once a keyframe at or after the reading exists (pending queue).
-- Gravity (`imu_sensor_labels_re`): accelerometer averaged over `imu_gravity_window` before
-  each keyframe, stored as a CObservationIMU in the keyframe aux frame.
+- GNSS (`gnss_sensor_labels_re`, readings with GGA only): attached to the nearest keyframe
+  within `gnss_max_time_offset`, only once a keyframe at or after the reading exists (pending
+  queue). No time interpolation: the fix is applied at the keyframe pose.
+- Gravity (`imu_sensor_labels_re`, first matching label): accelerometer averaged over
+  `imu_gravity_window` before each keyframe, stored as a CObservationIMU in the keyframe aux frame.
 - Gyro (`gyro_sensor_labels_re`, first matching label): readings integrated between
   consecutive keyframes (`integrate_gyro()`, exact tick-based durations), bias from the first
   `ImuBiasSource` with an estimate (else 0 with `gyro_bias_sigma`), rotated to the vehicle
-  frame. Sigma: noise density * sqrt(T), bias sigma * T, scale sigma * accumulated angle.
+  frame. Sigma: noise density * sqrt(T), bias sigma * T, scale sigma * accumulated angle. The
+  bias error is modeled as independent per factor, though it is common to all of them.
+- The bias sources are queried before taking `state_mtx_`.
 
 ## Global graph (GlobalGraph.cpp)
 
@@ -65,24 +67,31 @@ Keys `P(i)` (keyframe poses in `{map}`), `T(0)` (T_enu_to_map). Factors:
 - gravity: `mola_georeferencing::add_imu_gravity_factors`;
 - gyro: `BetweenFactor<Pose3>` with free translation (sigma 1e3 m);
 - weak prior on `T(0)`, prior on `P(0)` (gauge).
+The geo-reference is returned (published, saved) only once observable: `georef_min_gnss_factors`
+and a `T(0)` azimuth sigma below `georef_max_sigma_yaw_deg`.
 
 ## Threads
 
 - Optimizer thread: re-solves after new data, at most every `optimizer_min_period`.
 - Loop closure thread: `mola_sm_loop_closure` `analyze()` (detection only) over the keyframe
   map, incremental scans plus a full one every `loop_closure_full_scan_every_n`; new edges
-  merged in order. `finalize()` (also from `onQuit()`) runs extra full scans and solves.
+  merged in order. One scan at a time (`lc_scan_mtx_`). `finalize()` (also from `onQuit()`)
+  runs extra full scans and solves; each step and output is guarded, so one failure does not
+  lose the other outputs.
 - `state_mtx_` guards keyframes, loops and pending data; never call other modules with it held.
+- Feedback to the state estimator: the newest keyframe pose, once per keyframe.
+- Limitations: one front end chain (keyframes of interleaved sources only get weak edges);
+  all keyframe observations stay in RAM; every solve is a full batch.
 
-## Results (husky_2026-11-03_20-42-07_loop, u-blox GNSS only, F9P RTK as ground truth)
+## Reference results
 
-Owner mode, absolute horizontal RMSE: 5.4 m initially; 4.6 m with smoother bias tracking and
-the per-radian odometry sigma; 4.35 m adding gyro factors (HandsFree or Ouster IMU, similar).
-Gyro factors mostly cut p90/max and the revisit error. LIO alone (Ouster OS0) drifts ~11 m.
-
-KITTI 00 (3.7 km, loop closures only): LIO APE RMSE 6.85 m, mapper 2.21 m (50 loops).
+- 1.3 km ground robot loop, low-cost GNSS only (RTK as ground truth), mapper feeding back to the
+  smoother: absolute horizontal RMSE 5.4 m initially; 4.6 m with smoother bias tracking and
+  the per-radian odometry sigma; 4.35 m adding gyro factors. LIO alone drifts ~11 m.
+- KITTI 00 (3.7 km, loop closures only): LIO APE RMSE 6.85 m, mapper 2.21 m (50 loops).
 
 ## Tests
 
-`test/`: test-global-graph (loop closure, GNSS georef, gyro vs turn heading errors),
-test-gyro-integration, test-lc-wait-idle.
+`test/`: test-global-graph (loop closure, GNSS georef and its observability, gyro vs turn
+heading errors), test-gyro-integration, test-mapper-ingestion (GNSS/gravity/gyro attachment,
+feedback, outputs), test-lc-wait-idle.

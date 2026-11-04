@@ -184,6 +184,11 @@ struct Parameters
   /** Prefix of the files with the global graph input (see GlobalGraphIO.h), to
    *  re-optimize it offline with other parameters (mola-mapper-reoptimize). */
   std::string output_graph_input;
+
+  /** If not empty, everything the mapper receives (keyframes, GNSS and IMU
+   *  readings, gyroscope biases) is written to this file, in arrival order, to
+   *  replay the run exactly with mola-mapper-cli. */
+  std::string record_input;
   /** @} */
 
   void loadFrom(const mrpt::containers::yaml & cfg);

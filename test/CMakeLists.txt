@@ -43,6 +43,16 @@ if(mola_test_datasets_FOUND)
     LINK_LIBRARIES
       mola::mola_mapper
   )
+  mola_add_test(
+    TARGET  test-mapper-replay
+    SOURCES test-mapper-replay.cpp
+    LINK_LIBRARIES
+      mola::mola_mapper
+  )
+  target_compile_definitions(test-mapper-replay PRIVATE
+    MOLA_TEST_WAREHOUSE_SIMPLEMAP="${mola_test_datasets_DIR}/../datasets/simplemaps/mvsim-warehouse01.simplemap"
+    MOLA_MAPPER_LC_PIPELINE="${PROJECT_SOURCE_DIR}/params/loop-closure-f2f-mapper.yaml"
+  )
   target_compile_definitions(test-local-map-corrections PRIVATE
     MOLA_TEST_WAREHOUSE_SIMPLEMAP="${mola_test_datasets_DIR}/../datasets/simplemaps/mvsim-warehouse01.simplemap"
     MOLA_MAPPER_LC_PIPELINE="${PROJECT_SOURCE_DIR}/params/loop-closure-f2f-mapper.yaml"

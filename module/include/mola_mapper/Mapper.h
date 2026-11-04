@@ -32,6 +32,7 @@
 #include <mola_mapper/GlobalGraph.h>
 #include <mola_mapper/GyroIntegration.h>
 #include <mola_mapper/LoopOdometryCheck.h>
+#include <mola_mapper/MapperInputLog.h>
 #include <mola_mapper/Parameters.h>
 #include <mrpt/maps/CSimpleMap.h>
 #include <mrpt/obs/CObservationGPS.h>
@@ -145,6 +146,11 @@ public:
   /// Solves the global graph now, in the calling thread.
   void optimize_now();
 
+  /** Inserts a keyframe with the given gyroscope bias, instead of the one of a
+   *  bias source (requestInsertKeyframe() queries it): to replay recorded runs. */
+  std::optional<KeyFrameID> insert_keyframe(
+    const KeyframeInsertRequest & req, const RecordedGyroBias & gyroBias);
+
   /// Wakes the loop closure thread for one full scan (returns immediately).
   void request_loop_closure_scan();
 
@@ -244,6 +250,8 @@ private:
   void retry_pending_gnss_locked();
   /// Returns false if the IMU readings before the keyframe are not enough.
   bool attach_gravity_locked(Keyframe & kf);
+  /// See Parameters::record_input.
+  std::unique_ptr<MapperInputRecorder> recorder_;
   /// Keyframes inserted before the IMU readings of their window arrived.
   std::deque<std::size_t> pending_gravity_;
 

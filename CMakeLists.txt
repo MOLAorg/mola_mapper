@@ -38,6 +38,8 @@ set(LIB_SOURCES
   module/src/LoopOdometryCheck.cpp
   module/src/Mapper.cpp
   module/src/Mapper_LoopClosure.cpp
+  module/src/MapperInputLog.cpp
+  module/src/MapperReplay.cpp
   module/src/Parameters.cpp
   module/src/register.cpp
 )
@@ -47,6 +49,8 @@ set(LIB_PUBLIC_HEADERS
   module/include/mola_mapper/GyroIntegration.h
   module/include/mola_mapper/LoopOdometryCheck.h
   module/include/mola_mapper/Mapper.h
+  module/include/mola_mapper/MapperInputLog.h
+  module/include/mola_mapper/MapperReplay.h
   module/include/mola_mapper/Parameters.h
 )
 
@@ -84,6 +88,14 @@ install(
 mola_add_executable(
   TARGET  mola-mapper-reoptimize
   SOURCES apps/mola-mapper-reoptimize.cpp
+  LINK_LIBRARIES
+    ${PROJECT_NAME}
+)
+
+# Offline tool: replay a recorded mapper input, reproducibly
+mola_add_executable(
+  TARGET  mola-mapper-cli
+  SOURCES apps/mola-mapper-cli.cpp
   LINK_LIBRARIES
     ${PROJECT_NAME}
 )

@@ -139,6 +139,11 @@ void Mapper::initialize(const mrpt::containers::yaml & cfg)
     }
   }
 
+  if (!params_.record_input.empty()) {
+    recorder_ = std::make_unique<MapperInputRecorder>(params_.record_input);
+    MRPT_LOG_INFO_STREAM("Recording the mapper input to: " << params_.record_input);
+  }
+
   if (params_.enable_optimizer_thread) {
     optimizer_should_exit_.store(false);
     optimizer_thread_ = std::thread(&Mapper::optimizer_thread_loop, this);
@@ -169,9 +174,18 @@ void Mapper::onNewObservation(const CObservation::ConstPtr & o)
   if (!o) {
     return;
   }
+  if (
+    recorder_ && std::dynamic_pointer_cast<const mrpt::obs::CObservationIMU>(o) &&
+    ((use_gyro_input_ && std::regex_match(o->sensorLabel, gyro_labels_re_)) ||
+     (use_imu_input_ && std::regex_match(o->sensorLabel, imu_labels_re_)))) {
+    recorder_->record(o);
+  }
   if (use_gnss_input_) {
     if (auto gps = std::dynamic_pointer_cast<const mrpt::obs::CObservationGPS>(o);
         gps && gps->has_GGA_datum() && std::regex_match(gps->sensorLabel, gnss_labels_re_)) {
+      if (recorder_) {
+        recorder_->record(o);
+      }
       auto lck = mrpt::lockHelper(state_mtx_);
       attach_gnss_locked(std::const_pointer_cast<mrpt::obs::CObservationGPS>(gps));
       return;
@@ -360,15 +374,29 @@ std::optional<SharedKeyframeMap::KeyFrameID> Mapper::requestInsertKeyframe(
   ASSERTMSG_(!req.source_frame_id.empty(), "KeyframeInsertRequest::source_frame_id is empty.");
 
   // Other modules are queried without state_mtx_ held:
-  GyroBias gyroBias;
+  RecordedGyroBias gyroBias;
+  gyroBias.sigma = params_.gyro_bias_sigma;
   if (use_gyro_input_) {
     std::string label;
     {
       auto lck = mrpt::lockHelper(state_mtx_);
       label = gyro_label_;
     }
-    gyroBias = query_gyro_bias(label, req.timestamp);
+    const auto b = query_gyro_bias(label, req.timestamp);
+    gyroBias.bias = b.bias;
+    gyroBias.sigma = b.sigma;
   }
+  if (recorder_) {
+    recorder_->record(RecordedKeyframe{req, gyroBias});
+  }
+  return insert_keyframe(req, gyroBias);
+}
+
+std::optional<SharedKeyframeMap::KeyFrameID> Mapper::insert_keyframe(
+  const KeyframeInsertRequest & req, const RecordedGyroBias & bias)
+{
+  ASSERTMSG_(!req.source_frame_id.empty(), "KeyframeInsertRequest::source_frame_id is empty.");
+  const GyroBias gyroBias{bias.bias, bias.sigma};
 
   KeyFrameID id = 0;
   {
@@ -727,6 +755,12 @@ void Mapper::finalize()
       return;
     }
     finalized_ = true;
+  }
+  if (recorder_) {
+    // No more input to record: the end of the run.
+    recorder_->close();
+    MRPT_LOG_INFO_STREAM(
+      "Mapper input recorded: " << recorder_->written() << " entries in " << params_.record_input);
   }
   stop_loop_closure_thread();
   stop_optimizer_thread();

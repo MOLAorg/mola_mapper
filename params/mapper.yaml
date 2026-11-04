@@ -99,3 +99,7 @@ params:
   output_state_estimator_tum: "${MOLA_MAPPER_OUTPUT_SE_TUM|}"
   output_state_estimator_georeference: "${MOLA_MAPPER_OUTPUT_SE_GEOREF|}"
   output_graph_input: "${MOLA_MAPPER_OUTPUT_GRAPH_INPUT|}"
+
+  # Everything the mapper receives, to replay the run exactly with mola-mapper-cli
+  # (a gzip-compressed MRPT archive; empty: not recorded):
+  record_input: "${MOLA_MAPPER_RECORD_INPUT|}"

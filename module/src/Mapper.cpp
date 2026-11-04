@@ -218,6 +218,11 @@ void Mapper::onNewObservation(const CObservation::ConstPtr & o)
          {imu->get(mrpt::obs::IMU_X_ACC), imu->get(mrpt::obs::IMU_Y_ACC),
           imu->get(mrpt::obs::IMU_Z_ACC)}});
       gravity_sensor_pose_ = imu->sensorPose;
+      while (!pending_gravity_.empty() &&
+             keyframes_.at(pending_gravity_.front()).stamp < imu->timestamp) {
+        attach_gravity_locked(keyframes_.at(pending_gravity_.front()));
+        pending_gravity_.pop_front();
+      }
       // Keep a bit more than the window, in case keyframes arrive late:
       const double keep = params_.imu_gravity_window + 5.0;
       while (!imu_samples_.empty() &&
@@ -318,10 +323,10 @@ void Mapper::attach_gyro_rotation_locked(Keyframe & kf, const GyroBias & b)
     mrpt::square(params_.gyro_scale_sigma * g->angle));
 }
 
-void Mapper::attach_gravity_locked(Keyframe & kf)
+bool Mapper::attach_gravity_locked(Keyframe & kf)
 {
   if (gravity_label_.empty()) {
-    return;
+    return false;
   }
   mrpt::math::TVector3D sum(0, 0, 0);
   uint32_t n = 0;
@@ -333,7 +338,7 @@ void Mapper::attach_gravity_locked(Keyframe & kf)
     }
   }
   if (n < params_.imu_gravity_min_samples) {
-    return;
+    return false;
   }
   auto obs = mrpt::obs::CObservationIMU::Create();
   obs->sensorLabel = gravity_label_;
@@ -343,6 +348,7 @@ void Mapper::attach_gravity_locked(Keyframe & kf)
   obs->set(mrpt::obs::IMU_Y_ACC, sum.y / n);
   obs->set(mrpt::obs::IMU_Z_ACC, sum.z / n);
   kf.aux->insert(obs);
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -391,10 +397,17 @@ std::optional<SharedKeyframeMap::KeyFrameID> Mapper::requestInsertKeyframe(
       kf.pose_in_map = keyframes_.back().pose_in_map;
     }
 
-    attach_gravity_locked(kf);
+    // If the IMU readings up to the keyframe have not all arrived yet, tried
+    // again once they have:
+    const bool imuBehind =
+      use_imu_input_ && (imu_samples_.empty() || imu_samples_.back().stamp < kf.stamp);
+    const bool gravityAttached = attach_gravity_locked(kf);
     attach_gyro_rotation_locked(kf, gyroBias);
     keyframes_.push_back(std::move(kf));
     id = keyframes_.size() - 1;
+    if (!gravityAttached && imuBehind) {
+      pending_gravity_.push_back(id);
+    }
 
     retry_pending_gnss_locked();
   }

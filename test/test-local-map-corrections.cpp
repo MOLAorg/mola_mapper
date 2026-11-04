@@ -36,7 +36,7 @@ using mrpt::poses::CPose3D;
 constexpr double YAW_DRIFT_DEG = 0.2;  // per keyframe
 constexpr double RADIUS = 15.0;        // [m]
 
-std::shared_ptr<mola::mapper::Mapper> make_mapper()
+std::shared_ptr<mola::mapper::Mapper> make_mapper(bool corrections)
 {
   // The production detector pipeline, with candidates closer in time for this
   // short run, and no deskew (the simulated clouds have no point stamps):
@@ -52,7 +52,9 @@ params:
   loop_closure_enabled: true
   enable_loop_closure_thread: false
   loop_closure_finalize_rounds: 0
-  loop_closure_pipeline_file: ")###") +
+  local_map_corrections: )###") +
+                           (corrections ? "true" : "false") + R"###(
+  loop_closure_pipeline_file: ")###" +
                            MOLA_MAPPER_LC_PIPELINE + "\"\n";
   m->initialize(mrpt::containers::yaml::FromText(yaml));
   return m;
@@ -63,7 +65,7 @@ double distance(const CPose3D & a, const CPose3D & b)
   return (a.translation() - b.translation()).norm();
 }
 
-void test_corrections_after_loop_closures()
+void test_corrections_after_loop_closures(bool corrections)
 {
   mrpt::maps::CSimpleMap sm;
   ASSERT_(sm.loadFromFile(MOLA_TEST_WAREHOUSE_SIMPLEMAP));
@@ -74,7 +76,7 @@ void test_corrections_after_loop_closures()
     gt.push_back(kf.pose->getMeanVal());
   }
 
-  auto m = make_mapper();
+  auto m = make_mapper(corrections);
   std::vector<mola::LocalMapCorrection> received;
   m->subscribe_to_local_map_corrections(
     [&](const mola::LocalMapCorrection & c) { received.push_back(c); });
@@ -109,6 +111,10 @@ void test_corrections_after_loop_closures()
   ASSERT_GT_(loops, 0U);
 
   m->optimize_now();
+  if (!corrections) {
+    ASSERT_(received.empty());
+    return;
+  }
   ASSERT_EQUAL_(received.size(), 1U);
   ASSERT_EQUAL_(received.front().new_loop_closures, loops);
   ASSERT_(received.front().timestamp == sm.get(newest).sf->getObservationByIndex(0)->timestamp);
@@ -166,7 +172,8 @@ int main()
 {
   try {
 #if defined(MOLA_MAPPER_HAS_LOCAL_MAP_CORRECTIONS)
-    test_corrections_after_loop_closures();
+    test_corrections_after_loop_closures(true);
+    test_corrections_after_loop_closures(false);  // disabled: none advertised
     std::cout << "All tests passed.\n";
 #else
     std::cout << "mola_kernel without LocalMapCorrectionSource: skipped.\n";

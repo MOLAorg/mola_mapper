@@ -26,6 +26,8 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
+#include <filesystem>
 #include <iostream>
 #include <string>
 
@@ -90,9 +92,13 @@ int main(int argc, char ** argv)
     ASSERT_FILE_EXISTS_(inputLog);
     const tbb::global_control tbbThreads(
       tbb::global_control::max_allowed_parallelism, static_cast<std::size_t>(threads));
-    if (!mrpt::system::directoryExists(outDir)) {
-      ASSERTMSG_(mrpt::system::createDirectory(outDir), "Cannot create " + outDir);
+    if (threads == 1) {
+      // OpenMP (in the loop closure global registration) and the loop closure
+      // engine's own threads, too (unless set by the user):
+      ::setenv("OMP_NUM_THREADS", "1", 0);
+      ::setenv("LC_DETERMINISTIC", "true", 0);
     }
+    std::filesystem::create_directories(outDir);
     const auto out = [&](const std::string & name) {
       return mrpt::system::pathJoin({outDir, name});
     };
@@ -111,11 +117,14 @@ int main(int argc, char ** argv)
     p["output_graph_input"] = saveGraph ? out("graph") : std::string();
     p["output_state_estimator_tum"] = std::string();
     p["output_state_estimator_georeference"] = std::string();
-    cfg["params"] = p;
+    // Only the mapper parameters: no other modules here (e.g. a raw data
+    // source: the readings come from the log).
+    mrpt::containers::yaml mapperCfg = mrpt::containers::yaml::Map();
+    mapperCfg["params"] = p;
 
     mola::mapper::Mapper mapper;
     mapper.setMinLoggingLevel(quiet ? mrpt::system::LVL_WARN : mrpt::system::LVL_INFO);
-    mapper.initialize(cfg);
+    mapper.initialize(mapperCfg);
 
     const auto t0 = std::chrono::steady_clock::now();
     const auto stats = mola::mapper::replay_mapper_input(mapper, inputLog, opts);
@@ -124,9 +133,12 @@ int main(int argc, char ** argv)
 
     std::cout << "Replayed " << stats.keyframes << " keyframes and " << stats.observations
               << " observations (" << stats.data_duration << " s of data) in " << dt
-              << " s: " << stats.loop_closure_scans << " loop closure scans, " << stats.solves
+              << " s: " << stats.loop_closure_checks << " loop closure checks, " << stats.solves
               << " solves, " << mapper.loop_closure_count() << " loops. Outputs in " << outDir
               << "\n";
+    if (stats.truncated) {
+      std::cout << "Warning: the log ended with an incomplete entry (a recording cut short).\n";
+    }
     return 0;
   } catch (const std::exception & e) {
     std::cerr << mrpt::exception_to_str(e) << "\n";

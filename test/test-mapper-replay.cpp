@@ -23,11 +23,15 @@
 #include <mola_mapper/MapperInputLog.h>
 #include <mola_mapper/MapperReplay.h>
 #include <mrpt/core/exceptions.h>
+#include <mrpt/io/CFileGZInputStream.h>
+#include <mrpt/io/CFileGZOutputStream.h>
 #include <mrpt/maps/CSimpleMap.h>
+#include <mrpt/obs/CObservationGPS.h>
 #include <mrpt/obs/CObservationIMU.h>
 #include <mrpt/system/filesystem.h>
 #include <tbb/global_control.h>
 
+#include <algorithm>
 #include <cstdlib>
 #include <iostream>
 #include <string>
@@ -38,7 +42,7 @@ namespace
 {
 using mrpt::poses::CPose3D;
 
-std::string params_yaml(const std::string & recordFile, bool threads)
+std::string params_yaml(const std::string & recordFile, bool threads, double gyroBiasSigma)
 {
   const std::string t = threads ? "true" : "false";
   return std::string(R"###(
@@ -49,7 +53,9 @@ params:
   enable_loop_closure_thread: )###" +
          t + R"###(
   loop_closure_check_period_sec: 2.0
-  gnss_sensor_labels_re: ""
+  gnss_sensor_labels_re: "gps"
+  gyro_bias_sigma: )###" +
+         std::to_string(gyroBiasSigma) + R"###(
   imu_sensor_labels_re: "imu"
   gyro_sensor_labels_re: "imu"
   loop_closure_enabled: true
@@ -60,7 +66,8 @@ params:
          MOLA_MAPPER_LC_PIPELINE + "\"\n";
 }
 
-std::shared_ptr<mola::mapper::Mapper> make_mapper(const std::string & recordFile, bool threads)
+std::shared_ptr<mola::mapper::Mapper> make_mapper(
+  const std::string & recordFile, bool threads, double gyroBiasSigma = 0.005)
 {
   // The production detector pipeline, with candidates closer in time for this
   // short run, and no deskew (the simulated clouds have no point stamps):
@@ -68,8 +75,24 @@ std::shared_ptr<mola::mapper::Mapper> make_mapper(const std::string & recordFile
   ::setenv("MOLA_DESKEW_METHOD", "MotionCompensationMethod::None", 1);
   auto m = std::make_shared<mola::mapper::Mapper>();
   m->setMinLoggingLevel(mrpt::system::LVL_WARN);
-  m->initialize(mrpt::containers::yaml::FromText(params_yaml(recordFile, threads)));
+  m->initialize(mrpt::containers::yaml::FromText(params_yaml(recordFile, threads, gyroBiasSigma)));
   return m;
+}
+
+/// A GNSS fix near the datum (the map is a few tens of meters across):
+mrpt::obs::CObservationGPS::Ptr gnss_reading(const mrpt::Clock::time_point & t, const CPose3D & p)
+{
+  auto o = mrpt::obs::CObservationGPS::Create();
+  o->sensorLabel = "gps";
+  o->timestamp = t;
+  mrpt::obs::gnss::Message_NMEA_GGA msg;
+  msg.fields.latitude_degrees = 36.8287 + p.y() / 111000.0;
+  msg.fields.longitude_degrees = -2.4073 + p.x() / 89000.0;
+  msg.fields.altitude_meters = 50.0;
+  msg.fields.fix_quality = 1;
+  msg.fields.HDOP = 1.0;
+  o->setMsg(msg);
+  return o;
 }
 
 mrpt::obs::CObservationIMU::Ptr imu_reading(const mrpt::Clock::time_point & t, double wz)
@@ -111,6 +134,9 @@ std::vector<mola::SharedKeyframeMap::KeyframeInsertRequest> record_run(const std
           mrpt::Clock::fromDouble(mrpt::Clock::toDouble(prevStamp) + dt * k / 20.0), wz));
       }
     }
+    if (i % 4 == 0) {
+      m->onNewObservation(gnss_reading(stamp, gt));
+    }
     mola::SharedKeyframeMap::KeyframeInsertRequest req;
     req.timestamp = stamp;
     req.source_frame_id = "lidar_odom_kf";
@@ -134,9 +160,9 @@ struct ReplayResult
   mola::mapper::ReplayStats stats;
 };
 
-ReplayResult replay(const std::string & file)
+ReplayResult replay(const std::string & file, double gyroBiasSigma = 0.005)
 {
-  auto m = make_mapper("", false);
+  auto m = make_mapper("", false, gyroBiasSigma);
   ReplayResult r;
   r.stats = mola::mapper::replay_mapper_input(*m, file);
   m->finalize();
@@ -167,23 +193,28 @@ void test_record_and_replay()
         b.pose_in_source.mean.getHomogeneousMatrixVal<mrpt::math::CMatrixDouble44>());
       ASSERT_(a.pose_in_source.cov == b.pose_in_source.cov);
       ASSERT_EQUAL_(a.observations.size(), b.observations.size());
+      // No bias source here: zero, with the configured sigma, not from a source:
+      ASSERT_(!kf->gyro_bias.from_source);
+      ASSERT_EQUAL_(kf->gyro_bias.sigma, 0.005);
+      ASSERT_EQUAL_(kf->gyro_bias.bias.norm(), 0.0);
       nKf++;
     } else {
       nObs++;
     }
   }
   ASSERT_EQUAL_(nKf, sent.size());
-  ASSERT_EQUAL_(nObs, (sent.size() - 1) * 20);
+  const std::size_t nGnss = (sent.size() + 3) / 4;
+  ASSERT_EQUAL_(nObs, (sent.size() - 1) * 20 + nGnss);
 
   // Two replays, the same result to the last bit:
   const auto r1 = replay(file);
   const auto r2 = replay(file);
   std::cout << "Replay: " << r1.stats.keyframes << " keyframes, " << r1.stats.observations
-            << " observations, " << r1.stats.loop_closure_scans << " loop closure scans, "
+            << " observations, " << r1.stats.loop_closure_checks << " loop closure checks, "
             << r1.stats.solves << " solves, " << r1.loops << " loops\n";
   ASSERT_EQUAL_(r1.stats.keyframes, sent.size());
   ASSERT_GT_(r1.loops, 0U);
-  ASSERT_GT_(r1.stats.loop_closure_scans, 1U);
+  ASSERT_GT_(r1.stats.loop_closure_checks, 1U);
   ASSERT_EQUAL_(r1.loops, r2.loops);
   ASSERT_EQUAL_(r1.poses.size(), r2.poses.size());
   double maxDiff = 0;
@@ -193,6 +224,46 @@ void test_record_and_replay()
   }
   std::cout << "Max pose difference between the two replays: " << maxDiff << "\n";
   ASSERT_EQUAL_(maxDiff, 0.0);
+
+  // The gyroscope bias sigma (not from a source) is that of the replay:
+  const auto r3 = replay(file, 0.05);
+  double maxDiff3 = 0;
+  for (std::size_t i = 0; i < r1.poses.size(); i++) {
+    maxDiff3 = std::max(maxDiff3, (r1.poses[i].asVectorVal() - r3.poses[i].asVectorVal()).norm());
+  }
+  std::cout << "Pose difference with another gyro_bias_sigma: " << maxDiff3 << "\n";
+  ASSERT_GT_(maxDiff3, 0.0);
+
+  // A log cut short (a recording process killed) is read up to its last
+  // complete entry:
+  {
+    const std::string cut = file + "_cut.gz";
+    {
+      // Decompressed, cut at 60 %, compressed again:
+      mrpt::io::CFileGZInputStream in(file);
+      std::vector<uint8_t> buf(1 << 20);
+      std::vector<uint8_t> all;
+      for (;;) {
+        const auto n = in.Read(buf.data(), buf.size());
+        if (n == 0) {
+          break;
+        }
+        all.insert(all.end(), buf.begin(), buf.begin() + static_cast<std::ptrdiff_t>(n));
+      }
+      mrpt::io::CFileGZOutputStream out(cut);
+      out.Write(all.data(), all.size() * 6 / 10);
+    }
+    mola::mapper::MapperInputReader r(cut);
+    std::size_t n = 0;
+    while (r.next()) {
+      n++;
+    }
+    std::cout << "Truncated log: " << n << " entries read\n";
+    ASSERT_(r.truncated());
+    ASSERT_GT_(n, 0U);
+    ASSERT_LT_(n, nKf + nObs);
+    mrpt::system::deleteFile(cut);
+  }
 
   // A mapper with its threads is rejected:
   bool threw = false;
@@ -214,6 +285,8 @@ int main()
   // As mola-mapper-cli: parallel sums in ICP and the solver change the last
   // bits between runs with several threads.
   const tbb::global_control oneThread(tbb::global_control::max_allowed_parallelism, 1);
+  ::setenv("OMP_NUM_THREADS", "1", 0);
+  ::setenv("LC_DETERMINISTIC", "true", 0);
   try {
     test_record_and_replay();
     std::cout << "All tests passed.\n";

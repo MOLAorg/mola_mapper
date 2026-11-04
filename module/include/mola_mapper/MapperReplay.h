@@ -21,6 +21,7 @@
 
 #include <mola_mapper/Mapper.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <functional>
 #include <string>
@@ -41,9 +42,11 @@ struct ReplayStats
 {
   std::size_t observations = 0;
   std::size_t keyframes = 0;
-  std::size_t loop_closure_scans = 0;
+  /// Loop closure scans due (each one runs if enough keyframes are new).
+  std::size_t loop_closure_checks = 0;
   std::size_t solves = 0;
-  double data_duration = 0;  ///< [s] from the first entry to the last one
+  double data_duration = 0;  ///< [s] from the first keyframe to the last entry
+  bool truncated = false;    ///< The log ended with an incomplete entry
 };
 
 /** Feeds a mapper with the entries of a recorded input (Parameters::record_input)

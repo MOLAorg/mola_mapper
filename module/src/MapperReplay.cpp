@@ -22,6 +22,7 @@
 #include <mrpt/core/exceptions.h>
 #include <mrpt/system/datetime.h>
 
+#include <algorithm>
 #include <optional>
 #include <type_traits>
 #include <variant>
@@ -35,6 +36,8 @@ ReplayStats replay_mapper_input(
   ASSERTMSG_(
     !params.enable_optimizer_thread && !params.enable_loop_closure_thread,
     "replay_mapper_input(): the mapper must run without its background threads.");
+  ASSERTMSG_(
+    params.record_input.empty(), "replay_mapper_input(): the mapper must not record its input.");
   const double lcPeriod = options.loop_closure_period >= 0 ? options.loop_closure_period
                                                            : params.loop_closure_check_period_sec;
   const double solvePeriod =
@@ -62,13 +65,15 @@ ReplayStats replay_mapper_input(
         }
       },
       *entry);
+    if (!std::holds_alternative<RecordedKeyframe>(*entry)) {
+      continue;
+    }
+    // The schedule starts at the first keyframe (readings may come from other
+    // clocks, or long before):
     if (!first) {
       first = now;
       lastSolve = now;
       lastScan = now;
-    }
-    if (!std::holds_alternative<RecordedKeyframe>(*entry)) {
-      continue;
     }
 
     // As the loop closure and optimizer threads, in data time: a scan (with at
@@ -78,7 +83,7 @@ ReplayStats replay_mapper_input(
       mrpt::system::timeDifference(*lastScan, now) >= std::max(0.1, lcPeriod)) {
       lastScan = now;
       mapper.run_loop_closure_scan_now(false);
-      stats.loop_closure_scans++;
+      stats.loop_closure_checks++;
     }
     if (mrpt::system::timeDifference(*lastSolve, now) >= solvePeriod) {
       lastSolve = now;
@@ -92,6 +97,7 @@ ReplayStats replay_mapper_input(
   if (first) {
     stats.data_duration = mrpt::system::timeDifference(*first, now);
   }
+  stats.truncated = reader.truncated();
   return stats;
 }
 

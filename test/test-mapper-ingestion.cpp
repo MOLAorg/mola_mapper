@@ -216,6 +216,42 @@ void test_gravity_from_a_single_imu()
   std::cout << "Gravity from a single IMU   OK\n";
 }
 
+/** A keyframe inserted before the IMU readings of its window arrive (a lagging
+ *  IMU stream) still gets its gravity, once, when they do. */
+void test_gravity_when_imu_arrives_late()
+{
+  auto m = make_mapper("  imu_sensor_labels_re: \"imu.*\"\n");
+  const auto feed = [&](double from, double to) {
+    for (double t = from; t <= to + 1e-9; t += 0.01) {
+      auto o = mrpt::obs::CObservationIMU::Create();
+      o->sensorLabel = "imu_a";
+      o->timestamp = at(t);
+      o->set(mrpt::obs::IMU_X_ACC, 0.0);
+      o->set(mrpt::obs::IMU_Y_ACC, 0.0);
+      o->set(mrpt::obs::IMU_Z_ACC, 9.81);
+      m->onNewObservation(o);
+    }
+  };
+  feed(0.0, 0.2);  // known IMU, but not enough readings before the keyframe yet
+  insert_keyframe(*m, 1.5, CPose3D::Identity());
+  feed(0.21, 3.0);
+
+  const auto count_gravity = [&]() {
+    int n = 0;
+    const auto sm = m->simple_map();
+    for (const auto & o : *sm.begin()->sf) {
+      if (std::dynamic_pointer_cast<mrpt::obs::CObservationIMU>(o)) {
+        n++;
+      }
+    }
+    return n;
+  };
+  ASSERT_EQUAL_(count_gravity(), 1);
+  feed(3.01, 4.0);
+  ASSERT_EQUAL_(count_gravity(), 1);  // not attached twice
+  std::cout << "Gravity with a lagging IMU   OK\n";
+}
+
 /** A 20 m square at 1 m/s, a keyframe per second, with LiDAR odometry losing
  *  2 deg per 90 deg turn; the gyroscope is mounted rolled 90 deg, so the vehicle
  *  yaw rate appears on another sensor axis. Returns the final heading error and
@@ -349,6 +385,7 @@ int main()
   try {
     test_gnss_attachment();
     test_gravity_from_a_single_imu();
+    test_gravity_when_imu_arrives_late();
     test_gyro_rotation_in_vehicle_frame();
     test_feedback_once_per_keyframe();
     test_outputs_survive_a_failing_one();

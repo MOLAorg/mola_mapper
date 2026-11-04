@@ -1,79 +1,43 @@
-# ============================================================================
-# Loop-closure ICP configuration for mola_mapper's dataset launchers
-# ============================================================================
-# This imports the shared frame-to-frame GICP loop-closure pipeline from
-# mola_sm_loop_closure UNCHANGED and overrides only the ICP registration core,
-# kept HERE: POINT-TO-POINT instead of cov2cov (GICP). The shipped f2f pipeline
-# matches with Matcher_Cov2Cov on the per-keyframe KeyframePointCloudMap. On
-# real loop-closure pairs that scores very low quality (most genuine
-# KITTI/MulRan loops land <20-40%, below any sane acceptance), so the loops
-# never close, drift is never cancelled, and the detect->optimize->detect-more
-# cascade never starts. Plain point-to-point matching on the same decimated
-# cloud (`points_to_register_points`, already produced by the imported
-# observations_filter) scores genuine loops much higher, so many more close.
-# (The other retune, a wider ICP convergence basin, is documented inline at
-# LC_ICP_INITIAL_SIGMA below.)
+# Loop closure detector pipeline for the mapper (mola_sm_loop_closure, detection
+# only: the mapper owns the pose graph).
 #
-# Everything else (candidate search, GNSS/IMU-gravity use, deskew, decimation,
-# solver iterations) comes from the imported base unchanged. All keys stay
-# env-overridable. (mola_yaml `$import`: imported file is the base; sibling maps
-# deep-merge over it, and sibling LISTS replace the imported list wholesale --
-# which is exactly what we want for the matchers/quality/solvers below.)
+# It imports the shared frame-to-frame pipeline and changes only:
+#  - the ICP core: point-to-point on the decimated clouds instead of GICP, since
+#    cov2cov scores genuine cross-pass loops too low to accept them;
+#  - a wider ICP basin and a global registration initial guess, so loop
+#    candidates several meters off (accumulated drift) can still converge;
+#  - candidate selection: only pairs far apart in time.
 #
-# `$define` rebinds the base pipeline's own `${VAR|default}` hooks in place
-# (env > $define > inline default), so retuning a scalar default doesn't need a
-# full `params:` sibling key. A file further up an `$import` chain always wins
-# over this file's own `$define` for the same name -- fixed in mola_yaml
-# MOLAorg/mola#182, verify that PR/release is in place before relying on it.
-# `kiss_matcher_min_inliers` stays an explicit `params:` key: the base pipeline
-# doesn't expose it as a hook at all, so there is no `${VAR|default}` for
-# `$define` to rebind.
-# ============================================================================
+# Every value can be changed with its environment variable. `$define` rebinds the
+# imported `${VAR|default}` hooks (env > $define > inline default); sibling maps
+# below deep-merge over the imported file and sibling lists replace it.
 
 $define:
-  # Global registration front-end (KISS-Matcher): gives each loop candidate a
-  # drift-INDEPENDENT initial guess, so pairs that are tens of meters apart in
-  # the drifted estimate can still close (plain ICP alone only bridges ~its
-  # basin, so far loops otherwise never close and the cascade never starts).
-  # Requires the kiss-matcher submodule to be populated + built into
-  # mola_sm_loop_closure (MOLA_HAS_KISS_MATCHER); if absent it is ignored.
+  # Global registration (KISS-Matcher) for a drift-independent initial guess.
+  # Ignored if mola_sm_loop_closure was built without it.
   USE_KISS_MATCHER: true
   MIN_ICP_QUALITY: 0.55
 
-  # WIDER ICP convergence basin. A loop candidate links two keyframes with the
-  # accumulated odometry drift between them, so the initial guess is off by
-  # several meters; the package default `threshold_sigma_initial: 1.0` m
-  # cannot bridge that. Start at 5 m, annealed to the imported
-  # threshold_sigma_final. Overridable by an importing file (see header note).
+  # ICP pairing threshold annealed from this initial value, wide enough for the
+  # odometry drift between the two keyframes [m]:
   LC_ICP_INITIAL_SIGMA: 5.0
 
-  # WIDER ICP FINAL pairing sigma. The base pipeline scores ICP quality as the
-  # ratio of pairs within the FINAL annealed threshold
-  # (force_final_pairings_for_quality), whose 0.05 m default only suits the
-  # sparse spinning-Velodyne clouds of KITTI/MulRan. On dense sensors (e.g. the
-  # Hesai PandarXT-32 of Oxford Spires) almost no points fall within 5 cm even
-  # for a correct cross-pass alignment, so quality collapses to ~0% and every
-  # loop is rejected despite ICP converging. At 0.3 m the quality reflects the
-  # true cross-pass overlap (genuine loops score 60-80%, wrong ones stay ~0%).
-  # This is a registration-resolution setting for the sensor, NOT a relaxation
-  # of the MIN_ICP_QUALITY acceptance level.
+  # Final pairing threshold, also the one that scores the ICP quality (ratio of
+  # pairs within it). Too small for dense clouds rejects correct loops; this is a
+  # registration resolution, not the acceptance level [m]:
   LC_ICP_FINAL_SIGMA: 0.3
 
-  #LC_SELECTION_METHOD: PROXIMITY_ONLY
-  # Only far-in-time pairs: consecutive keyframes are already linked by the stiff
-  # front end chain, and short-range ICP edges between nearly identical scans
-  # underestimate the motion (seen ~67 % of it on a ground robot).
+  # Only pairs far apart in time: consecutive keyframes are already linked by the
+  # stiff front end chain, and ICP between nearly identical scans tends to
+  # underestimate the motion.
   MIN_FRAMES_BETWEEN_LC: 50
-  MAX_LC_DISTANCE: 20.0
+  MAX_LC_DISTANCE: 20.0  # [m]
 
 $import: $(ros2 pkg prefix mola_sm_loop_closure)/share/mola_sm_loop_closure/pipelines/loop-closure-f2f-lidar3d-gicp.yaml
 
 params:
-  # Reject KISS-Matcher global-registration guesses backed by too few inliers:
-  # on repetitive LiDAR geometry its `valid` flag (1 inlier) lets through wildly
-  # wrong transforms (flipped/large-translation) that mislead ICP. No hook for
-  # this in the base pipeline; kept env-overridable via an explicit key (see
-  # header note).
+  # Reject global registration guesses backed by too few inliers (repetitive
+  # geometry yields wrong ones). The base pipeline has no hook for it.
   kiss_matcher_min_inliers: "${KISS_MATCHER_MIN_INLIERS|5}"
 
 icp_settings:
@@ -82,8 +46,8 @@ icp_settings:
       params:
         maxIterations: 2
         robustKernel: "${MOLA_LC_ROBUST_KERNEL|RobustKernel::GemanMcClure}"
-        # Point-to-point residuals are in METERS (not covariance-normalized as in
-        # GICP), so the kernel scale is annealed alongside the pairing threshold.
+        # Point-to-point residuals are in meters: the kernel scale follows the
+        # annealed pairing threshold.
         robustKernelParam: "0.5*max(SIGMA_FINAL, SIGMA_INIT-(SIGMA_INIT-SIGMA_FINAL)*ICP_ITERATION/100)"
 
   matchers:
@@ -96,8 +60,4 @@ icp_settings:
         pointLayerMatches:
           - { global: "points_to_register_points", local: "points_to_register_points", weight: 1.0 }
 
-  # `quality` is NOT restated: the base pipeline's own QualityEvaluator_PairedRatio
-  # (absolute_minimum_pairing_ratio 0.10, reuse_icp_pairings true) is unchanged
-  # here, and unlike a scalar hook, a sequence key entirely absent from this
-  # sibling map passes through from the imported base untouched (only a key
-  # PRESENT in both gets wholesale-replaced -- see header note).
+  # The quality evaluator comes unchanged from the imported pipeline.

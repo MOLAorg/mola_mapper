@@ -1,21 +1,10 @@
-# ============================================================================
-# Loop-closure ICP configuration for the KITTI launcher
-# ============================================================================
-# KITTI odometry scans carry NO per-point timestamps. The imported pipeline's
-# deskew filters throw by default when a cloud lacks per-point timestamps;
-# `silently_ignore_no_timestamps` (bound here via its env-var hook,
-# MOLA_DESKEW_IGNORE_NO_TIMESTAMPS) makes them just pass such a cloud through
-# unmodified instead. It only changes behavior for clouds that lack
-# timestamps, so this is KITTI-specific only because KITTI is the one
-# datasource among mola_mapper's launchers that lacks them.
-#
-# (mola_yaml `$import`: imported file is the base; `$define` rebinds its
-# `${VAR|default}` hooks in place, env > $define > inline default.)
-# ============================================================================
+# Loop closure detector pipeline for the KITTI launcher: the mapper one, with
+# clouds without per-point timestamps passed through the deskew filters
+# unmodified (instead of an error), and a longer loop search radius.
 
 $define:
   MOLA_DESKEW_IGNORE_NO_TIMESTAMPS: true
   MIN_FRAMES_BETWEEN_LC: 50
-  MAX_LC_DISTANCE: 30.0
+  MAX_LC_DISTANCE: 30.0  # [m]
 
 $import: loop-closure-f2f-mapper.yaml

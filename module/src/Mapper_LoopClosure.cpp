@@ -49,7 +49,11 @@ void Mapper::start_loop_closure_thread()
   auto engine = std::make_shared<mola::FrameToFrameLoopClosure>();
   auto verbosity = this->getMinLoggingLevel();
   if (const auto v = mrpt::get_env<std::string>("MOLA_VERBOSITY_LOOP_CLOSURE", ""); !v.empty()) {
-    verbosity = mrpt::typemeta::TEnumType<mrpt::system::VerbosityLevel>::name2value(v);
+    try {
+      verbosity = mrpt::typemeta::TEnumType<mrpt::system::VerbosityLevel>::name2value(v);
+    } catch (const std::exception &) {
+      MRPT_LOG_WARN_STREAM("Ignoring invalid MOLA_VERBOSITY_LOOP_CLOSURE='" << v << "'");
+    }
   }
   engine->setMinLoggingLevel(verbosity);
   engine->initialize(mola::load_yaml_file(params_.loop_closure_pipeline_file));

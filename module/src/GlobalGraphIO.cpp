@@ -191,12 +191,14 @@ GlobalGraphInput load_global_graph_input(const std::string & prefix)
     double lon = 0;
     double h = 0;
     fd >> lat >> lon >> h;
+    ASSERTMSG_(!fd.fail(), "Cannot parse " + prefix + ".datum.txt");
     in.geodetic_datum = mrpt::topography::TGeodeticCoords(lat, lon, h);
   }
 
   std::ifstream fg(prefix + ".enu_to_map_guess.txt");
   if (fg.is_open()) {
     in.T_enu_to_map_guess = read_pose(fg);
+    ASSERTMSG_(!fg.fail(), "Cannot parse " + prefix + ".enu_to_map_guess.txt");
   }
   return in;
 }

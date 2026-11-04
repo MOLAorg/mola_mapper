@@ -324,7 +324,9 @@ void test_graph_input_round_trip()
   lc.relative_pose.mean = CPose3D(0.1, -0.2, 0, 0.05, 0, 0);
   lc.relative_pose.cov.setDiagonal(1e-4);
   in.loops.push_back(lc);
-  in.T_enu_to_map_guess = T_ENU_TO_MAP;
+  const CPose3D guess(
+    100.0, 50.0, 2.0, mrpt::DEG2RAD(30.0), mrpt::DEG2RAD(2.0), mrpt::DEG2RAD(-1.0));
+  in.T_enu_to_map_guess = guess;
 
   const auto prefix =
     (std::filesystem::temp_directory_path() / "mola_mapper_test_graph_io").string();
@@ -345,12 +347,16 @@ void test_graph_input_round_trip()
   }
   ASSERT_LT_(std::abs(out.keyframes[3].gyro_rotation_from_prev->yaw() - 0.1), 1e-9);
   ASSERT_EQUAL_(out.loops.size(), 1U);
+  ASSERT_EQUAL_(out.loops[0].from, lc.from);
   ASSERT_EQUAL_(out.loops[0].to, lc.to);
+  ASSERT_LT_(
+    (out.loops[0].relative_pose.mean.asVectorVal() - lc.relative_pose.mean.asVectorVal()).norm(),
+    1e-9);
+  ASSERT_LT_((out.loops[0].relative_pose.cov - lc.relative_pose.cov).norm(), 1e-12);
   ASSERT_(out.geodetic_datum.has_value());
   ASSERT_LT_(std::abs(out.geodetic_datum->lat.decimal_value - DATUM.lat.decimal_value), 1e-9);
   ASSERT_(out.T_enu_to_map_guess.has_value());
-  ASSERT_LT_((*out.T_enu_to_map_guess - T_ENU_TO_MAP).translation().norm(), 1e-9);
-  ASSERT_LT_(std::abs(out.T_enu_to_map_guess->yaw() - T_ENU_TO_MAP.yaw()), 1e-9);
+  ASSERT_LT_((out.T_enu_to_map_guess->asVectorVal() - guess.asVectorVal()).norm(), 1e-9);
 
   // Saved again without the optional values, with the same prefix: they do
   // not come back from the earlier files.

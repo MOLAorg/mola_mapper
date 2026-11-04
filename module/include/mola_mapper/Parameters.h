@@ -39,6 +39,15 @@ struct GlobalGraphParams
   double odometry_additional_noise_ang_deg = 0.01;  ///< [deg]
   double odometry_noise_xyz_per_sqrt_m = 0.01;      ///< [m/sqrt(m)]
   double odometry_noise_ang_deg_per_sqrt_m = 0.05;  ///< [deg/sqrt(m)]
+  /// Extra rotation sigma per radian rotated in the edge: LiDAR odometry heading
+  /// errors concentrate in turns (e.g. short range sensors in open areas).
+  double odometry_noise_ang_per_rad = 0.02;
+  /** @} */
+
+  /** @name Gyroscope rotation between consecutive keyframes (if present)
+     * @{ */
+  bool use_gyro = true;
+  double gyro_min_sigma_deg = 0.02;  ///< floor of each factor sigma
   /** @} */
 
   /** @name GNSS (CObservationGPS in the keyframes)
@@ -95,6 +104,17 @@ struct Parameters
   double imu_gravity_window = 1.0;
   /// Minimum readings in that window to attach a gravity observation.
   uint32_t imu_gravity_min_samples = 10;
+
+  /** Regex of the sensor label of the IMU whose gyroscope gives the rotation
+   *  between consecutive keyframes (empty: none). Its bias comes from a
+   *  mola::ImuBiasSource (e.g. the state estimator with imu_bias_tracking), if
+   *  there is one with an estimate for it; else it is taken as zero, with
+   *  sigma gyro_bias_sigma. */
+  std::string gyro_sensor_labels_re;
+  double gyro_noise_density = 3e-4;  ///< [rad/s/sqrt(Hz)]
+  double gyro_bias_sigma = 0.005;    ///< [rad/s] without a bias source estimate
+  double gyro_scale_sigma = 0.005;   ///< relative scale factor error
+  double gyro_max_gap = 0.1;         ///< [s] longer gaps between readings: no factor
   /** @} */
 
   /** @name Global graph optimization

@@ -52,6 +52,11 @@ struct GlobalGraphKeyframe
   /// GNSS readings (CObservationGPS) and gravity (averaged CObservationIMU)
   /// attached to this keyframe. May be null.
   mrpt::obs::CSensoryFrame::ConstPtr aux_observations;
+
+  /// Rotation of the vehicle since the previous keyframe, from a gyroscope (only
+  /// the rotation part is used), and its sigma per axis [rad].
+  std::optional<mrpt::poses::CPose3D> gyro_rotation_from_prev;
+  double gyro_rotation_sigma = 0;
 };
 
 /** A loop closure: pose of keyframe `to` as seen from keyframe `from`. */
@@ -91,6 +96,7 @@ struct GlobalGraphResult
   std::size_t num_odometry_factors = 0;
   std::size_t num_gnss_factors = 0;
   std::size_t num_gravity_factors = 0;
+  std::size_t num_gyro_factors = 0;
   std::size_t num_loop_factors = 0;
 
   /// The GNSS readings were not used: their spread is too small for their sigmas.

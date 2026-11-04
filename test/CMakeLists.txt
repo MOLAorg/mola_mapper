@@ -12,3 +12,10 @@ mola_add_test(
   LINK_LIBRARIES
     mola::mola_mapper
 )
+
+mola_add_test(
+  TARGET  test-gyro-integration
+  SOURCES test-gyro-integration.cpp
+  LINK_LIBRARIES
+    mola::mola_mapper
+)

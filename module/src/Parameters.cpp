@@ -30,6 +30,9 @@ void GlobalGraphParams::loadFrom(const mrpt::containers::yaml & cfg)
   MCP_LOAD_OPT(cfg, odometry_additional_noise_ang_deg);
   MCP_LOAD_OPT(cfg, odometry_noise_xyz_per_sqrt_m);
   MCP_LOAD_OPT(cfg, odometry_noise_ang_deg_per_sqrt_m);
+  MCP_LOAD_OPT(cfg, odometry_noise_ang_per_rad);
+  MCP_LOAD_OPT(cfg, use_gyro);
+  MCP_LOAD_OPT(cfg, gyro_min_sigma_deg);
 
   MCP_LOAD_OPT(cfg, use_gnss);
   MCP_LOAD_OPT(cfg, gnss_minimum_uncertainty);
@@ -57,6 +60,11 @@ void Parameters::loadFrom(const mrpt::containers::yaml & cfg)
   MCP_LOAD_OPT(cfg, imu_sensor_labels_re);
   MCP_LOAD_OPT(cfg, imu_gravity_window);
   MCP_LOAD_OPT(cfg, imu_gravity_min_samples);
+  MCP_LOAD_OPT(cfg, gyro_sensor_labels_re);
+  MCP_LOAD_OPT(cfg, gyro_noise_density);
+  MCP_LOAD_OPT(cfg, gyro_bias_sigma);
+  MCP_LOAD_OPT(cfg, gyro_scale_sigma);
+  MCP_LOAD_OPT(cfg, gyro_max_gap);
 
   if (cfg.has("graph")) {
     graph.loadFrom(cfg["graph"]);

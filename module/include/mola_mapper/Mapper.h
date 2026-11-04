@@ -21,11 +21,16 @@
 #include <mola_kernel/Georeferencing.h>
 #include <mola_kernel/interfaces/DiagnosticsProvider.h>
 #include <mola_kernel/interfaces/ExecutableBase.h>
+#if __has_include(<mola_kernel/interfaces/ImuBiasSource.h>)
+#include <mola_kernel/interfaces/ImuBiasSource.h>
+#define MOLA_MAPPER_HAS_IMU_BIAS_SOURCE 1
+#endif
 #include <mola_kernel/interfaces/MapSourceBase.h>
 #include <mola_kernel/interfaces/NavStateFilter.h>
 #include <mola_kernel/interfaces/RawDataConsumer.h>
 #include <mola_kernel/interfaces/SharedKeyframeMap.h>
 #include <mola_mapper/GlobalGraph.h>
+#include <mola_mapper/GyroIntegration.h>
 #include <mola_mapper/Parameters.h>
 #include <mrpt/maps/CSimpleMap.h>
 #include <mrpt/obs/CObservationGPS.h>
@@ -153,7 +158,13 @@ private:
     std::optional<double> gnss_time_offset;
     /// Current estimate in the map frame.
     mrpt::poses::CPose3D pose_in_map;
+    /// Gyroscope rotation (vehicle frame) since the previous keyframe, sigma [rad].
+    std::optional<mrpt::poses::CPose3D> gyro_rotation_from_prev;
+    double gyro_rotation_sigma = 0;
   };
+
+  /// Gyroscope rotation from the previous keyframe to kf (state_mtx_ held).
+  void attach_gyro_rotation_locked(Keyframe & kf);
 
   struct ImuSample
   {
@@ -166,6 +177,11 @@ private:
   std::regex imu_labels_re_;
   bool use_gnss_input_ = false;
   bool use_imu_input_ = false;
+  std::regex gyro_labels_re_;
+  bool use_gyro_input_ = false;
+#if defined(MOLA_MAPPER_HAS_IMU_BIAS_SOURCE)
+  std::vector<std::shared_ptr<mola::ImuBiasSource>> imu_bias_sources_;
+#endif
 
   /** @name State, under state_mtx_
      * @{ */
@@ -174,6 +190,10 @@ private:
   std::deque<mrpt::obs::CObservationGPS::Ptr> pending_gnss_;
   std::deque<ImuSample> imu_samples_;
   mrpt::obs::CObservationIMU::Ptr last_imu_;
+  /// Gyroscope readings of the first IMU matching gyro_sensor_labels_re.
+  std::deque<GyroSample> gyro_samples_;
+  std::string gyro_label_;
+  mrpt::poses::CPose3D gyro_sensor_pose_;
   std::vector<GlobalGraphLoopEdge> loops_;
   std::set<std::pair<std::size_t, std::size_t>> loop_pairs_;
   std::optional<mrpt::topography::TGeodeticCoords> geodetic_datum_;

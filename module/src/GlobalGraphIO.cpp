@@ -78,7 +78,8 @@ void save_global_graph_input(const GlobalGraphInput & in, const std::string & pr
     std::ofstream f(prefix + ".keyframes.txt");
     ASSERT_(f.is_open());
     f << std::setprecision(15);
-    f << "# idx stamp source pose_in_source(x y z yaw pitch roll) cov(36) initial_guess(6)\n";
+    f << "# idx stamp source pose_in_source(x y z yaw pitch roll) cov(36) initial_guess(6)"
+         " [gyro_rotation_from_prev(yaw pitch roll) sigma]\n";
     mrpt::maps::CSimpleMap aux;
     for (std::size_t i = 0; i < in.keyframes.size(); i++) {
       const auto & kf = in.keyframes[i];
@@ -86,6 +87,10 @@ void save_global_graph_input(const GlobalGraphInput & in, const std::string & pr
       write_pose(f, kf.pose_in_source.mean);
       write_cov(f, kf.pose_in_source.cov);
       write_pose(f, kf.initial_guess);
+      if (kf.gyro_rotation_from_prev) {
+        const auto & g = *kf.gyro_rotation_from_prev;
+        f << " " << g.yaw() << " " << g.pitch() << " " << g.roll() << " " << kf.gyro_rotation_sigma;
+      }
       f << "\n";
       auto sf = kf.aux_observations
                   ? std::make_shared<mrpt::obs::CSensoryFrame>(*kf.aux_observations)
@@ -137,6 +142,15 @@ GlobalGraphInput load_global_graph_input(const std::string & prefix)
     kf.pose_in_source.mean = read_pose(s);
     kf.pose_in_source.cov = read_cov(s);
     kf.initial_guess = read_pose(s);
+    // Optional (newer files): gyroscope rotation from the previous keyframe.
+    double gYaw = 0;
+    double gPitch = 0;
+    double gRoll = 0;
+    double gSigma = 0;
+    if (s >> gYaw >> gPitch >> gRoll >> gSigma) {
+      kf.gyro_rotation_from_prev = mrpt::poses::CPose3D(0, 0, 0, gYaw, gPitch, gRoll);
+      kf.gyro_rotation_sigma = gSigma;
+    }
     ASSERT_EQUAL_(idx, in.keyframes.size());
     ASSERT_LT_(idx, aux.size());
     kf.aux_observations = aux.get(idx).sf;

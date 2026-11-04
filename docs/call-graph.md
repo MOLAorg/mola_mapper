@@ -1,241 +1,192 @@
-# Mapper — Internal Call Graph
+# Mapper: call graph
 
-Traces the public API down to the key internal helpers. Update this whenever
-methods are added, renamed, or the call structure changes (see agents.md).
+Threads and call flow of `mola::mapper::Mapper`. Update this whenever methods
+are added, renamed, or the call structure changes.
 
-The graph uses four visual styles:
-- **Rounded box** — public API (interface implementations)
-- **Sharp box** — internal helpers
-- **Stadium/pill** — shared state stores
-- **Dashed border** — background thread / async path
+Styles: rounded boxes are public API, sharp boxes are internal helpers, and
+dashed boxes are background threads.
 
 ```mermaid
 flowchart TD
 
-    %% ----------------------------------------------------------------
-    %% Public API
-    %% ----------------------------------------------------------------
-    subgraph pub["Public API"]
-        direction TB
-        INIT(["`**initialize()**`"])
-        SPIN(["`**spinOnce()**`"])
-        RESET(["`**reset()**`"])
-        ON_OBS(["`**onNewObservation()**`"])
-        FPOSE(["`**fuse_pose()**`"])
-        FTWIST(["`**fuse_twist()**`"])
-        REQ_KF(["`**requestInsertKeyframe()**`"])
-        EST_NAV(["`**estimated_navstate()**`"])
-        HAS_CVG(["`**has_converged_localization()**`"])
-        CUR_GEO(["`**current_georeferencing()**`"])
-        GET_DIAG(["`**getDiagnostics()**`"])
+    subgraph front["Other modules"]
+        LIO(["LIO: requestInsertKeyframe()"])
+        RAW(["Raw data source: onNewObservation()"])
+        SE["State estimator (NavStateFilter)"]
     end
 
-    %% ----------------------------------------------------------------
-    %% Lifecycle internals
-    %% ----------------------------------------------------------------
-    subgraph lc["Lifecycle"]
-        direction TB
-        STOP_THR["stop_optimizer_thread()"]
-        REINIT["reinitialize_gtsam_locked()"]
-        RST_ANCHORS["reset_sensor_anchors_locked()"]
-        SAVE_TUM["saveEstimatedTrajectoryToFile()"]
+    subgraph api["Mapper API"]
+        REQ(["requestInsertKeyframe()"])
+        OBS(["onNewObservation()"])
+        FIN(["finalize() / onQuit()"])
+        DIAG(["getDiagnostics()"])
     end
 
-    %% ----------------------------------------------------------------
-    %% Sensor fusion (all called under stateMutex_)
-    %% ----------------------------------------------------------------
-    subgraph fusion["Sensor Fusion (stateMutex_)"]
-        direction TB
-        F_POSE_LK["fuse_pose_locked()"]
-        F_ODOM["fuse_odometry()"]
-        F_IMU["fuse_imu()"]
-        F_GNSS["fuse_gnss()"]
-        ACCUM_IMU["accumulate_imu_sample_locked()"]
-        BUILD_IMU["build_summarized_imu_locked()"]
-        APPLY_IMU["apply_imu_observation_locked()"]
-        GRAV_FILT["ImuGravityFilter (pool/filter raw IMU)"]
-        EMIT_GRAV["emit_filtered_gravity_factor_locked()"]
+    subgraph state["Shared state (state_mtx_)"]
+        KFS[("keyframes_, loops_, georef_")]
+        PEND[("pending_gnss_, imu_samples_, gyro_samples_")]
     end
 
-    %% ----------------------------------------------------------------
-    %% Keyframe graph (all called under stateMutex_)
-    %% ----------------------------------------------------------------
-    subgraph graph["Keyframe Graph (stateMutex_)"]
-        direction TB
-        REQ_KF_LK["request_insert_keyframe_locked()"]
-        CREATE_KF["create_or_get_keyframe_by_timestamp_locked()"]
-        INIT_FRAME["initialize_new_frame()"]
-        LINK_CHAIN["link_into_odometry_chain_locked()"]
-        ADD_EDGE["add_odom_chain_edge_locked()"]
-        ADD_KIN["add_kinematic_factor_between()"]
-        FIND_NEAR["find_nearest_kf_locked()"]
-        SENSOR_ALLOWED["sensor_kf_creation_allowed()"]
+    subgraph attach["Raw data attachment (state_mtx_ held)"]
+        GNSS["attach_gnss_locked()"]
+        RETRY["retry_pending_gnss_locked()"]
+        GRAV["attach_gravity_locked()"]
+        GYRO["attach_gyro_rotation_locked()"]
     end
 
-    %% ----------------------------------------------------------------
-    %% Background optimizer (solve_mutex_; brief stateMutex_ for A + C)
-    %% ----------------------------------------------------------------
-    subgraph opt["Background Optimizer (solve_mutex_)"]
-        direction TB
-        OPT_LOOP[["optimizer_thread_loop()\n(background thread)"]]
-        NOTIFY["notify_optimizer()"]
-        OPT_REFRESH["optimize_and_refresh()\nPhase A: snap pending (brief stateMutex_)\nPhase B: iSAM2 update+estimate (no stateMutex_)\nPhase C: commit caches (brief stateMutex_)"]
+    subgraph opt["Optimizer thread"]
+        OLOOP["optimizer_thread_loop()"]
+        SOLVE["solve_global_graph()"]
+        GINPUT["graph_input_locked()"]
+        OGG["optimize_global_graph()"]
+        PUBGEO["publish_georeference()"]
+        FB["send_feedback()"]
     end
 
-    %% ----------------------------------------------------------------
-    %% Shared state stores
-    %% ----------------------------------------------------------------
-    GTSAM_PEND(["state_.gtsam\npending factors + values"])
-    CACHE_POSES(["last_estimated_states\ncached poses · twists · covs"])
-    GEO_REF(["state_.geo_reference\nT_enu_to_map + geo_coord"])
+    subgraph lc["Loop closure thread"]
+        LLOOP["loop_closure_thread_loop()"]
+        LSCAN["run_loop_closure_scan()"]
+        ANALYZE["lc_engine_->analyze()"]
+    end
 
-    %% ----------------------------------------------------------------
-    %% Spinonce
-    %% ----------------------------------------------------------------
-    SPIN --> PUB_POSE["publish_high_rate_pose()"]
-    SPIN --> VIZ["updateVisualization()\n(Mapper_GUI.cpp)"]
-    PUB_POSE --> FRESH_STAMP["get_current_extrapolated_stamp_locked()"]
-    PUB_POSE --> EST_NAV
-    VIZ --> FRESH_STAMP
-    VIZ -->|camera follow| EST_NAV
+    LIO --> REQ
+    RAW --> OBS
+    OBS --> PEND
+    OBS --> GNSS
+    GNSS --> KFS
+    REQ --> GRAV
+    REQ --> GYRO
+    REQ --> KFS
+    REQ --> RETRY
+    RETRY --> GNSS
+    GRAV --> PEND
+    GYRO --> PEND
+    REQ -. "optimizer_new_data_" .-> OLOOP
 
-    %% ----------------------------------------------------------------
-    %% initialize
-    %% ----------------------------------------------------------------
-    INIT --> STOP_THR
-    INIT --> REINIT
-    INIT --> RST_ANCHORS
-    INIT --> OPT_LOOP
+    OLOOP --> SOLVE
+    SOLVE --> GINPUT
+    GINPUT --> KFS
+    SOLVE --> OGG
+    SOLVE -->|"poses, georef"| KFS
+    SOLVE --> PUBGEO
+    SOLVE --> FB
+    FB -->|"fuse_pose(map)"| SE
 
-    %% ----------------------------------------------------------------
-    %% reset
-    %% ----------------------------------------------------------------
-    RESET --> RST_ANCHORS
+    LLOOP --> LSCAN
+    LSCAN -->|"snapshot"| KFS
+    LSCAN --> ANALYZE
+    LSCAN -->|"new loop edges"| KFS
+    LSCAN -. "optimizer_new_data_" .-> OLOOP
 
-    %% ----------------------------------------------------------------
-    %% onNewObservation dispatch
-    %% ----------------------------------------------------------------
-    ON_OBS -->|"CObservationOdometry"| F_ODOM
-    ON_OBS -->|"CObservationIMU"| F_IMU
-    ON_OBS -->|"CObservationGPS"| F_GNSS
+    FIN --> SOLVE
+    FIN --> LSCAN
+    DIAG --> KFS
 
-    %% ----------------------------------------------------------------
-    %% fuse_pose
-    %% ----------------------------------------------------------------
-    FPOSE --> F_POSE_LK
-    FPOSE --> NOTIFY
-    F_POSE_LK --> SENSOR_ALLOWED
-    F_POSE_LK -->|"ref frame: PriorFactor"| CREATE_KF
-    F_POSE_LK -->|"odom frame + kf allowed"| CREATE_KF
-    F_POSE_LK -->|"odom frame + kf allowed"| LINK_CHAIN
-    F_POSE_LK --> GTSAM_PEND
-
-    %% ----------------------------------------------------------------
-    %% fuse_odometry  (aggregate=false: calls fuse_pose_locked;
-    %%                 aggregate=true: builds BetweenFactor directly)
-    %% ----------------------------------------------------------------
-    F_ODOM --> SENSOR_ALLOWED
-    F_ODOM -->|"non-aggregate path"| F_POSE_LK
-    F_ODOM -->|"aggregate path"| CREATE_KF
-    F_ODOM -->|"aggregate path"| GTSAM_PEND
-    F_ODOM --> NOTIFY
-
-    %% ----------------------------------------------------------------
-    %% fuse_imu  (Path A: rate-cap; Path B: direct)
-    %% ----------------------------------------------------------------
-    F_IMU -->|"filtered gravity: feed raw"| GRAV_FILT
-    GRAV_FILT -->|"window ready: 1 earned-sigma factor"| EMIT_GRAV
-    EMIT_GRAV -->|"kf allowed"| CREATE_KF
-    EMIT_GRAV -->|"SharedMapOnly"| FIND_NEAR
-    EMIT_GRAV --> GTSAM_PEND
-    F_IMU -->|"Path A: accumulate"| ACCUM_IMU
-    F_IMU -->|"Path A: build summary"| BUILD_IMU
-    F_IMU -->|"both paths (attitude/gyro; legacy gravity)"| APPLY_IMU
-    APPLY_IMU --> SENSOR_ALLOWED
-    APPLY_IMU -->|"kf allowed"| CREATE_KF
-    APPLY_IMU -->|"SharedMapOnly"| FIND_NEAR
-    APPLY_IMU --> GTSAM_PEND
-    F_IMU --> NOTIFY
-
-    %% ----------------------------------------------------------------
-    %% fuse_gnss
-    %% ----------------------------------------------------------------
-    F_GNSS --> SENSOR_ALLOWED
-    F_GNSS -->|"kf allowed"| CREATE_KF
-    F_GNSS -->|"SharedMapOnly"| FIND_NEAR
-    F_GNSS -->|"FactorGnssMapEnu"| GTSAM_PEND
-    F_GNSS --> NOTIFY
-
-    %% ----------------------------------------------------------------
-    %% requestInsertKeyframe  (SharedKeyframeMap sink, e.g. LIO)
-    %% ----------------------------------------------------------------
-    REQ_KF --> REQ_KF_LK
-    REQ_KF --> NOTIFY
-    REQ_KF_LK --> CREATE_KF
-    REQ_KF_LK --> LINK_CHAIN
-    REQ_KF_LK -->|"wheel edge if prev KF"| GTSAM_PEND
-
-    %% ----------------------------------------------------------------
-    %% KF graph helpers
-    %% ----------------------------------------------------------------
-    CREATE_KF --> INIT_FRAME
-    INIT_FRAME --> ADD_KIN
-    ADD_KIN --> GTSAM_PEND
-    LINK_CHAIN --> ADD_EDGE
-    ADD_EDGE --> GTSAM_PEND
-
-    %% ----------------------------------------------------------------
-    %% Optimizer
-    %% ----------------------------------------------------------------
-    NOTIFY --> OPT_LOOP
-    OPT_LOOP --> OPT_REFRESH
-    OPT_REFRESH -->|"Phase A: drain"| GTSAM_PEND
-    OPT_REFRESH -->|"Phase C: commit"| CACHE_POSES
-    OPT_REFRESH -->|"Phase C: convergence-gated"| GEO_REF
-
-    %% ----------------------------------------------------------------
-    %% Query paths (estimated_navstate, convergence, geo-ref)
-    %% ----------------------------------------------------------------
-    EST_NAV -->|"sync mode only"| OPT_REFRESH
-    EST_NAV --> CACHE_POSES
-    HAS_CVG --> GEO_REF
-    CUR_GEO --> GEO_REF
-
-    %% ----------------------------------------------------------------
-    %% Teardown
-    %% ----------------------------------------------------------------
-    GET_DIAG --> CACHE_POSES
-    GET_DIAG --> GEO_REF
-    FTWIST --> GTSAM_PEND
-    FTWIST --> NOTIFY
-
-    %% ----------------------------------------------------------------
-    %% Styling
-    %% ----------------------------------------------------------------
-    classDef pubApi  fill:#d4e6f1,stroke:#2980b9,color:#000
-    classDef bgThread fill:#f9f9f9,stroke:#aaa,stroke-dasharray:5 4,color:#000
-    classDef store   fill:#fef9e7,stroke:#f0b429,color:#000
-
-    class INIT,SPIN,RESET,ON_OBS,FPOSE,FTWIST,REQ_KF,EST_NAV,HAS_CVG,CUR_GEO,GET_DIAG pubApi
-    class OPT_LOOP bgThread
-    class GTSAM_PEND,CACHE_POSES,GEO_REF store
+    classDef thread stroke-dasharray: 5 5
+    class OLOOP,LLOOP thread
 ```
 
-## Key invariants captured here
+## Keyframe insertion
 
-| Caller | Lock held on entry | What it does |
-|---|---|---|
-| `fuse_pose()` | none | acquires `stateMutex_`, calls `fuse_pose_locked()`, then wakes optimizer |
-| `fuse_pose_locked()` | `stateMutex_` | updates raw anchor; in SharedMapOnly exits early (predictor only); otherwise creates KF + chains it |
-| `requestInsertKeyframe()` | none | acquires `stateMutex_`, calls `request_insert_keyframe_locked()`, then wakes optimizer |
-| `optimize_and_refresh()` | `solve_mutex_` (self-acquired) | Phase A: brief `stateMutex_` to drain pending; Phase B: iSAM2 solve (no `stateMutex_`); Phase C: brief `stateMutex_` to commit caches |
-| `estimated_navstate()` | none | reads cached anchors under `stateMutex_`; in sync mode flushes solver first |
-| `notify_optimizer()` | none | signals the background thread via condition variable (no-op when thread disabled) |
+`requestInsertKeyframe()` is called by the front end (LIO) and returns the new
+keyframe index.
 
-## SharedMapOnly vs Auto mode
+1. Under `state_mtx_`, a keyframe not newer than the last one is rejected
+   (`std::nullopt`).
+2. The initial pose in the map frame is the newest keyframe estimate plus the
+   front end increment, if both keyframes share the source frame; the first
+   keyframe defines the map frame.
+3. `attach_gravity_locked()` averages the accelerometer readings of the
+   `imu_gravity_window` before the keyframe and stores them as a
+   `CObservationIMU` in the keyframe auxiliary observations (needs
+   `imu_gravity_min_samples`).
+4. `attach_gyro_rotation_locked()` integrates the gyroscope readings between the
+   previous keyframe and this one (`integrate_gyro()`), with the bias from the
+   first `mola::ImuBiasSource` that has an estimate, else zero with
+   `gyro_bias_sigma`. The rotation is rotated to the vehicle frame and stored
+   with its sigma.
+5. `retry_pending_gnss_locked()` re-attempts the GNSS readings that were waiting
+   for a keyframe.
+6. After releasing the lock, `optimizer_new_data_` is set and the optimizer
+   thread is woken.
 
-In **SharedMapOnly** (the default since 2026-06-28):
-- `fuse_pose_locked()` only updates the raw-pose predictor anchor; it does **not** call `create_or_get_keyframe_by_timestamp_locked()` for the odom path.
-- `fuse_imu()` / `fuse_gnss()` snap factors to the nearest existing KF via `find_nearest_kf_locked()` instead of creating new ones.
-- The sole source of new KF GTSAM variables is `request_insert_keyframe_locked()` (called by the LIO/VIO front end through `requestInsertKeyframe()`).
-- `sensor_kf_creation_allowed()` encodes this gate: returns `false` in SharedMapOnly, and in Auto after the first `requestInsertKeyframe()` call.
+## Raw data attachment
+
+`onNewObservation()` filters by sensor label regex (`gnss_sensor_labels_re`,
+`imu_sensor_labels_re`, `gyro_sensor_labels_re`) and stores under `state_mtx_`:
+
+- GNSS: `attach_gnss_locked()` keeps the reading pending until a keyframe at or
+  after its stamp exists. Then it is attached to the nearest keyframe within
+  `gnss_max_time_offset`; a keyframe keeps only its closest reading.
+- Accelerometer: queued in `imu_samples_` (window plus a few seconds).
+- Gyroscope: the first IMU label matching `gyro_sensor_labels_re` is queued in
+  `gyro_samples_` (last 60 s).
+
+## Optimizer thread
+
+`optimizer_thread_loop()` waits for `optimizer_new_data_` (new keyframe, new
+GNSS reading, or new loop edges) and calls `solve_global_graph()`, at most once
+every `optimizer_min_period`. With `enable_optimizer_thread: false`, only
+`optimize_now()` solves.
+
+`solve_global_graph()` (one solve at a time, `solve_mtx_`):
+
+1. Copies the graph input under `state_mtx_` (`graph_input_locked()`), then
+   releases it.
+2. Runs `optimize_global_graph()` (see `GlobalGraph.h`): GTSAM batch
+   Levenberg-Marquardt over the keyframe poses `P(i)` and `T_enu_to_map` `T(0)`,
+   plus marginal covariances.
+3. Under `state_mtx_`, stores the optimized poses. Keyframes inserted while
+   solving are re-chained onto the new estimates. Stores the datum and the
+   geo-reference.
+4. Publishes the geo-reference through `advertiseUpdatedMap()`
+   (`publish_georeference()`), if there is one.
+5. `send_feedback()`, if `feedback_to_state_estimator` is true: finds the single
+   `NavStateFilter` module and calls `fuse_pose(stamp, pose, reference_frame_name)`
+   with the optimized pose of the newest keyframe, its marginal covariance
+   floored by `feedback_min_sigma_xyz` and `feedback_min_sigma_ang_deg`.
+
+## Loop closure thread
+
+Started by `initialize()` if `loop_closure_enabled`. It uses a
+`mola::FrameToFrameLoopClosure` engine (pipeline in
+`loop_closure_pipeline_file`) only as a detector (`analyze()`).
+
+`loop_closure_thread_loop()` wakes every `loop_closure_check_period_sec` or on
+`request_loop_closure_scan()`, and calls `run_loop_closure_scan()`:
+
+1. Under `state_mtx_`, builds a `CSimpleMap` snapshot of the keyframe poses and
+   front end observations, and the pairs already closed. Without a forced scan,
+   it returns if fewer than `loop_closure_min_new_keyframes` keyframes are new.
+2. The scan is incremental (only pairs with a new keyframe), or full if forced,
+   if `loop_closure_incremental` is false, or every
+   `loop_closure_full_scan_every_n` incremental scans.
+3. `analyze()` runs without the lock. The edges are sorted by keyframe pair, so
+   the result does not depend on thread timing.
+4. Under `state_mtx_`, new pairs are appended to `loops_`. If any, the
+   optimizer is woken.
+
+`wait_for_loop_closure_idle()` blocks until no scan is running or requested.
+
+## Finalize
+
+`finalize()` runs once, from `onQuit()` or the destructor:
+
+1. Stops the loop closure and optimizer threads.
+2. `optimize_now()`.
+3. If loop closure is enabled, up to `loop_closure_finalize_rounds` rounds of a
+   full scan (in the calling thread) followed by `optimize_now()`, stopping at
+   the first round without new loops.
+4. `save_outputs()`: graph input, TUM trajectory, geo-reference, state estimator
+   trajectory and geo-reference, loop closures and simplemap, for the
+   `output_*` parameters that are set.
+
+## Invariants
+
+- `state_mtx_` guards keyframes, loops, georeference and pending data. Never
+  call other modules (state estimator, loop closure engine, publishers) with it
+  held.
+- The loop closure engine and the optimizer only work on copies taken under
+  `state_mtx_`.
+- The map frame is the one of the first keyframe pose in the front end source
+  frame, which is also where the state estimator starts.

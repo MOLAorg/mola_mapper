@@ -78,6 +78,14 @@ params:
   loop_closure_incremental: true
   loop_closure_full_scan_every_n: 10
   loop_closure_finalize_rounds: ${MOLA_MAPPER_LC_FINALIZE_ROUNDS|4}
+  # Reject loops that contradict the front end odometry between their keyframes
+  # by more than a floor plus a fraction of the distance traveled:
+  loop_closure_odometry_check: ${MOLA_MAPPER_LC_ODOMETRY_CHECK|true}
+  loop_closure_odometry_limits:
+    max_xyz: 2.0             # [m]
+    max_xyz_per_m: ${MOLA_MAPPER_LC_ODOMETRY_MAX_XYZ_PER_M|0.10}
+    max_ang_deg: 5.0         # [deg]
+    max_ang_deg_per_m: 0.03  # [deg/m]
 
   # Outputs, written at the end (empty: not written):
   output_tum_trajectory: "${MOLA_MAPPER_OUTPUT_TUM|}"

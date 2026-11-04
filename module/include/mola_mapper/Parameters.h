@@ -18,6 +18,7 @@
  */
 #pragma once
 
+#include <mola_mapper/LoopOdometryCheck.h>
 #include <mrpt/containers/yaml.h>
 
 #include <cstdint>
@@ -154,6 +155,10 @@ struct Parameters
   uint32_t loop_closure_full_scan_every_n = 10;
   /// End-of-run passes (full scan + re-optimization) until no new loop.
   uint32_t loop_closure_finalize_rounds = 4;
+  /** Reject loops that contradict the odometry chain between their keyframes
+   *  (only checked when both are in the same chain, see LoopOdometryCheck.h). */
+  bool loop_closure_odometry_check = true;
+  LoopOdometryCheckParams loop_closure_odometry_limits;
   /** @} */
 
   /** @name Outputs, written at the end (empty: not written)

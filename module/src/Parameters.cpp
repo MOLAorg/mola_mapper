@@ -99,6 +99,10 @@ void Parameters::loadFrom(const mrpt::containers::yaml & cfg)
   MCP_LOAD_OPT(cfg, loop_closure_incremental);
   MCP_LOAD_OPT(cfg, loop_closure_full_scan_every_n);
   MCP_LOAD_OPT(cfg, loop_closure_finalize_rounds);
+  MCP_LOAD_OPT(cfg, loop_closure_odometry_check);
+  if (cfg.has("loop_closure_odometry_limits")) {
+    loop_closure_odometry_limits.loadFrom(cfg["loop_closure_odometry_limits"]);
+  }
 
   MCP_LOAD_OPT(cfg, output_tum_trajectory);
   MCP_LOAD_OPT(cfg, output_simplemap);

@@ -17,6 +17,7 @@
  * @date   2026
  */
 
+#include <mola_mapper/LoopOdometryCheck.h>
 #include <mola_mapper/Mapper.h>
 #include <mola_sm_loop_closure/FrameToFrameLoopClosure.h>
 #include <mola_sm_loop_closure/LoopClosureInterface.h>
@@ -137,6 +138,23 @@ bool Mapper::wait_for_loop_closure_idle(double timeoutSeconds)
   return lc_idle_cv_.wait_for(lk, std::chrono::duration<double>(timeoutSeconds), isIdle);
 }
 
+std::optional<LoopOdometryCheck> Mapper::check_against_odometry_locked(
+  std::size_t first, std::size_t last, const mola::ProposedLoopEdge & e) const
+{
+  // Only within one front end chain: its poses are all in the same odometry frame.
+  std::vector<mrpt::poses::CPose3D> chain;
+  chain.reserve(last - first + 1);
+  for (std::size_t i = first; i <= last; i++) {
+    if (i > first && keyframes_[i].source_frame != keyframes_[i - 1].source_frame) {
+      return std::nullopt;
+    }
+    chain.push_back(keyframes_[i].pose_in_source.mean);
+  }
+  return check_loop_against_odometry(
+    chain, e.from - first, e.to - first, e.relative_pose.mean,
+    params_.loop_closure_odometry_limits);
+}
+
 std::size_t Mapper::run_loop_closure_scan_now(bool forceFullScan)
 {
   return run_loop_closure_scan(forceFullScan);
@@ -199,6 +217,7 @@ std::size_t Mapper::run_loop_closure_scan(bool forceFullScan)
   });
 
   std::size_t merged = 0;
+  std::size_t rejected = 0;
   {
     auto lck = mrpt::lockHelper(state_mtx_);
     for (const auto & e : edges) {
@@ -207,13 +226,26 @@ std::size_t Mapper::run_loop_closure_scan(bool forceFullScan)
       }
       const std::pair<std::size_t, std::size_t> key = {
         std::min<std::size_t>(e.from, e.to), std::max<std::size_t>(e.from, e.to)};
-      if (!loop_pairs_.insert(key).second) {
+      if (loop_pairs_.count(key) != 0) {
         continue;
+      }
+      // Rejected pairs are remembered too, so they are excluded from later scans:
+      loop_pairs_.insert(key);
+      if (params_.loop_closure_odometry_check) {
+        if (const auto c = check_against_odometry_locked(key.first, key.second, e);
+            c && !c->accepted) {
+          MRPT_LOG_INFO_FMT(
+            "Loop %zu-%zu rejected: %.2f m / %.1f deg off the odometry over %.1f m", key.first,
+            key.second, c->xyz_error, c->ang_error_deg, c->distance_traveled);
+          rejected++;
+          continue;
+        }
       }
       loops_.push_back({e.from, e.to, e.relative_pose});
       merged++;
     }
   }
+  lc_rejected_by_odometry_ += rejected;
   lc_snapshot_size_at_last_scan_ = snapshot.size();
   lc_scans_++;
   lc_candidates_checked_ += stats.candidates_evaluated;

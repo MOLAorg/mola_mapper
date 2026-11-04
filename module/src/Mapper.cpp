@@ -657,6 +657,7 @@ void Mapper::getDiagnostics(std::vector<mola::DiagnosticStatusMsg> & status)
   s.values.push_back({"solves", std::to_string(solves_.load())});
   s.values.push_back({"lc_scans", std::to_string(lc_scans_.load())});
   s.values.push_back({"lc_candidates_checked", std::to_string(lc_candidates_checked_.load())});
+  s.values.push_back({"lc_rejected_by_odometry", std::to_string(lc_rejected_by_odometry_.load())});
   s.values.push_back({"lc_scan_in_progress", lc_busy_.load() ? "yes" : "no"});
   status.push_back(std::move(s));
 }

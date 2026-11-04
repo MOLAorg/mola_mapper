@@ -27,6 +27,7 @@
 #include <mola_kernel/interfaces/SharedKeyframeMap.h>
 #include <mola_mapper/GlobalGraph.h>
 #include <mola_mapper/GyroIntegration.h>
+#include <mola_mapper/LoopOdometryCheck.h>
 #include <mola_mapper/Parameters.h>
 #include <mrpt/maps/CSimpleMap.h>
 #include <mrpt/obs/CObservationGPS.h>
@@ -50,6 +51,7 @@
 namespace mola
 {
 class LoopClosureInterface;
+struct ProposedLoopEdge;
 class ImuBiasSource;
 }  // namespace mola
 
@@ -202,6 +204,7 @@ private:
   std::string gyro_label_;
   mrpt::poses::CPose3D gyro_sensor_pose_;
   std::vector<GlobalGraphLoopEdge> loops_;
+  /// Keyframe pairs (min, max) of the loops proposed so far, merged or rejected.
   std::set<std::pair<std::size_t, std::size_t>> loop_pairs_;
   std::optional<mrpt::topography::TGeodeticCoords> geodetic_datum_;
   std::optional<mola::Georeferencing> georef_;
@@ -259,6 +262,7 @@ private:
   std::condition_variable lc_idle_cv_;
   std::atomic<std::size_t> lc_scans_{0};
   std::atomic<std::size_t> lc_candidates_checked_{0};
+  std::atomic<std::size_t> lc_rejected_by_odometry_{0};
   std::size_t lc_kf_count_at_last_scan_ = 0;       // under lc_scan_mtx_
   std::size_t lc_snapshot_size_at_last_scan_ = 0;  // under lc_scan_mtx_
   std::size_t lc_incremental_scans_ = 0;           // under lc_scan_mtx_
@@ -267,6 +271,10 @@ private:
   void stop_loop_closure_thread();
   void loop_closure_thread_loop();
   std::size_t run_loop_closure_scan(bool forceFullScan);
+  /// Checks a loop between keyframes first < last against the odometry chain;
+  /// nothing if they are not all from the same front end chain (state_mtx_ held).
+  [[nodiscard]] std::optional<LoopOdometryCheck> check_against_odometry_locked(
+    std::size_t first, std::size_t last, const mola::ProposedLoopEdge & e) const;
   /** @} */
 
   void publish_georeference(const mola::Georeferencing & g);

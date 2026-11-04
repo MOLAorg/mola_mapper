@@ -366,6 +366,21 @@ void test_outputs_survive_a_failing_one()
   std::cout << "Outputs survive a failing one   OK\n";
 }
 
+void test_loop_odometry_limits_loaded()
+{
+  auto m = make_mapper(
+    "  loop_closure_odometry_check: false\n"
+    "  loop_closure_odometry_limits:\n"
+    "    max_xyz: 3.0\n"
+    "    max_xyz_per_m: 0.2\n");
+  const auto & p = m->parameters();
+  ASSERT_(!p.loop_closure_odometry_check);
+  ASSERT_NEAR_(p.loop_closure_odometry_limits.max_xyz, 3.0, 1e-12);
+  ASSERT_NEAR_(p.loop_closure_odometry_limits.max_xyz_per_m, 0.2, 1e-12);
+  ASSERT_NEAR_(p.loop_closure_odometry_limits.max_ang_deg, 5.0, 1e-12);  // default kept
+  std::cout << "Loop odometry limits loaded   OK\n";
+}
+
 void test_unknown_robust_kernel_rejected_at_start()
 {
   bool thrown = false;
@@ -390,6 +405,7 @@ int main()
     test_feedback_once_per_keyframe();
     test_outputs_survive_a_failing_one();
     test_unknown_robust_kernel_rejected_at_start();
+    test_loop_odometry_limits_loaded();
     std::cout << "All tests passed.\n";
     return 0;
   } catch (const std::exception & e) {

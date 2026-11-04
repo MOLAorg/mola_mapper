@@ -17,6 +17,7 @@
  * @date   2026
  */
 
+#include <mola_mapper/LoopOdometryCheck.h>
 #include <mola_mapper/Mapper.h>
 #include <mola_sm_loop_closure/FrameToFrameLoopClosure.h>
 #include <mola_sm_loop_closure/LoopClosureInterface.h>
@@ -141,6 +142,23 @@ bool Mapper::wait_for_loop_closure_idle(double timeoutSeconds)
   return lc_idle_cv_.wait_for(lk, std::chrono::duration<double>(timeoutSeconds), isIdle);
 }
 
+std::optional<LoopOdometryCheck> Mapper::check_against_odometry_locked(
+  std::size_t first, std::size_t last, const mola::ProposedLoopEdge & e) const
+{
+  // Only within one front end chain: its poses are all in the same odometry frame.
+  std::vector<mrpt::poses::CPose3D> chain;
+  chain.reserve(last - first + 1);
+  for (std::size_t i = first; i <= last; i++) {
+    if (i > first && keyframes_[i].source_frame != keyframes_[i - 1].source_frame) {
+      return std::nullopt;
+    }
+    chain.push_back(keyframes_[i].pose_in_source.mean);
+  }
+  return check_loop_against_odometry(
+    chain, e.from - first, e.to - first, e.relative_pose.mean,
+    params_.loop_closure_odometry_limits);
+}
+
 std::size_t Mapper::run_loop_closure_scan_now(bool forceFullScan)
 {
   return run_loop_closure_scan(forceFullScan);
@@ -153,7 +171,15 @@ std::size_t Mapper::run_loop_closure_scan(bool forceFullScan)
   }
   auto lckScan = mrpt::lockHelper(lc_scan_mtx_);
 
-  // 1) Snapshot: current keyframe poses and the front end observations only.
+  // 1) Incremental (only pairs with a new keyframe) or full scan:
+  bool fullScan = forceFullScan || !params_.loop_closure_incremental;
+  if (
+    params_.loop_closure_full_scan_every_n > 0 &&
+    lc_incremental_scans_ >= params_.loop_closure_full_scan_every_n) {
+    fullScan = true;
+  }
+
+  // 2) Snapshot: current keyframe poses and the front end observations only.
   mrpt::maps::CSimpleMap snapshot;
   mola::LoopClosureAnalyzeOptions opts;
   {
@@ -168,22 +194,18 @@ std::size_t Mapper::run_loop_closure_scan(bool forceFullScan)
         mrpt::poses::CPose3DPDFGaussian::Create(kf.pose_in_map),
         std::make_shared<mrpt::obs::CSensoryFrame>(kf.observations));
     }
-    // Already closed pairs (snapshot indices are keyframe indices):
-    for (const auto & [a, b] : loop_pairs_) {
-      opts.exclude_pairs.insert({static_cast<uint32_t>(a), static_cast<uint32_t>(b)});
+    // Excluded pairs (snapshot indices are keyframe indices): the closed and the
+    // rejected ones.
+    for (const auto & pairs : {&loop_pairs_, &rejected_loop_pairs_}) {
+      for (const auto & [a, b] : *pairs) {
+        opts.exclude_pairs.insert({static_cast<uint32_t>(a), static_cast<uint32_t>(b)});
+      }
     }
   }
   if (snapshot.size() < 2) {
     return 0;
   }
 
-  // 2) Incremental (only pairs with a new keyframe) or full scan:
-  bool fullScan = forceFullScan || !params_.loop_closure_incremental;
-  if (
-    params_.loop_closure_full_scan_every_n > 0 &&
-    lc_incremental_scans_ >= params_.loop_closure_full_scan_every_n) {
-    fullScan = true;
-  }
   if (fullScan) {
     lc_incremental_scans_ = 0;
   } else {
@@ -203,6 +225,7 @@ std::size_t Mapper::run_loop_closure_scan(bool forceFullScan)
   });
 
   std::size_t merged = 0;
+  std::size_t rejected = 0;
   {
     auto lck = mrpt::lockHelper(state_mtx_);
     for (const auto & e : edges) {
@@ -211,13 +234,27 @@ std::size_t Mapper::run_loop_closure_scan(bool forceFullScan)
       }
       const std::pair<std::size_t, std::size_t> key = {
         std::min<std::size_t>(e.from, e.to), std::max<std::size_t>(e.from, e.to)};
-      if (!loop_pairs_.insert(key).second) {
+      if (loop_pairs_.count(key) != 0) {
         continue;
       }
+      if (params_.loop_closure_odometry_check) {
+        if (const auto c = check_against_odometry_locked(key.first, key.second, e);
+            c && !c->accepted) {
+          if (rejected_loop_pairs_.insert(key).second) {
+            MRPT_LOG_INFO_FMT(
+              "Loop %zu-%zu rejected: %.2f m / %.1f deg off the odometry over %.1f m", key.first,
+              key.second, c->xyz_error, c->ang_error_deg, c->distance_traveled);
+            rejected++;
+          }
+          continue;
+        }
+      }
+      loop_pairs_.insert(key);
       loops_.push_back({e.from, e.to, e.relative_pose});
       merged++;
     }
   }
+  lc_rejected_by_odometry_ += rejected;
   lc_snapshot_size_at_last_scan_ = snapshot.size();
   lc_scans_++;
   lc_candidates_checked_ += stats.candidates_evaluated;

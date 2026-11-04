@@ -26,3 +26,10 @@ mola_add_test(
   LINK_LIBRARIES
     mola::mola_mapper
 )
+
+mola_add_test(
+  TARGET  test-loop-odometry-check
+  SOURCES test-loop-odometry-check.cpp
+  LINK_LIBRARIES
+    mola::mola_mapper
+)

@@ -232,12 +232,25 @@ with an environment variable (shown in parentheses below).
       loop_closure_incremental: true
       loop_closure_full_scan_every_n: 10
       loop_closure_finalize_rounds: 4    # (MOLA_MAPPER_LC_FINALIZE_ROUNDS)
+      loop_closure_odometry_check: true  # (MOLA_MAPPER_LC_ODOMETRY_CHECK)
+      loop_closure_odometry_limits:
+        max_xyz: 2.0                     # [m]
+        max_xyz_per_m: 0.10              # (MOLA_MAPPER_LC_ODOMETRY_MAX_XYZ_PER_M)
+        max_ang_deg: 5.0                 # [deg]
+        max_ang_deg_per_m: 0.03          # [deg/m]
 
    The detector is the ``mola_sm_loop_closure`` frame-to-frame engine, used only
    to find candidate edges. Scans are incremental (pairs with a new keyframe),
    with a full one every ``loop_closure_full_scan_every_n``. At the end of the
    run, up to ``loop_closure_finalize_rounds`` passes of full scan plus
-   re-optimization run until no new loop appears. Note that the default of
+   re-optimization run until no new loop appears.
+
+   Each detected loop between keyframes of the same front end chain is compared
+   with the odometry between them: if they disagree by more than a floor plus a
+   fraction of the distance traveled (``loop_closure_odometry_limits``), the loop
+   is a false match (e.g. repetitive geometry) and is rejected. Over a short
+   distance the odometry drift is small, so this mostly removes short range false
+   loops and loops matched facing the wrong way. Note that the default of
    ``loop_closure_enabled`` in the C++ ``Parameters`` struct is ``false``; the
    provided YAML enables it.
 

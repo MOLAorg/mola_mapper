@@ -27,6 +27,7 @@
 #include <mola_georeferencing/simplemap_georeference.h>
 #include <mola_gtsam_factors/FactorGnssMapEnu.h>
 #include <mola_mapper/GlobalGraph.h>
+#include <mrpt/core/exceptions.h>
 #include <mrpt/maps/CSimpleMap.h>
 #include <mrpt/math/gtsam_wrappers.h>
 #include <mrpt/poses/gtsam_wrappers.h>
@@ -96,7 +97,11 @@ void add_loop_factors(
     gtsam::Pose3 rel;
     gtsam::Matrix6 relCov;
     auto pdf = lc.relative_pose;
-    pdf.cov.asEigen().diagonal().array() += 1e-8;
+    for (int k = 0; k < 6; k++) {
+      const double floor = k < 3 ? params.loop_closure_min_sigma_xyz
+                                 : mrpt::DEG2RAD(params.loop_closure_min_sigma_ang_deg);
+      pdf.cov(k, k) = std::max(pdf.cov(k, k), floor * floor);
+    }
     mrpt::gtsam_wrappers::to_gtsam_se3_cov6(pdf, rel, relCov);
     auto robust = gtsam::noiseModel::Robust::Create(
       gtsam::noiseModel::mEstimator::Huber::Create(params.loop_closure_robust_huber_k),
@@ -104,6 +109,24 @@ void add_loop_factors(
     fg.emplace_shared<gtsam::BetweenFactor<gtsam::Pose3>>(P(lc.from), P(lc.to), rel, robust);
     out.num_loop_factors++;
   }
+}
+
+gtsam::noiseModel::mEstimator::Base::shared_ptr robust_kernel(const std::string & name, double k)
+{
+  namespace m = gtsam::noiseModel::mEstimator;
+  if (name == "huber") {
+    return m::Huber::Create(k);
+  }
+  if (name == "cauchy") {
+    return m::Cauchy::Create(k);
+  }
+  if (name == "geman_mcclure") {
+    return m::GemanMcClure::Create(k);
+  }
+  if (name == "tukey") {
+    return m::Tukey::Create(k);
+  }
+  THROW_EXCEPTION_FMT("Unknown robust kernel '%s'", name.c_str());
 }
 
 void add_gnss_factors(
@@ -127,7 +150,7 @@ void add_gnss_factors(
         .array()
         .max(params.gnss_minimum_uncertainty);
     auto robust = gtsam::noiseModel::Robust::Create(
-      gtsam::noiseModel::mEstimator::Huber::Create(params.gnss_robust_huber_k),
+      robust_kernel(params.gnss_robust_kernel, params.gnss_robust_k),
       gtsam::noiseModel::Diagonal::Sigmas(sigmas));
     fg.emplace_shared<mola::factors::FactorGnssMapEnu>(
       T(0), P(f.kf_index), mrpt::gtsam_wrappers::toPoint3(f.obs->sensorPose.translation()),

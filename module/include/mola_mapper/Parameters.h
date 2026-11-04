@@ -29,16 +29,16 @@ namespace mola::mapper
 struct GlobalGraphParams
 {
   /** @name Odometry chain (consecutive keyframes of the same source)
-     * @{ */
-  /// The relative pose sigmas, from the source covariances, are multiplied by this...
-  double odometry_uncertainty_multiplier = 1.0;
-  /// ... and then these floors are added [m] and [deg]:
-  double odometry_additional_noise_xyz = 0.01;
-  double odometry_additional_noise_ang_deg = 0.1;
-  /// Sigmas growing with the keyframe step (random walk), per sqrt(m): what lets
-  /// GNSS and loop closures correct the odometry drift.
-  double odometry_noise_xyz_per_sqrt_m = 0.02;
-  double odometry_noise_ang_deg_per_sqrt_m = 0.2;
+   *  Stiff by default: the front end is accurate locally, and only its slow drift
+   *  must give way to GNSS and loop closures. Each edge sigma is a floor plus a
+   *  random walk with the keyframe step, per sqrt(m).
+   * @{ */
+  /// Multiplier of the relative covariance from the front end poses (0: ignored).
+  double odometry_uncertainty_multiplier = 0.0;
+  double odometry_additional_noise_xyz = 0.002;     ///< [m]
+  double odometry_additional_noise_ang_deg = 0.01;  ///< [deg]
+  double odometry_noise_xyz_per_sqrt_m = 0.01;      ///< [m/sqrt(m)]
+  double odometry_noise_ang_deg_per_sqrt_m = 0.05;  ///< [deg/sqrt(m)]
   /** @} */
 
   /** @name GNSS (CObservationGPS in the keyframes)
@@ -47,7 +47,11 @@ struct GlobalGraphParams
   double gnss_minimum_uncertainty = 0.5;  ///< [m] per-axis floor of the GNSS sigmas
   double gnss_uncertainty_multiplier = 1.0;
   double gnss_max_uncertainty_horiz = 20.0;  ///< [m] readings above this are not used
-  double gnss_robust_huber_k = 1.5;
+  /// Robust kernel of the GNSS factors: "huber", "cauchy", "geman_mcclure" or
+  /// "tukey". The redescending ones (all but Huber) stop pulling at outliers,
+  /// e.g. low-cost receivers meters off under trees with a small reported sigma.
+  std::string gnss_robust_kernel = "cauchy";
+  double gnss_robust_k = 1.5;  ///< kernel parameter, in sigmas
   /** @} */
 
   /** @name Gravity (averaged accelerometer, CObservationIMU in the keyframes)
@@ -56,8 +60,13 @@ struct GlobalGraphParams
   double imu_gravity_sigma_deg = 3.0;
   /** @} */
 
-  /// Huber parameter of the loop closure edges.
+  /** @name Loop closure edges
+   * @{ */
   double loop_closure_robust_huber_k = 1.5;
+  /// Floors of their sigmas: the detector ICP covariance is overconfident.
+  double loop_closure_min_sigma_xyz = 0.05;      ///< [m]
+  double loop_closure_min_sigma_ang_deg = 0.25;  ///< [deg]
+  /** @} */
 
   /// Gauge: sigma of the prior on the first keyframe [m] and [rad].
   double first_pose_prior_sigma = 1e-4;

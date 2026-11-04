@@ -1,15 +1,12 @@
 .. _mola_mapper_ros2_node:
 
 ==============================
-Mapper ROS 2 node
+Running Mapper with a rosbag2
 ==============================
 
-.. note::
-  ROS 2 launch files and a dedicated bridge node for ``mola_mapper`` are
-  under active development.  This page will be populated with topic names,
-  parameters, and ``/tf`` conventions once the bridge is finalised.
-  In the meantime, refer to the mola-cli launch files in
-  ``mola-cli-launchs/`` for working examples that combine LIO + Mapper.
+The mapper has no ROS 2 node of its own: it is a MOLA module, loaded together
+with the other modules of the system by ``mola-cli``. The provided launch file
+reads a rosbag2 and runs LIO, the state estimator and the mapper.
 
 .. contents::
    :depth: 1
@@ -18,71 +15,98 @@ Mapper ROS 2 node
 
 |
 
-Overview
------------
-
-The Mapper ROS 2 integration consists of:
-
-1. A ``mola_bridge_ros2`` adapter that subscribes to sensor topics
-   (``nav_msgs/Odometry``, ``sensor_msgs/Imu``, ``sensor_msgs/NavSatFix``)
-   and forwards them to the Mapper module via the MOLA sensor-fusion API.
-2. A publisher for ``nav_msgs/Odometry`` and ``/tf`` (``map → base_link``),
-   driven by ``mola::LocalizationSourceBase::advertiseUpdatedLocalization()``.
-3. (Planned) A ``nav_msgs/Path`` publisher for the full optimized trajectory.
-
-|
-
 .. _mola_mapper_ros2_launch:
 
 Launch file
 -----------
 
-*Coming soon.*  The launch file will accept the following key arguments:
+``mola-cli-launchs/lio_smoother_mapper_from_rosbag2.yaml`` (installed in
+``share/mola_mapper/mola-cli-launchs``) loads:
+
+* ``mola::Rosbag2Dataset``: reads the bag and feeds the other modules.
+* ``mola::LidarOdometry``: the front end (pipeline from ``mola_lidar_odometry``).
+* ``mola::state_estimation_smoother::StateEstimationSmoother``: the state
+  estimator queried by LIO.
+* ``mola::mapper::Mapper``: parameters from ``params/mapper.yaml``.
+* Optionally, a GUI module.
+
+.. code-block:: bash
+
+   export MOLA_INPUT_ROSBAG2=/path/to/bag
+   export MOLA_LIDAR_TOPIC=/ouster/points
+   export MOLA_IMU_TOPIC=/ouster/imu
+   export MOLA_GNSS_TOPIC=/gps/fix          # optional
+   export MOLA_MAPPER_OUTPUT_TUM=/tmp/mapper.tum
+   mola-cli $(ros2 pkg prefix mola_mapper)/share/mola_mapper/mola-cli-launchs/lio_smoother_mapper_from_rosbag2.yaml
+
+Environment variables of the launch file:
 
 .. list-table::
-   :widths: 30 15 55
+   :widths: 35 20 45
    :header-rows: 1
 
-   * - Argument
+   * - Variable
      - Default
      - Description
-   * - ``lidar_topic_name``
+   * - ``MOLA_INPUT_ROSBAG2``
+     - (required)
+     - Path to the rosbag2.
+   * - ``MOLA_LIDAR_TOPIC``
      - ``/ouster/points``
-     - Raw LiDAR topic consumed by the paired LIO front-end.
-   * - ``imu_topic_name``
-     - ``""``
-     - IMU topic (``sensor_msgs/Imu``); empty = disabled.
-   * - ``gnss_topic_name``
-     - ``""``
-     - GNSS topic (``sensor_msgs/NavSatFix``); empty = disabled.
-   * - ``estimate_geo_reference``
-     - ``false``
-     - Enable online geo-referencing from GNSS.
-   * - ``odom_topic``
-     - ``/odom``
-     - Wheel-odometry topic (``nav_msgs/Odometry``).
-   * - ``base_link_frame``
-     - ``base_link``
-     - Robot base frame id.
-   * - ``map_frame``
+     - LiDAR topic (sensor label ``lidar``).
+   * - ``MOLA_IMU_TOPIC``
+     - ``/imu``
+     - IMU topic (sensor label ``imu``), optional.
+   * - ``MOLA_ATTITUDE_IMU_TOPIC``, ``MOLA_ATTITUDE_IMU_NAME``
+     - empty, ``imu_attitude``
+     - Optional second IMU topic and its sensor label.
+   * - ``MOLA_GNSS_TOPIC``
+     - empty
+     - GNSS topic (sensor label ``gps``), optional.
+   * - ``MOLA_ODOMETRY_TOPIC``
+     - empty
+     - Wheel odometry topic (sensor label ``odom_wheels``), optional.
+   * - ``MOLA_TF_BASE_LINK``, ``MOLA_TF_TOPIC``, ``MOLA_TF_STATIC_TOPIC``
+     - ``base_link``, ``/tf``, ``/tf_static``
+     - Vehicle frame and TF topics read from the bag.
+   * - ``MOLA_TF_MAP``
      - ``map``
-     - Global map frame id.
+     - Map frame (``reference_frame_name`` of the mapper).
+   * - ``MOLA_WITH_MAPPER``
+     - ``true``
+     - ``false`` runs LIO and the state estimator only.
+   * - ``MOLA_WITH_GUI``
+     - ``true``
+     - Enable the GUI and the LiDAR preview.
+   * - ``MOLA_TIME_WARP``, ``MOLA_DATASET_START_PAUSED``, ``MOLA_QUIT_ON_DATASET_END``
+     - ``1.0``, ``false``, ``false``
+     - Dataset playback controls.
+   * - ``MOLA_ODOMETRY_PIPELINE_YAML``
+     - ``lidar3d-gicp.yaml``
+     - LIO pipeline file.
+   * - ``MOLA_STATE_ESTIMATOR_YAML``
+     - smoother default
+     - State estimator parameters.
+   * - ``MOLA_MAPPER_YAML``
+     - ``../params/mapper.yaml``
+     - Mapper parameters (relative to the launch file).
+
+The mapper settings (``MOLA_MAPPER_*``) are listed in :ref:`mola_mapper_params`.
+Useful combinations:
+
+* GNSS owned by the mapper, with its corrections fed back to the state
+  estimator: ``MOLA_NAVSTATE_GNSS_SENSOR_NAME=none MOLA_MAPPER_FEEDBACK=true``.
+* Gyroscope factors: ``MOLA_MAPPER_GYRO_LABELS=imu``, optionally with
+  ``MOLA_NAVSTATE_IMU_BIAS_TRACKING=true`` in the state estimator.
+* Gravity factors: ``MOLA_MAPPER_GRAVITY_IMU_LABELS=imu``.
+
+When the bag ends, stop the application (or set ``MOLA_QUIT_ON_DATASET_END=true``):
+the mapper then runs its final loop closure passes and writes the outputs.
 
 |
 
-.. _mola_mapper_ros2_topics:
+Topics and TF
+--------------
 
-Published topics
------------------
-
-*Coming soon.*
-
-Subscribed topics
-------------------
-
-*Coming soon.*
-
-TF conventions
----------------
-
-*Coming soon.*
+The launch file loads no ROS 2 bridge module, so it publishes no ROS 2 topics
+nor ``/tf``. Results are read from the output files (see :ref:`mola_mapper_params`).

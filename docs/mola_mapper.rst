@@ -1,24 +1,16 @@
 .. _mola_mapper:
 
 ================================
-3D central SLAM map (Mapper)
+Global back end (Mapper)
 ================================
 
 :octicon:`mark-github` `mola_mapper <https://github.com/MOLAorg/mola_mapper/>`__ is the
-**central 3D SLAM back-end** for the MOLA framework.
-It holds **one global, optimized representation of the world** by fusing multiple
-odometry sources (wheel encoders, LiDAR-odometry, visual-odometry), IMU and GNSS
-into a single keyframe-based factor graph (GTSAM iSAM2), with online loop closure,
-geo-referencing, and lifelong keyframe management.
-
-Mapper acts as the **single source of truth** for pose prediction queried by any
-number of LIO/VIO front-ends running concurrently, replacing the lighter-weight
-:ref:`state estimators <mola_sta_est_index>` in full SLAM use cases.
-
-.. note::
-  This module is under active development. The core fusion pipeline (multi-source
-  odometry, IMU, GNSS, keyframe-ingestion from LIO/VIO) is operational.
-  Loop closure, map load/save, and relocalization are planned for upcoming releases.
+**global back end** of a MOLA system. It runs next to a front end
+(:ref:`LiDAR odometry <mola_lidar_odometry>`) and its state estimator, and
+adds a central keyframe map, loop closure detection and a global pose graph
+that includes GNSS, gravity and gyroscope factors. It does little estimation of
+its own: the state estimator remains the only ``mola::NavStateFilter`` queried by
+the front end.
 
 .. contents::
    :depth: 1
@@ -32,26 +24,30 @@ number of LIO/VIO front-ends running concurrently, replacing the lighter-weight
 Role within the MOLA ecosystem
 ----------------------------------
 
-At a conceptual level, Mapper is the **global back-end** that:
+The modules of a system are independent and composed by a launch file:
 
-1. Receives **short-term pose estimates** from one or more front-ends
-   (e.g. :ref:`mola_lidar_odometry <mola_lidar_odometry>`) via the
-   ``mola::SharedKeyframeMap`` and ``mola::NavStateFilter::fuse_pose()`` interfaces.
-2. Fuses IMU attitude/gravity/gyro factors and GNSS ENU factors into the same graph.
-3. Runs **incremental iSAM2 optimization** to refine all keyframe poses globally,
-   including past ones affected by loop closures.
-4. Publishes the **fused localization** back to front-ends and to ROS 2.
+* ``mola::LidarOdometry`` (LIO) uses the state estimator
+  (``mola::state_estimation_smoother::StateEstimationSmoother``) as its only
+  ``NavStateFilter``, and pushes sparse keyframes to the mapper through
+  ``mola::SharedKeyframeMap``.
+* ``mola::mapper::Mapper`` receives those keyframes and, as a
+  ``mola::RawDataConsumer``, the GNSS and IMU readings of the dataset.
+* Optionally (``feedback_to_state_estimator``), after each solve the mapper
+  fuses the optimized pose of the newest keyframe into the state estimator as an
+  absolute pose in the map frame (``fuse_pose()``), so loop closures and GNSS
+  reach the live estimate. In that mode, the state estimator should run without
+  GNSS (``MOLA_NAVSTATE_GNSS_SENSOR_NAME=none``): the mapper owns it.
 
-The relationship between front-ends and Mapper is symmetric: the front-end drives
-short-term motion estimation, while Mapper provides the globally-consistent anchor
-and corrects for drift over time.
+The mapper:
 
-In short: Mapper receives pose streams from LIO/VIO front-ends and fuses them
-with IMU and GNSS into one optimized world model.
-
-.. TODO: restore the block diagram once imgs/mapper_system_scheme.png is added
-   to this repo. The figure was referenced but the image file was never
-   committed, so it rendered as a broken image.
+1. Attaches to each keyframe the nearest GNSS reading, the accelerometer
+   averaged before it (gravity) and the gyroscope rotation since the previous
+   keyframe.
+2. Searches for loop closures in a background thread, with the detector of
+   ``mola_sm_loop_closure``.
+3. Optimizes the pose graph of all keyframes in another background thread.
+4. Publishes the estimated geo-reference and, at the end of the run, writes the
+   optimized trajectory, map and geo-reference.
 
 |
 
@@ -60,30 +56,24 @@ with IMU and GNSS into one optimized world model.
 Provided interfaces
 -----------------------
 
-Mapper implements the following ``mola_kernel`` interfaces:
-
 .. list-table::
    :widths: 30 70
    :header-rows: 1
 
    * - Interface
      - Role
-   * - ``mola::NavStateFilter``
-     - Provides ``estimated_navstate()`` (pose + twist + covariance) for any
-       requested timestamp, using the latest iSAM2 solution plus a
-       constant-velocity kinematic extrapolator.
-   * - ``mola::LocalizationSourceBase``
-     - Publishes the fused vehicle localization (``advertiseUpdatedLocalization``)
-       at the configured high-rate.
-   * - ``mola::MapSourceBase``
-     - Publishes the map and geo-referencing transforms.
    * - ``mola::SharedKeyframeMap``
-     - Accepts keyframe-insert requests from LIO/VIO front-ends via
-       ``requestInsertKeyframe()``, merging raw observations and adding
-       tight consecutive-frame relative-pose factors.
+     - ``requestInsertKeyframe()``: receives the keyframes of the front end
+       (source frame, pose and covariance in that frame, observations).
+   * - ``mola::RawDataConsumer``
+     - Receives GNSS and IMU readings from the ``raw_data_source`` modules.
+   * - ``mola::MapSourceBase``
+     - Publishes the estimated geo-reference.
    * - ``mola::DiagnosticsProvider``
-     - Exposes structured diagnostics (keyframe count, convergence status,
-       GNSS/IMU factor count, odom drift per source).
+     - Keyframe, loop closure and factor counts, solves and loop closure scans.
+   * - ``mola::ExecutableBase``
+     - Module lifecycle. ``onQuit()`` runs the end-of-run passes and writes the
+       outputs.
 
 |
 
@@ -92,18 +82,42 @@ Mapper implements the following ``mola_kernel`` interfaces:
 Reference frame conventions
 -------------------------------
 
-Mapper manages three categories of frames:
+* **{map}** (``reference_frame_name``, default ``map``): the frame of the
+  optimized keyframe poses. It is the one of the front end keyframes: the first
+  keyframe stays at its front end pose, which is also where the state estimator
+  starts.
+* **{enu}**: the geo-reference ``T_enu_to_map`` is a variable of the graph when
+  there are GNSS readings. It is published as a ``Georeferencing`` and can be
+  saved to a YAML file.
 
-* **{map}** (configurable via ``reference_frame_name``, default ``map``): the
-  global optimization frame.  All keyframe poses are expressed in this frame.
-* **{odom_i}** (one per odometry source, e.g. ``odom``, ``odom_lidar``): the
-  short-term prediction frame served to each front-end. Mapper estimates
-  ``T_map_to_odom_i`` for each source and corrects it after each iSAM2 solve.
-* **{enu}** (``enu_frame_name``, default ``enu``): the ENU geo-reference frame,
-  estimated or fixed.  ``T_enu_to_map`` is a variable in the factor graph when
-  geo-referencing is enabled.
+|
 
-This mirrors the conventions of :ref:`mola_state_estimators <mola_sta_est_index>`.
+.. _mola_mapper_graph:
+
+Global pose graph
+----------------------
+
+The graph has one pose variable per keyframe in ``{map}`` and ``T_enu_to_map``.
+It is solved in batch with Levenberg-Marquardt (GTSAM), and the marginal
+covariance of the newest pose is computed. Its factors are:
+
+* **Odometry chain**: between consecutive keyframes of the same front end source
+  frame. Stiff by default. The sigma is a floor plus terms per square root of
+  meter and per radian turned (``odometry_noise_ang_per_rad``). Keyframes of
+  different source frames are joined by a weak edge.
+* **Loop closures**: Huber kernel, with floors on their sigmas
+  (``loop_closure_min_sigma_xyz``, ``loop_closure_min_sigma_ang_deg``), since the
+  detector covariance is overconfident.
+* **GNSS**: ENU position factors with a selectable robust kernel (default
+  Cauchy). Readings with a horizontal sigma above ``gnss_max_uncertainty_horiz``
+  are discarded. If the spread of the readings is too small for their sigmas,
+  they are not used.
+* **Gravity**: roll and pitch from the averaged accelerometer.
+* **Gyroscope**: relative rotation between consecutive keyframes, with free
+  translation. The sigma combines the noise density, the bias sigma and the scale
+  error.
+* A tight prior on the first keyframe (gauge) and a weak prior on
+  ``T_enu_to_map``.
 
 |
 
@@ -112,138 +126,166 @@ This mirrors the conventions of :ref:`mola_state_estimators <mola_sta_est_index>
 Configuration parameters
 ----------------------------
 
-All parameters are loaded from the ``params:`` subtree of the module YAML.
-The shared defaults live in ``params/mapper-common.yaml`` and are imported
-via the ``$import`` directive in per-dataset launch files.
+All parameters are loaded from the ``params:`` subtree of the module YAML. The
+defaults are in ``params/mapper.yaml``, where most of them can be overridden
+with an environment variable (shown in parentheses below).
 
-Below is a summary of the most frequently tuned parameters, grouped by topic.
-All of them can be overridden via environment variables (listed in parentheses).
+.. code-block:: yaml
 
-.. dropdown:: Reference frames
+   - name: mapper
+     type: mola::mapper::Mapper
+     raw_data_source: "dataset_input"   # GNSS and IMU readings
+     params: "../params/mapper.yaml"
+
+.. dropdown:: Frame and sensors attached to the keyframes
    :icon: list-unordered
 
    .. code-block:: yaml
 
-      vehicle_frame_name: "${MOLA_TF_BASE_LINK|base_link}"
       reference_frame_name: "${MOLA_TF_MAP|map}"
-      enu_frame_name: "enu"
 
-.. dropdown:: Kinematic model and keyframe creation
+      # GNSS (regex of sensor labels; empty: none)
+      gnss_sensor_labels_re: "${MOLA_MAPPER_GNSS_LABELS|gps}"
+      gnss_max_time_offset: 0.5          # [s] (MOLA_MAPPER_GNSS_MAX_TIME_OFFSET)
+
+      # IMU whose averaged accelerometer levels the map (empty: none)
+      imu_sensor_labels_re: "${MOLA_MAPPER_GRAVITY_IMU_LABELS|}"
+      imu_gravity_window: 1.0            # [s] before each keyframe (MOLA_MAPPER_GRAVITY_WINDOW)
+      imu_gravity_min_samples: 10
+
+      # IMU whose gyroscope gives the rotation between keyframes (empty: none)
+      gyro_sensor_labels_re: "${MOLA_MAPPER_GYRO_LABELS|}"
+      gyro_noise_density: 3e-4           # [rad/s/sqrt(Hz)] (MOLA_MAPPER_GYRO_NOISE_DENSITY)
+      gyro_bias_sigma: 0.005             # [rad/s], without a bias source estimate
+      gyro_scale_sigma: 0.005            # (MOLA_MAPPER_GYRO_SCALE_SIGMA)
+      gyro_max_gap: 0.1                  # [s] longer gaps between readings: no factor
+
+   The gyroscope bias comes from the first ``mola::ImuBiasSource`` module with an
+   estimate (e.g. the state estimator with ``MOLA_NAVSTATE_IMU_BIAS_TRACKING=true``).
+   Otherwise it is taken as zero, with sigma ``gyro_bias_sigma``.
+
+.. dropdown:: Graph: odometry chain
    :icon: list-unordered
 
    .. code-block:: yaml
 
-      # Options: KinematicModel::ConstantVelocity, KinematicModel::Tricycle
-      kinematic_model: "${MOLA_MAPPER_KINEMATIC_MODEL|KinematicModel::ConstantVelocity}"
+      graph:
+        odometry_uncertainty_multiplier: 0.0       # front end covariance, 0: ignored (MOLA_MAPPER_ODOM_SIGMA_MULTIPLIER)
+        odometry_additional_noise_xyz: 0.002       # [m] (MOLA_MAPPER_ODOM_SIGMA_XYZ)
+        odometry_additional_noise_ang_deg: 0.01    # [deg] (MOLA_MAPPER_ODOM_SIGMA_ANG)
+        odometry_noise_xyz_per_sqrt_m: 0.01        # (MOLA_MAPPER_ODOM_SIGMA_XYZ_PER_SQRT_M)
+        odometry_noise_ang_deg_per_sqrt_m: 0.05    # (MOLA_MAPPER_ODOM_SIGMA_ANG_PER_SQRT_M)
+        odometry_noise_ang_per_rad: 0.02           # (MOLA_MAPPER_ODOM_SIGMA_ANG_PER_RAD)
 
-      max_time_to_use_velocity_model: 0.75   # [s]  (MOLA_MAX_TIME_TO_USE_VELOCITY_MODEL)
-      min_time_difference_to_create_new_frame: 0.05  # [s]
-
-      # Bound high-rate sensor insertion rate (0 = insert every reading):
-      imu_max_insert_rate_hz: 5.0    # (MOLA_MAPPER_IMU_MAX_RATE_HZ)
-      odometry_max_insert_rate_hz: 5.0  # (MOLA_MAPPER_ODOM_MAX_RATE_HZ)
-
-      # Share a bounded-rate keyframe clock for IMU + wheels:
-      aggregate_high_rate_into_edges: false  # (MOLA_MAPPER_AGGREGATE)
-      sensor_keyframe_min_period: 0.5        # [s] (MOLA_MAPPER_SENSOR_KF_PERIOD)
-
-      enforce_planar_motion: false   # (MOLA_MAPPER_ENFORCE_PLANAR_MOTION)
-
-.. dropdown:: IMU fusion
+.. dropdown:: Graph: gyroscope, GNSS, gravity and loop closure factors
    :icon: list-unordered
 
    .. code-block:: yaml
 
-      imu_attitude_sigma_deg: 2.0        # (MOLA_IMU_ATTITUDE_SIGMA)
-      imu_attitude_azimuth_offset_deg: 0.0  # (MOLA_IMU_ATTITUDE_AZIMUTH_OFFSET)
-      # Sigma for gravity-leveling from accelerometer (0 = disable):
-      imu_normalized_gravity_alignment_sigma: 0.4  # (MOLA_IMU_GRAVITY_ALIGNMENT_SIGMA)
-      # Per-keyframe gyro prior sigma [deg/s] (0 = disable):
-      imu_angular_velocity_sigma_deg: 0.0  # (MOLA_IMU_ANGVEL_SIGMA)
+      graph:
+        use_gyro: true                  # (MOLA_MAPPER_USE_GYRO)
+        gyro_min_sigma_deg: 0.02
 
-.. dropdown:: Geo-referencing
+        use_gnss: true                  # (MOLA_MAPPER_USE_GNSS)
+        gnss_minimum_uncertainty: 0.5   # [m] (MOLA_MAPPER_GNSS_MIN_SIGMA)
+        gnss_uncertainty_multiplier: 1.0   # (MOLA_MAPPER_GNSS_SIGMA_MULTIPLIER)
+        gnss_max_uncertainty_horiz: 20.0   # [m]
+        gnss_robust_kernel: "cauchy"    # huber, cauchy, geman_mcclure, tukey (MOLA_MAPPER_GNSS_ROBUST_KERNEL)
+        gnss_robust_k: 1.5              # [sigmas] (MOLA_MAPPER_GNSS_ROBUST_K)
+
+        use_imu_gravity: true           # (MOLA_MAPPER_USE_GRAVITY)
+        imu_gravity_sigma_deg: 3.0      # (MOLA_MAPPER_GRAVITY_SIGMA_DEG)
+
+        loop_closure_robust_huber_k: 1.5
+        loop_closure_min_sigma_xyz: 0.05      # [m] (MOLA_MAPPER_LC_MIN_SIGMA_XYZ)
+        loop_closure_min_sigma_ang_deg: 0.25  # [deg] (MOLA_MAPPER_LC_MIN_SIGMA_ANG)
+
+.. dropdown:: Optimizer and feedback to the state estimator
    :icon: list-unordered
 
    .. code-block:: yaml
 
-      estimate_geo_reference: false   # (MOLA_ESTIMATE_GEO_REF)
-      gnss_huber_threshold: 1.5       # [sigmas] (MOLA_GNSS_HUBER_THRESHOLD)
-      convergence_max_position_sigma: 1.0   # [m] (MOLA_MAPPER_CONV_POS_SIGMA)
-      convergence_max_orientation_sigma_deg: 5.0
-      publish_estimated_georef_on_convergence: true
+      enable_optimizer_thread: true
+      optimizer_min_period: 1.0          # [s] (MOLA_MAPPER_OPTIMIZER_PERIOD)
 
-.. dropdown:: Nonlinear optimization
+      feedback_to_state_estimator: false # (MOLA_MAPPER_FEEDBACK)
+      feedback_min_sigma_xyz: 0.10       # [m] (MOLA_MAPPER_FEEDBACK_MIN_SIGMA_XYZ)
+      feedback_min_sigma_ang_deg: 0.5    # [deg] (MOLA_MAPPER_FEEDBACK_MIN_SIGMA_ANG)
+
+   With ``feedback_to_state_estimator``, there must be exactly one
+   ``mola::NavStateFilter`` module in the system.
+
+.. dropdown:: Loop closure
    :icon: list-unordered
 
    .. code-block:: yaml
 
-      additional_isam2_update_steps: 3
-      # Background thread for iSAM2 (recommended for online use):
-      enable_optimizer_thread: true   # (MOLA_MAPPER_OPTIMIZER_THREAD)
+      loop_closure_enabled: true         # (MOLA_MAPPER_LOOP_CLOSURE)
+      loop_closure_pipeline_file: "$(ros2 pkg prefix mola_mapper)/share/mola_mapper/params/loop-closure-f2f-mapper.yaml"  # (MOLA_MAPPER_LC_PIPELINE)
+      loop_closure_check_period_sec: 5.0 # [s] (MOLA_MAPPER_LC_PERIOD)
+      loop_closure_min_new_keyframes: 10
+      loop_closure_incremental: true
+      loop_closure_full_scan_every_n: 10
+      loop_closure_finalize_rounds: 4    # (MOLA_MAPPER_LC_FINALIZE_ROUNDS)
 
-.. dropdown:: High-rate pose publisher
+   The detector is the ``mola_sm_loop_closure`` frame-to-frame engine, used only
+   to find candidate edges. Scans are incremental (pairs with a new keyframe),
+   with a full one every ``loop_closure_full_scan_every_n``. At the end of the
+   run, up to ``loop_closure_finalize_rounds`` passes of full scan plus
+   re-optimization run until no new loop appears. Note that the default of
+   ``loop_closure_enabled`` in the C++ ``Parameters`` struct is ``false``; the
+   provided YAML enables it.
+
+.. dropdown:: Outputs
    :icon: list-unordered
 
    .. code-block:: yaml
 
-      high_rate_pose_publish_rate_hz: 0.0  # [Hz] 0 = disabled (MOLA_MAPPER_PUBLISH_RATE_HZ)
-      high_rate_use_latest_sensors: true
+      # Written at the end of the run (empty: not written)
+      output_tum_trajectory: ""                 # (MOLA_MAPPER_OUTPUT_TUM)
+      output_simplemap: ""                      # (MOLA_MAPPER_OUTPUT_SIMPLEMAP)
+      output_georeference: ""                   # (MOLA_MAPPER_OUTPUT_GEOREF)
+      output_loop_closures: ""                  # (MOLA_MAPPER_OUTPUT_LOOPS)
+      output_state_estimator_tum: ""            # (MOLA_MAPPER_OUTPUT_SE_TUM)
+      output_state_estimator_georeference: ""   # (MOLA_MAPPER_OUTPUT_SE_GEOREF)
+      output_graph_input: ""                    # (MOLA_MAPPER_OUTPUT_GRAPH_INPUT)
 
-.. dropdown:: Map save / load
-   :icon: list-unordered
-
-   .. code-block:: yaml
-
-      load_simplemap_file: ""   # path to .simplemap (MOLA_MAPPER_LOAD_SM)
-      save_simplemap_file: ""   # path to .simplemap (MOLA_MAPPER_SAVE_SM)
-      externalize_after_seconds: 30.0
-
-.. dropdown:: Output trajectory (TUM format)
-   :icon: list-unordered
-
-   .. code-block:: yaml
-
-      # If non-empty, save estimated trajectory at shutdown (and on demand via
-      # the GUI "Output" tab).  Reference frame = reference_frame_name ({map}).
-      save_trajectory_to_file: ""   # (MOLA_MAPPER_TUM_TRAJECTORY_OUTPUT)
-
-   The file is written in
-   `TUM format <https://github.com/MichaelGrupp/evo/wiki/Formats#tum---tum-rgb-d-dataset-trajectory-format>`_
-   (``timestamp tx ty tz qx qy qz qw``), compatible with
-   `evo <https://github.com/MichaelGrupp/evo>`_ for trajectory evaluation.
-
-   Because past poses may be revised by the global optimizer after new data
-   arrives, the file written **at shutdown** is the most accurate snapshot.
-   The "Save trajectory now" button in the GUI captures the current best estimate
-   at any point during a run.
-
-.. dropdown:: Sensor label filters (regex)
-   :icon: list-unordered
-
-   .. code-block:: yaml
-
-      do_process_imu_labels_re: ".*"       # (MOLA_MAPPER_IMU_LABELS_RE)
-      do_process_odometry_labels_re: ".*"  # (MOLA_MAPPER_ODOMETRY_LABELS_RE)
-      do_process_gnss_labels_re: ".*"      # (MOLA_MAPPER_GNSS_LABELS_RE)
+   * ``output_tum_trajectory``: optimized keyframe poses in ``{map}``, in
+     `TUM format <https://github.com/MichaelGrupp/evo/wiki/Formats#tum---tum-rgb-d-dataset-trajectory-format>`_
+     (``timestamp tx ty tz qx qy qz qw``), compatible with
+     `evo <https://github.com/MichaelGrupp/evo>`_.
+   * ``output_simplemap``: ``mrpt::maps::CSimpleMap`` with the optimized
+     keyframes and all their observations.
+   * ``output_georeference``: YAML with the datum, ``T_enu_to_map`` and its sigmas.
+   * ``output_loop_closures``: one edge per line.
+   * ``output_state_estimator_*``: the trajectory and geo-reference of the state
+     estimator, for comparisons (the smoother needs
+     ``keep_finalized_trajectory`` to return its trajectory).
+   * ``output_graph_input``: file prefix of the graph input, to re-solve it
+     offline with :ref:`mola-mapper-reoptimize <mola_mapper_reoptimize>`.
 
 |
 
-.. _mola_mapper_gui:
+.. _mola_mapper_reoptimize:
 
-GUI sub-window
------------------
+mola-mapper-reoptimize
+---------------------------
 
-When a ``mola_viz`` or ``mola_viz_imgui`` visualizer module is loaded, Mapper
-creates a floating sub-window with four tabs:
+Offline tool that re-solves a global graph saved with ``output_graph_input``,
+to try other graph parameters without running the whole system again:
 
-* **Status** — live counts of keyframes, graph edges, odometry frames, IMU
-  factors, and localization convergence status.
-* **Geo-ref** — GNSS factor count, tentative ENU origin, current ``T_enu_to_map``
-  estimate and sigmas, and per-source odometry-drift report.
-* **View** — toggles for keyframe corners, graph edges, odometry-frame axes, and
-  camera-follows-vehicle.
-* **Output** — filename edit box and "Save trajectory now" button for on-demand
-  TUM trajectory export.
+.. code-block:: bash
+
+   mola-mapper-reoptimize INPUT_PREFIX MAPPER_YAML OUTPUT_PREFIX [--no-loops] [--keep-initial]
+
+* ``INPUT_PREFIX``: the ``output_graph_input`` prefix.
+* ``MAPPER_YAML``: a mapper parameters file; only its ``params.graph`` section is
+  used (environment variables apply, as in a launch).
+* ``OUTPUT_PREFIX``: writes ``OUTPUT_PREFIX.tum`` and
+  ``OUTPUT_PREFIX_georef.yaml``.
+* ``--no-loops``: ignore the loop closures.
+* ``--keep-initial``: start from the saved initial guesses. By default, the front
+  end increments are chained from the first keyframe.
 
 |
 
@@ -252,8 +294,7 @@ creates a floating sub-window with four tabs:
 ROS 2 integration
 -----------------------
 
-ROS 2 launch files are provided in the ``ros2-launchs/`` directory.
-See :ref:`mola_mapper_ros2_node` for a description of published topics,
-subscribed topics, parameters, and ``/tf`` conventions.
+See :ref:`mola_mapper_ros2_node` for how to run the provided launch file with a
+rosbag2.
 
 |

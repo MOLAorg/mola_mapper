@@ -294,18 +294,14 @@ GlobalGraphResult optimize_global_graph(
     }
   }
   if (lastCov) {
-    mrpt::poses::CPose3DPDFGaussian pdf;
-    pdf.mean = out.poses.back();
-    pdf.cov = mrpt::gtsam_wrappers::to_mrpt_se3_cov6(*lastCov);
-    out.last_pose = pdf;
+    out.last_pose =
+      mrpt::gtsam_wrappers::to_mrpt_se3_pdf(result.at<gtsam::Pose3>(P(N - 1)), *lastCov);
   }
 
   if (out.num_gnss_factors >= params.georef_min_gnss_factors && out.geodetic_datum && enuCov) {
     mola::Georeferencing g;
     g.geo_coord = *out.geodetic_datum;
-    g.T_enu_to_map.mean =
-      mrpt::poses::CPose3D(mrpt::gtsam_wrappers::toTPose3D(result.at<gtsam::Pose3>(T(0))));
-    g.T_enu_to_map.cov = mrpt::gtsam_wrappers::to_mrpt_se3_cov6(*enuCov);
+    g.T_enu_to_map = mrpt::gtsam_wrappers::to_mrpt_se3_pdf(result.at<gtsam::Pose3>(T(0)), *enuCov);
     // Observable once the azimuth is: a single fix, or fixes close together for
     // their sigmas (standing still), leave it undetermined.
     // MRPT covariance order: x y z yaw pitch roll

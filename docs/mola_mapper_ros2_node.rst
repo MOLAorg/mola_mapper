@@ -64,7 +64,7 @@ Environment variables of the launch file:
      - empty
      - GNSS topic (sensor label ``gps``), optional.
    * - ``MOLA_CAMERA_TOPIC``, ``_1``, ``_2``
-     - (none)
+     - empty
      - Camera image topics (labels ``camera``, ``camera_1``, ``camera_2``), optional. Stored in
        the mapper keyframes with ``MOLA_MAPPER_IMAGE_LABELS='camera.*'``.
    * - ``MOLA_ODOMETRY_TOPIC``

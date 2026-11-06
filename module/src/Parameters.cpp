@@ -76,6 +76,13 @@ void Parameters::loadFrom(const mrpt::containers::yaml & cfg)
   MCP_LOAD_OPT(cfg, imu_gravity_window);
   MCP_LOAD_OPT(cfg, imu_gravity_min_samples);
   MCP_LOAD_OPT(cfg, gyro_sensor_labels_re);
+  MCP_LOAD_OPT(cfg, image_sensor_labels_re);
+  MCP_LOAD_OPT(cfg, image_max_time_offset);
+  MCP_LOAD_OPT(cfg, image_format);
+  MCP_LOAD_OPT(cfg, image_jpeg_quality);
+  ASSERTMSG_(
+    image_format == "jpg" || image_format == "png" || image_format == "inline",
+    "image_format must be one of: jpg, png, inline. Got: '" + image_format + "'");
   MCP_LOAD_OPT(cfg, gyro_noise_density);
   MCP_LOAD_OPT(cfg, gyro_bias_sigma);
   MCP_LOAD_OPT(cfg, gyro_scale_sigma);

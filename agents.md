@@ -54,6 +54,10 @@ mola-cli-launchs/lio_smoother_mapper_from_kitti.yaml    KITTI odometry (params/m
 - GNSS (`gnss_sensor_labels_re`, readings with GGA only): attached to the nearest keyframe
   within `gnss_max_time_offset`, only once a keyframe at or after the reading exists (pending
   queue). No time interpolation: the fix is applied at the keyframe pose.
+- Images (`image_sensor_labels_re`): same nearest-keyframe rule as GNSS, per camera
+  (`Keyframe::nearest`, slot "image:<label>"); written to `<output_simplemap>_Images/`
+  (jpg/png) once final, outside `state_mtx_`; the keyframe keeps a lazy-load copy
+  (`CImage` copies are shallow: never externalize the shared input observation).
 - Gravity (`imu_sensor_labels_re`, first matching label): accelerometer averaged over
   `imu_gravity_window` before each keyframe, stored as a CObservationIMU in the keyframe aux frame.
 - Gyro (`gyro_sensor_labels_re`, first matching label): readings integrated between

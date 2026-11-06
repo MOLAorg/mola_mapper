@@ -121,6 +121,20 @@ struct Parameters
   double gyro_bias_sigma = 0.005;    ///< [rad/s] without a bias source estimate
   double gyro_scale_sigma = 0.005;   ///< relative scale factor error
   double gyro_max_gap = 0.1;         ///< [s] longer gaps between readings: no factor
+
+  /** Regex of the sensor labels of camera images (CObservationImage) to store
+   *  in the keyframes (empty: none), e.g. for visual place recognition. As
+   *  for GNSS, each image goes to the keyframe nearest in time, within
+   *  image_max_time_offset, and a keyframe keeps the nearest image of each
+   *  camera, so no image is stored twice. */
+  std::string image_sensor_labels_re;
+  double image_max_time_offset = 0.5;  ///< [s]
+  /** Images are written as "jpg" or "png" files to `<output_simplemap>_Images/`
+   *  (without the extension) once no closer image can replace them, or kept
+   *  "inline" in RAM and in the simplemap. Inline too if output_simplemap is
+   *  empty. */
+  std::string image_format = "jpg";
+  int image_jpeg_quality = 95;  ///< [1-100]
   /** @} */
 
   /** @name Global graph optimization

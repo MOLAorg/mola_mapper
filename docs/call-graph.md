@@ -113,11 +113,17 @@ keyframe index.
 ## Raw data attachment
 
 `onNewObservation()` filters by sensor label regex (`gnss_sensor_labels_re`,
-`imu_sensor_labels_re`, `gyro_sensor_labels_re`) and stores under `state_mtx_`:
+`imu_sensor_labels_re`, `gyro_sensor_labels_re`, `image_sensor_labels_re`) and
+stores under `state_mtx_`:
 
 - GNSS: `attach_gnss_locked()` keeps the reading pending until a keyframe at or
   after its stamp exists. Then it is attached to the nearest keyframe within
-  `gnss_max_time_offset`; a keyframe keeps only its closest reading.
+  `gnss_max_time_offset`; a keyframe keeps only its closest reading
+  (`attach_nearest_locked()`, slot "gnss").
+- Images: the same rule (slot "image:<label>", `pending_images_`). Once a later
+  image of that camera is farther from the keyframe than the attached one (and a
+  newer keyframe exists), `finish_images_locked()` swaps it for a copy referring
+  to a file, written by `write_images()` after releasing the lock.
 - Accelerometer: queued in `imu_samples_` (window plus a few seconds).
 - Gyroscope: the first IMU label matching `gyro_sensor_labels_re` is queued in
   `gyro_samples_` (last 60 s).

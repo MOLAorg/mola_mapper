@@ -37,12 +37,14 @@
 #include <mrpt/maps/CSimpleMap.h>
 #include <mrpt/obs/CObservationGPS.h>
 #include <mrpt/obs/CObservationIMU.h>
+#include <mrpt/obs/CObservationImage.h>
 #include <mrpt/obs/CSensoryFrame.h>
 #include <mrpt/poses/CPose3D.h>
 
 #include <atomic>
 #include <condition_variable>
 #include <deque>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -177,10 +179,16 @@ private:
     mrpt::poses::CPose3DPDFGaussian pose_in_source;
     /// Observations of the front end (e.g. the LiDAR scan).
     mrpt::obs::CSensoryFrame observations;
-    /// GNSS readings and gravity attached by the mapper.
+    /// GNSS readings, images and gravity attached by the mapper.
     mrpt::obs::CSensoryFrame::Ptr aux = mrpt::obs::CSensoryFrame::Create();
-    /// Time offset of the attached GNSS reading [s] (to keep the nearest one).
-    std::optional<double> gnss_time_offset;
+    /// Observations attached as the nearest one in time, per slot ("gnss", or
+    /// "image:<label>"), with their time offset [s], to keep the nearest one.
+    struct Nearest
+    {
+      mrpt::obs::CObservation::Ptr obs;
+      double dt = 0;
+    };
+    std::map<std::string, Nearest> nearest;
     /// Current estimate in the map frame.
     mrpt::poses::CPose3D pose_in_map;
     /// Gyroscope rotation (vehicle frame) since the previous keyframe, sigma [rad].
@@ -215,6 +223,8 @@ private:
   bool use_imu_input_ = false;
   std::regex gyro_labels_re_;
   bool use_gyro_input_ = false;
+  std::regex image_labels_re_;
+  bool use_image_input_ = false;
   std::vector<std::shared_ptr<mola::ImuBiasSource>> imu_bias_sources_;
 
   /** @name State, under state_mtx_
@@ -222,6 +232,11 @@ private:
   mutable std::mutex state_mtx_;
   std::vector<Keyframe> keyframes_;
   std::deque<mrpt::obs::CObservationGPS::Ptr> pending_gnss_;
+  /// Images newer than the newest keyframe, waiting for the next one.
+  std::deque<mrpt::obs::CObservationImage::Ptr> pending_images_;
+  /// Attached images not written to a file yet: (keyframe index, slot). A
+  /// closer image may still replace them.
+  std::vector<std::pair<std::size_t, std::string>> unwritten_images_;
   std::deque<ImuSample> imu_samples_;
   /// Accelerometer readings of the first IMU matching imu_sensor_labels_re.
   std::string gravity_label_;
@@ -248,8 +263,41 @@ private:
   bool finalized_ = false;
   /** @} */
 
+  enum class AttachResult
+  {
+    Attached,
+    Pending,  ///< no keyframe at or after it yet
+    Dropped
+  };
+  /** Attaches `o` to the keyframe nearest in time, within maxOffset, unless
+   *  that one already has a closer observation in the same slot. Only once a
+   *  keyframe at or after it exists: from then on, its two neighbors in time
+   *  are final. */
+  AttachResult attach_nearest_locked(
+    const mrpt::obs::CObservation::Ptr & o, const std::string & slot, double maxOffset,
+    std::size_t * attachedTo = nullptr);
   void attach_gnss_locked(const mrpt::obs::CObservationGPS::Ptr & gps);
   void retry_pending_gnss_locked();
+
+  /// An image file to write, outside state_mtx_.
+  struct ImageWrite
+  {
+    mrpt::obs::CObservationImage::Ptr image;
+    std::string path;
+  };
+  void attach_image_locked(
+    const mrpt::obs::CObservationImage::Ptr & img, std::vector<ImageWrite> & writes);
+  void retry_pending_images_locked();
+  void remember_unwritten_image_locked(std::size_t kfIdx, const std::string & slot);
+  /** Replaces attached images that no closer image can replace any more (all,
+   *  if `newest` is empty) by copies referring to image files, which are
+   *  appended to `writes`. `newest`: label and time of the newest image. */
+  void finish_images_locked(
+    const std::optional<std::pair<std::string, mrpt::Clock::time_point>> & newest,
+    std::vector<ImageWrite> & writes);
+  void write_images(const std::vector<ImageWrite> & writes);
+  /// Directory of the image files (empty: images are kept inline).
+  std::string image_dir_;
   std::optional<KeyFrameID> insert_keyframe_impl(
     const KeyframeInsertRequest & req, const RecordedGyroBias & bias,
     const mrpt::serialization::CSerializable::Ptr & recordEntry);

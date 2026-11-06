@@ -12,6 +12,7 @@
 #   export MOLA_INPUT_ROSBAG2=/path/to/bag
 #   export MOLA_LIDAR_TOPIC=/ouster/points   MOLA_IMU_TOPIC=/ouster/imu
 #   export MOLA_GNSS_TOPIC=/gps/fix          # optional
+#   export MOLA_CAMERA_TOPIC=/camera/image   # optional, label "camera" (also _1, _2)
 #   mola-cli $(ros2 pkg prefix mola_mapper)/share/mola_mapper/mola-cli-launchs/lio_smoother_mapper_from_rosbag2.yaml
 #
 # Main switches (environment variables):
@@ -86,4 +87,19 @@ modules:
         - topic: ${MOLA_ODOMETRY_TOPIC|''}
           type: CObservationOdometry
           sensorLabel: odom_wheels
+          is_optional: true
+        # Camera images (up to three), stored in the mapper keyframes if
+        # MOLA_MAPPER_IMAGE_LABELS matches the labels, e.g. 'camera.*' (and in the
+        # LIO simplemap, with MOLA_SIMPLEMAP_ATTACH_LABEL):
+        - topic: ${MOLA_CAMERA_TOPIC|''}
+          type: CObservationImage
+          sensorLabel: ${MOLA_CAMERA_SENSOR_NAME|camera}
+          is_optional: true
+        - topic: ${MOLA_CAMERA_TOPIC_1|''}
+          type: CObservationImage
+          sensorLabel: ${MOLA_CAMERA_SENSOR_NAME_1|camera_1}
+          is_optional: true
+        - topic: ${MOLA_CAMERA_TOPIC_2|''}
+          type: CObservationImage
+          sensorLabel: ${MOLA_CAMERA_SENSOR_NAME_2|camera_2}
           is_optional: true

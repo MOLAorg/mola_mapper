@@ -31,6 +31,15 @@ params:
   gyro_scale_sigma: ${MOLA_MAPPER_GYRO_SCALE_SIGMA|0.005}
   gyro_max_gap: 0.1  # [s]
 
+  # Camera images stored in the keyframes (regex; empty: none): each one goes to
+  # the nearest keyframe, which keeps the nearest one of each camera. Written as
+  # jpg/png files to <output_simplemap>_Images/ ("inline": kept in RAM). Not
+  # recorded by record_input:
+  image_sensor_labels_re: "${MOLA_MAPPER_IMAGE_LABELS|}"
+  image_max_time_offset: ${MOLA_MAPPER_IMAGE_MAX_TIME_OFFSET|0.5}  # [s]
+  image_format: "${MOLA_MAPPER_IMAGE_FORMAT|jpg}"  # jpg, png, inline
+  image_jpeg_quality: ${MOLA_MAPPER_IMAGE_JPEG_QUALITY|95}
+
   graph:
     # LIO keyframe chain: stiff (the front end is locally accurate; only its slow
     # drift gives way to GNSS and loops). Sigmas: floor + random walk per sqrt(m):

@@ -25,17 +25,21 @@
 #include <mola_mapper/Mapper.h>
 #include <mrpt/core/bits_math.h>
 #include <mrpt/core/exceptions.h>
+#include <mrpt/core/format.h>
 #include <mrpt/math/wrap2pi.h>
 #include <mrpt/obs/CObservationGPS.h>
 #include <mrpt/obs/CObservationIMU.h>
+#include <mrpt/obs/CObservationImage.h>
 #include <mrpt/system/filesystem.h>
 
 #include <Eigen/Dense>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <iostream>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace mola
@@ -175,6 +179,95 @@ void test_gnss_attachment()
   ASSERT_EQUAL_(g[3].size(), 1U);
   ASSERT_NEAR_(g[3][0], 2.6, 1e-3);
   std::cout << "GNSS attachment   OK\n";
+}
+
+mrpt::obs::CObservationImage::Ptr image(double t, const std::string & label = "cam")
+{
+  auto o = mrpt::obs::CObservationImage::Create();
+  o->sensorLabel = label;
+  o->timestamp = at(t);
+  o->image = mrpt::img::CImage(16, 8, mrpt::img::CH_RGB);
+  return o;
+}
+
+/// Images attached to each keyframe of the central map, by their time [s].
+std::vector<std::vector<double>> attached_images(const mola::mapper::Mapper & m)
+{
+  std::vector<std::vector<double>> out;
+  for (const auto & [pose, sf, twist] : m.simple_map()) {
+    out.emplace_back();
+    for (const auto & o : *sf) {
+      if (std::dynamic_pointer_cast<mrpt::obs::CObservationImage>(o)) {
+        out.back().push_back(mrpt::Clock::toDouble(o->timestamp) - T0);
+      }
+    }
+  }
+  return out;
+}
+
+/** Camera images follow the GNSS rule (nearest keyframe, a closer one replaces
+ *  it), per camera. An image is written to a file, and replaced in the
+ *  keyframe by a reference to it, once no closer one can come; the rest at
+ *  the end. The input observations keep their pixels. */
+void test_image_attachment()
+{
+  const std::string sm = mrpt::system::getTempFileName() + "_mapper.simplemap";
+  const std::string dir = mrpt::system::fileNameChangeExtension(sm, "") + "_Images";
+  auto m = make_mapper(
+    "  image_sensor_labels_re: \"cam.*\"\n"
+    "  image_max_time_offset: 0.5\n"
+    "  image_format: png\n"
+    "  output_simplemap: \"" +
+    sm + "\"\n");
+  std::vector<mrpt::obs::CObservationImage::Ptr> inputs;
+  const auto feed = [&](double t, const std::string & label = "cam") {
+    inputs.push_back(image(t, label));
+    m->onNewObservation(inputs.back());
+  };
+  insert_keyframe(*m, 0.0, CPose3D::Identity());
+  feed(0.9);  // pending: no keyframe after it yet
+  insert_keyframe(*m, 1.0, CPose3D(1, 0, 0, 0, 0, 0));
+  // All pending until keyframe 2:
+  feed(1.02);           // closer to keyframe 1: replaces 0.9
+  feed(1.03, "cam_r");  // another camera: its own slot
+  feed(1.30);           // farther than 1.02: dropped
+  insert_keyframe(*m, 2.0, CPose3D(2, 0, 0, 0, 0, 0));
+  const auto file102 = mrpt::system::pathJoin({dir, mrpt::format("cam_%.09f.png", T0 + 1.02)});
+  ASSERT_(!mrpt::system::fileExists(file102));
+  feed(2.6);  // pending until keyframe 3
+  // A later image came: 1.02 is final, and written by a background thread:
+  for (int i = 0; i < 200 && !mrpt::system::fileExists(file102); i++) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  ASSERT_(mrpt::system::fileExists(file102));
+  insert_keyframe(*m, 3.0, CPose3D(3, 0, 0, 0, 0, 0));
+  m->finalize();
+
+  const auto g = attached_images(*m);
+  ASSERT_EQUAL_(g.size(), 4U);
+  ASSERT_(g[0].empty());
+  ASSERT_EQUAL_(g[1].size(), 2U);
+  ASSERT_(g[2].empty());
+  ASSERT_EQUAL_(g[3].size(), 1U);
+  ASSERT_NEAR_(g[3][0], 2.6, 1e-3);
+  ASSERT_(mrpt::system::fileExists(
+    mrpt::system::pathJoin({dir, mrpt::format("cam_r_%.09f.png", T0 + 1.03)})));
+  ASSERT_(mrpt::system::fileExists(
+    mrpt::system::pathJoin({dir, mrpt::format("cam_%.09f.png", T0 + 2.6)})));
+  ASSERT_(!mrpt::system::fileExists(
+    mrpt::system::pathJoin({dir, mrpt::format("cam_%.09f.png", T0 + 0.9)})));
+  for (const auto & [pose, sf, twist] : m->simple_map()) {
+    for (const auto & o : *sf) {
+      if (const auto img = std::dynamic_pointer_cast<mrpt::obs::CObservationImage>(o); img) {
+        ASSERT_(img->image.isExternallyStored());
+      }
+    }
+  }
+  for (const auto & in : inputs) {
+    ASSERT_(!in->image.isExternallyStored());
+    ASSERT_EQUAL_(in->image.getWidth(), 16);
+  }
+  std::cout << "Image attachment  OK\n";
 }
 
 /** The gravity observation of a keyframe averages the accelerometer of one IMU
@@ -399,6 +492,7 @@ int main()
 {
   try {
     test_gnss_attachment();
+    test_image_attachment();
     test_gravity_from_a_single_imu();
     test_gravity_when_imu_arrives_late();
     test_gyro_rotation_in_vehicle_frame();

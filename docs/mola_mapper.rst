@@ -163,6 +163,26 @@ with an environment variable (shown in parentheses below).
       gyro_scale_sigma: 0.005            # (MOLA_MAPPER_GYRO_SCALE_SIGMA)
       gyro_max_gap: 0.1                  # [s] longer gaps between readings: no factor
 
+      # Camera images (CObservationImage) stored in the keyframes (empty: none)
+      image_sensor_labels_re: "${MOLA_MAPPER_IMAGE_LABELS|}"
+      image_max_time_offset: 0.5         # [s] (MOLA_MAPPER_IMAGE_MAX_TIME_OFFSET)
+      image_format: "jpg"                # jpg, png, inline (MOLA_MAPPER_IMAGE_FORMAT)
+      image_jpeg_quality: 95             # (MOLA_MAPPER_IMAGE_JPEG_QUALITY)
+
+   Images follow the GNSS rule: each one goes to the keyframe nearest in time, and
+   a keyframe keeps the nearest image of each camera, so no image is stored twice.
+   Once no closer image can replace it, an image is written to
+   ``<output_simplemap>_Images/`` and the keyframe keeps a reference to that file
+   (lazy-load); with ``inline`` or no ``output_simplemap``, images stay in RAM.
+   They are not used by the graph yet, nor recorded with ``record_input`` (replays
+   have no images). Images already stored as files (lazy-load datasets) are kept
+   as they are. In ``lio_smoother_mapper_from_rosbag2.yaml`` the camera topics are
+   ``MOLA_CAMERA_TOPIC``, ``_1``, ``_2`` (labels ``camera``, ``camera_1``,
+   ``camera_2``): with ``MOLA_MAPPER_IMAGE_LABELS='camera.*'``, each keyframe gets
+   at most one image of each camera, if one is within ``image_max_time_offset``.
+   Live, the images come from the ``BridgeROS2`` image subscriptions
+   (``msg_type: Image``), as the other raw data.
+
    The gyroscope bias comes from the first ``mola::ImuBiasSource`` module with an
    estimate (e.g. the state estimator with ``MOLA_NAVSTATE_IMU_BIAS_TRACKING=true``).
    Otherwise it is taken as zero, with sigma ``gyro_bias_sigma``.

@@ -25,10 +25,12 @@
 #include <mola_mapper/GlobalGraphIO.h>
 #include <mola_mapper/Mapper.h>
 #include <mrpt/core/bits_math.h>
+#include <mrpt/core/format.h>
 #include <mrpt/core/lock_helper.h>
 #include <mrpt/math/CMatrixFixed.h>
 #include <mrpt/poses/CPose3DQuat.h>
 #include <mrpt/system/datetime.h>
+#include <mrpt/system/filesystem.h>
 
 #include <Eigen/Dense>
 #include <algorithm>
@@ -49,16 +51,34 @@ double abs_time_diff(const mrpt::Clock::time_point & a, const mrpt::Clock::time_
   return std::abs(mrpt::system::timeDifference(a, b));
 }
 
-/// The sensory frame without its GNSS readings.
-mrpt::obs::CSensoryFrame::Ptr without_gnss(const mrpt::obs::CSensoryFrame & sf)
+/** A copy of the sensory frame with `add` and without `remove`. A new one, not
+ *  modified in place: snapshots of the keyframes share the old one. */
+mrpt::obs::CSensoryFrame::Ptr replaced(
+  const mrpt::obs::CSensoryFrame & sf, const mrpt::obs::CObservation::Ptr & remove,
+  const mrpt::obs::CObservation::Ptr & add)
 {
   auto out = mrpt::obs::CSensoryFrame::Create();
   for (const auto & o : sf) {
-    if (!std::dynamic_pointer_cast<const mrpt::obs::CObservationGPS>(o)) {
+    if (o != remove) {
       out->insert(std::const_pointer_cast<mrpt::obs::CObservation>(o));
     }
   }
+  if (add) {
+    out->insert(add);
+  }
   return out;
+}
+
+/** A copy of `img` whose image refers to `fileName` (lazy-load) instead of
+ *  holding the pixels. `img` is left untouched: CImage copies are shallow, and
+ *  the observation is shared with other modules. */
+mrpt::obs::CObservationImage::Ptr external_image_copy(
+  const mrpt::obs::CObservationImage & img, const std::string & fileName)
+{
+  auto copy = std::make_shared<mrpt::obs::CObservationImage>(img);
+  copy->image = mrpt::img::CImage();
+  copy->image.setExternalStorage(fileName);
+  return copy;
 }
 
 /// Runs one end-of-run step, so a failure in it does not prevent the others.
@@ -106,6 +126,17 @@ void Mapper::initialize(const mrpt::containers::yaml & cfg)
   if (use_imu_input_) {
     imu_labels_re_ = std::regex(params_.imu_sensor_labels_re);
   }
+  use_image_input_ = !params_.image_sensor_labels_re.empty();
+  if (use_image_input_) {
+    image_labels_re_ = std::regex(params_.image_sensor_labels_re);
+  }
+  image_dir_.clear();
+  if (use_image_input_ && params_.image_format != "inline" && !params_.output_simplemap.empty()) {
+    image_dir_ = mrpt::system::fileNameChangeExtension(params_.output_simplemap, "") + "_Images";
+    ASSERTMSG_(
+      mrpt::system::directoryExists(image_dir_) || mrpt::system::createDirectory(image_dir_),
+      "Cannot create the keyframe images directory: " + image_dir_);
+  }
   use_gyro_input_ = !params_.gyro_sensor_labels_re.empty();
   if (use_gyro_input_) {
     gyro_labels_re_ = std::regex(params_.gyro_sensor_labels_re);
@@ -152,14 +183,14 @@ void Mapper::initialize(const mrpt::containers::yaml & cfg)
   start_loop_closure_thread();
 
   MRPT_LOG_INFO_STREAM(
-    "Initialized: GNSS=" << (use_gnss_input_ ? params_.gnss_sensor_labels_re : "none")
-                         << ", gravity IMU="
-                         << (use_imu_input_ ? params_.imu_sensor_labels_re : "none")
-                         << ", gyro IMU="
-                         << (use_gyro_input_ ? params_.gyro_sensor_labels_re : "none")
-                         << ", loop closure=" << (params_.loop_closure_enabled ? "on" : "off")
-                         << ", feedback to the state estimator="
-                         << (params_.feedback_to_state_estimator ? "on" : "off"));
+    "Initialized: GNSS="
+    << (use_gnss_input_ ? params_.gnss_sensor_labels_re : "none")
+    << ", gravity IMU=" << (use_imu_input_ ? params_.imu_sensor_labels_re : "none")
+    << ", gyro IMU=" << (use_gyro_input_ ? params_.gyro_sensor_labels_re : "none")
+    << ", images=" << (use_image_input_ ? params_.image_sensor_labels_re : "none")
+    << ", loop closure=" << (params_.loop_closure_enabled ? "on" : "off")
+    << ", feedback to the state estimator="
+    << (params_.feedback_to_state_estimator ? "on" : "off"));
   MRPT_END
 }
 
@@ -184,7 +215,24 @@ void Mapper::onNewObservation(const CObservation::ConstPtr & o)
                       std::regex_match(imu->sensorLabel, gyro_labels_re_);
   const bool isGravity = use_imu_input_ && imu && imu->has(mrpt::obs::IMU_X_ACC) &&
                          std::regex_match(imu->sensorLabel, imu_labels_re_);
-  if (!isGnss && !isGyro && !isGravity) {
+  const auto img = std::dynamic_pointer_cast<const mrpt::obs::CObservationImage>(o);
+  const bool isImage =
+    use_image_input_ && img && std::regex_match(img->sensorLabel, image_labels_re_);
+  if (!isGnss && !isGyro && !isGravity && !isImage) {
+    return;
+  }
+
+  if (isImage) {
+    auto lck = mrpt::lockHelper(state_mtx_);
+    if (finalized_) {
+      return;
+    }
+    // Not recorded: images do not change the graph, and they would make the
+    // record huge. Replays have no images.
+    const auto im = std::const_pointer_cast<mrpt::obs::CObservationImage>(img);
+    pending_images_.push_back(im);
+    retry_pending_images_locked();
+    finish_images_locked(std::make_pair(im->sensorLabel, im->timestamp));
     return;
   }
 
@@ -256,42 +304,150 @@ void Mapper::add_gravity_sample_locked(const mrpt::obs::CObservationIMU & imu)
   }
 }
 
-void Mapper::attach_gnss_locked(const mrpt::obs::CObservationGPS::Ptr & gps)
+Mapper::AttachResult Mapper::attach_nearest_locked(
+  const mrpt::obs::CObservation::Ptr & o, const std::string & slot, double maxOffset,
+  std::size_t * attachedTo)
 {
-  // Wait until a keyframe at or after this reading exists: from then on, its two
-  // neighbors in time are final.
-  if (keyframes_.empty() || keyframes_.back().stamp < gps->timestamp) {
-    pending_gnss_.push_back(gps);
-    return;
+  if (keyframes_.empty() || keyframes_.back().stamp < o->timestamp) {
+    return AttachResult::Pending;
   }
   const auto it = std::lower_bound(
-    keyframes_.begin(), keyframes_.end(), gps->timestamp,
+    keyframes_.begin(), keyframes_.end(), o->timestamp,
     [](const Keyframe & kf, const mrpt::Clock::time_point & t) { return kf.stamp < t; });
 
   Keyframe * best = nullptr;
-  double bestDt = params_.gnss_max_time_offset;
+  double bestDt = maxOffset;
   for (auto c : {it, it == keyframes_.begin() ? keyframes_.end() : std::prev(it)}) {
     if (c == keyframes_.end()) {
       continue;
     }
-    const double dt = abs_time_diff(c->stamp, gps->timestamp);
+    const double dt = abs_time_diff(c->stamp, o->timestamp);
     if (dt <= bestDt) {
       bestDt = dt;
       best = &*c;
     }
   }
   if (best == nullptr) {
-    return;  // no keyframe close enough in time
+    return AttachResult::Dropped;  // no keyframe close enough in time
   }
-  if (best->gnss_time_offset) {
-    if (*best->gnss_time_offset <= bestDt) {
-      return;  // that keyframe already has a closer reading
+  mrpt::obs::CObservation::Ptr prev;
+  if (const auto n = best->nearest.find(slot); n != best->nearest.end()) {
+    if (n->second.dt <= bestDt) {
+      return AttachResult::Dropped;  // that keyframe already has a closer one
     }
-    best->aux = without_gnss(*best->aux);
+    prev = n->second.obs;
   }
-  best->aux->insert(gps);
-  best->gnss_time_offset = bestDt;
-  optimizer_new_data_.store(true);
+  best->aux = replaced(*best->aux, prev, o);
+  best->nearest[slot] = {o, bestDt};
+  if (attachedTo != nullptr) {
+    *attachedTo = static_cast<std::size_t>(best - keyframes_.data());
+  }
+  return AttachResult::Attached;
+}
+
+void Mapper::attach_gnss_locked(const mrpt::obs::CObservationGPS::Ptr & gps)
+{
+  switch (attach_nearest_locked(gps, "gnss", params_.gnss_max_time_offset)) {
+    case AttachResult::Pending:
+      pending_gnss_.push_back(gps);
+      break;
+    case AttachResult::Attached:
+      optimizer_new_data_.store(true);
+      break;
+    case AttachResult::Dropped:
+      break;
+  }
+}
+
+bool Mapper::attach_or_pend_image_locked(const mrpt::obs::CObservationImage::Ptr & img)
+{
+  const std::string slot = "image:" + img->sensorLabel;
+  std::size_t kfIdx = 0;
+  switch (attach_nearest_locked(img, slot, params_.image_max_time_offset, &kfIdx)) {
+    case AttachResult::Pending:
+      return false;
+    case AttachResult::Attached: {
+      const std::pair<std::size_t, std::string> entry{kfIdx, slot};
+      if (
+        std::find(unwritten_images_.begin(), unwritten_images_.end(), entry) ==
+        unwritten_images_.end()) {
+        unwritten_images_.push_back(entry);
+      }
+      break;
+    }
+    case AttachResult::Dropped:
+      break;
+  }
+  return true;
+}
+
+void Mapper::retry_pending_images_locked()
+{
+  const std::deque<mrpt::obs::CObservationImage::Ptr> pending = std::move(pending_images_);
+  pending_images_.clear();
+  for (const auto & img : pending) {
+    if (!attach_or_pend_image_locked(img)) {
+      pending_images_.push_back(img);
+    }
+  }
+  // Bounded, in case keyframes stop arriving (e.g. a stopped vehicle): older
+  // ones could only go to a keyframe farther than image_max_time_offset from
+  // them, but for the front end lag.
+  constexpr double FRONT_END_LAG_MARGIN = 2.0;  // [s]
+  while (!pending_images_.empty() &&
+         mrpt::system::timeDifference(
+           pending_images_.front()->timestamp, pending_images_.back()->timestamp) >
+           params_.image_max_time_offset + FRONT_END_LAG_MARGIN) {
+    pending_images_.pop_front();
+  }
+}
+
+void Mapper::finish_images_locked(
+  const std::optional<std::pair<std::string, mrpt::Clock::time_point>> & newest)
+{
+  for (auto it = unwritten_images_.begin(); it != unwritten_images_.end();) {
+    auto & kf = keyframes_.at(it->first);
+    auto & n = kf.nearest.at(it->second);
+    // Images of a camera come in time order: a newer one, farther from the
+    // keyframe than the attached one, means that no closer one can come any
+    // more. Except for the newest keyframe: pending images may still go to it.
+    if (
+      newest && (it->first + 1 == keyframes_.size() || it->second != "image:" + newest->first ||
+                 abs_time_diff(kf.stamp, newest->second) <= n.dt || newest->second < kf.stamp)) {
+      ++it;
+      continue;
+    }
+    const auto img = std::dynamic_pointer_cast<mrpt::obs::CObservationImage>(n.obs);
+    ASSERT_(img);
+    // Already a file (e.g. from a lazy-load dataset), or not 8-bit: kept as is.
+    if (
+      !image_dir_.empty() && !img->image.isExternallyStored() &&
+      img->image.getPixelDepth() == mrpt::img::PixelDepth::D8U) {
+      const std::string fileName = mrpt::format(
+        "%s_%.09f.%s", mrpt::system::fileNameStripInvalidChars(img->sensorLabel).c_str(),
+        mrpt::Clock::toDouble(img->timestamp), params_.image_format.c_str());
+      auto ext = external_image_copy(*img, fileName);
+      kf.aux = replaced(*kf.aux, n.obs, ext);
+      n.obs = ext;
+      const auto path = mrpt::system::pathJoin({image_dir_, fileName});
+      const int quality = params_.image_jpeg_quality;
+      image_writes_.push_back(disk_io_.enqueue([this, img, path, quality]() {
+        try {
+          if (!img->image.saveToFile(path, quality)) {
+            MRPT_LOG_ERROR_STREAM("Could not write the keyframe image: " << path);
+          }
+        } catch (const std::exception & e) {
+          MRPT_LOG_ERROR_STREAM("Could not write the keyframe image: " << path << ": " << e.what());
+        }
+      }));
+    }
+    it = unwritten_images_.erase(it);
+  }
+  // Forget the writes already done:
+  while (!image_writes_.empty() &&
+         image_writes_.front().wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+    image_writes_.pop_front();
+  }
 }
 
 void Mapper::retry_pending_gnss_locked()
@@ -371,7 +527,7 @@ bool Mapper::attach_gravity_locked(Keyframe & kf)
   obs->set(mrpt::obs::IMU_X_ACC, sum.x / n);
   obs->set(mrpt::obs::IMU_Y_ACC, sum.y / n);
   obs->set(mrpt::obs::IMU_Z_ACC, sum.z / n);
-  kf.aux->insert(obs);
+  kf.aux = replaced(*kf.aux, nullptr, obs);
   return true;
 }
 
@@ -464,6 +620,7 @@ std::optional<SharedKeyframeMap::KeyFrameID> Mapper::insert_keyframe_impl(
     }
 
     retry_pending_gnss_locked();
+    retry_pending_images_locked();
   }
   optimizer_new_data_.store(true);
   notify_optimizer();
@@ -531,8 +688,15 @@ GlobalGraphInput Mapper::graph_input_locked() const
     g.initial_guess = kf.pose_in_map;
     g.gyro_rotation_from_prev = kf.gyro_rotation_from_prev;
     g.gyro_rotation_sigma = kf.gyro_rotation_sigma;
-    // A copy: the original may get new GNSS readings while solving.
-    g.aux_observations = std::make_shared<mrpt::obs::CSensoryFrame>(*kf.aux);
+    // A copy: the original may get new GNSS readings while solving. Without
+    // images, which the graph does not use:
+    auto aux = mrpt::obs::CSensoryFrame::Create();
+    for (const auto & o : *kf.aux) {
+      if (!std::dynamic_pointer_cast<const mrpt::obs::CObservationImage>(o)) {
+        aux->insert(std::const_pointer_cast<mrpt::obs::CObservation>(o));
+      }
+    }
+    g.aux_observations = aux;
     in.keyframes.push_back(std::move(g));
   }
   in.loops = loops_;
@@ -807,6 +971,20 @@ void Mapper::finalize()
       guarded(*this, "Final solve", [this] { optimize_now(); });
     }
   }
+  // The images still waiting for a possibly closer one, and all the image
+  // files written before the simplemap that refers to them:
+  guarded(*this, "Writing the keyframe images", [this] {
+    std::deque<std::future<void>> writes;
+    {
+      auto lck = mrpt::lockHelper(state_mtx_);
+      finish_images_locked(std::nullopt);
+      writes = std::move(image_writes_);
+      image_writes_.clear();
+    }
+    for (auto & w : writes) {
+      w.wait();
+    }
+  });
   save_outputs();
 }
 

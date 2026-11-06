@@ -44,8 +44,8 @@ namespace
 using gtsam::symbol_shorthand::P;  // P(i): vehicle pose of keyframe i, in {map}
 using gtsam::symbol_shorthand::T;  // T(0): T_enu_to_map
 
-/// Sigmas of an odometry edge, in GTSAM Pose3 tangent order (Rx, Ry, Rz, tx, ty, tz).
-gtsam::Vector6 odometry_edge_sigmas(
+/// Noise model of an odometry edge, from the (inflated) diagonal of its MRPT covariance.
+gtsam::SharedNoiseModel odometry_edge_noise(
   const mrpt::poses::CPose3DPDFGaussian & rel, const GlobalGraphParams & p)
 {
   // MRPT covariance order: x y z yaw pitch roll
@@ -61,9 +61,18 @@ gtsam::Vector6 odometry_edge_sigmas(
         p.odometry_additional_noise_ang_deg + p.odometry_noise_ang_deg_per_sqrt_m * sqrtStep) +
       p.odometry_noise_ang_per_rad * turned;
   }
-  gtsam::Vector6 sigmas;
-  sigmas << s[5], s[4], s[3], s[0], s[1], s[2];
-  return sigmas;
+  // The sigmas are in MRPT layout (global translation, yaw/pitch/roll): convert
+  // them into the GTSAM tangent of the increment, rotation included.
+  mrpt::poses::CPose3DPDFGaussian inflated;
+  inflated.mean = rel.mean;
+  inflated.cov.setZero();
+  for (int k = 0; k < 6; k++) {
+    inflated.cov(k, k) = s[k] * s[k];
+  }
+  gtsam::Pose3 unused;
+  gtsam::Matrix6 cov;
+  mrpt::gtsam_wrappers::to_gtsam_se3_cov6(inflated, unused, cov);
+  return gtsam::noiseModel::Gaussian::Covariance(cov);
 }
 
 void add_odometry_factors(
@@ -76,8 +85,7 @@ void add_odometry_factors(
     if (prev.source_frame == cur.source_frame) {
       const mrpt::poses::CPose3DPDFGaussian rel = cur.pose_in_source - prev.pose_in_source;
       fg.emplace_shared<gtsam::BetweenFactor<gtsam::Pose3>>(
-        P(i - 1), P(i), mrpt::gtsam_wrappers::toPose3(rel.mean),
-        gtsam::noiseModel::Diagonal::Sigmas(odometry_edge_sigmas(rel, params)));
+        P(i - 1), P(i), mrpt::gtsam_wrappers::toPose3(rel.mean), odometry_edge_noise(rel, params));
     } else {
       // A different source (e.g. the front end restarted): keep the graph connected
       // with a weak edge at the initial guesses.
@@ -294,18 +302,14 @@ GlobalGraphResult optimize_global_graph(
     }
   }
   if (lastCov) {
-    mrpt::poses::CPose3DPDFGaussian pdf;
-    pdf.mean = out.poses.back();
-    pdf.cov = mrpt::gtsam_wrappers::to_mrpt_se3_cov6(*lastCov);
-    out.last_pose = pdf;
+    out.last_pose =
+      mrpt::gtsam_wrappers::to_mrpt_se3_pdf(result.at<gtsam::Pose3>(P(N - 1)), *lastCov);
   }
 
   if (out.num_gnss_factors >= params.georef_min_gnss_factors && out.geodetic_datum && enuCov) {
     mola::Georeferencing g;
     g.geo_coord = *out.geodetic_datum;
-    g.T_enu_to_map.mean =
-      mrpt::poses::CPose3D(mrpt::gtsam_wrappers::toTPose3D(result.at<gtsam::Pose3>(T(0))));
-    g.T_enu_to_map.cov = mrpt::gtsam_wrappers::to_mrpt_se3_cov6(*enuCov);
+    g.T_enu_to_map = mrpt::gtsam_wrappers::to_mrpt_se3_pdf(result.at<gtsam::Pose3>(T(0)), *enuCov);
     // Observable once the azimuth is: a single fix, or fixes close together for
     // their sigmas (standing still), leave it undetermined.
     // MRPT covariance order: x y z yaw pitch roll

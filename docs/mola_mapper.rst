@@ -178,9 +178,10 @@ with an environment variable (shown in parentheses below).
    have no images). Images already stored as files (lazy-load datasets) are kept
    as they are. In ``lio_smoother_mapper_from_rosbag2.yaml`` the camera topics are
    ``MOLA_CAMERA_TOPIC``, ``_1``, ``_2`` (labels ``camera``, ``camera_1``,
-   ``camera_2``): ``MOLA_MAPPER_IMAGE_LABELS='camera.*'`` stores one image of each
-   in every keyframe. Live, the images come from the ``BridgeROS2`` image
-   subscriptions (``mola`` with image support), as the other raw data.
+   ``camera_2``): with ``MOLA_MAPPER_IMAGE_LABELS='camera.*'``, each keyframe gets
+   at most one image of each camera, if one is within ``image_max_time_offset``.
+   Live, the images come from the ``BridgeROS2`` image subscriptions
+   (``msg_type: Image``), as the other raw data.
 
    The gyroscope bias comes from the first ``mola::ImuBiasSource`` module with an
    estimate (e.g. the state estimator with ``MOLA_NAVSTATE_IMU_BIAS_TRACKING=true``).

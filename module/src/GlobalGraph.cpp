@@ -37,6 +37,8 @@
 #include <cmath>
 #include <set>
 
+#include "mrpt_gtsam_compat.h"
+
 namespace mola::mapper
 {
 namespace
@@ -71,7 +73,7 @@ gtsam::SharedNoiseModel odometry_edge_noise(
   }
   gtsam::Pose3 unused;
   gtsam::Matrix6 cov;
-  mrpt::gtsam_wrappers::to_gtsam_se3_cov6(inflated, unused, cov);
+  mola::gtsam_compat::to_gtsam_se3_cov6(inflated, unused, cov);
   return gtsam::noiseModel::Gaussian::Covariance(cov);
 }
 
@@ -142,7 +144,7 @@ void add_loop_factors(
                                  : mrpt::DEG2RAD(params.loop_closure_min_sigma_ang_deg);
       pdf.cov(k, k) = std::max(pdf.cov(k, k), floor * floor);
     }
-    mrpt::gtsam_wrappers::to_gtsam_se3_cov6(pdf, rel, relCov);
+    mola::gtsam_compat::to_gtsam_se3_cov6(pdf, rel, relCov);
     auto robust = gtsam::noiseModel::Robust::Create(
       gtsam::noiseModel::mEstimator::Huber::Create(params.loop_closure_robust_huber_k),
       gtsam::noiseModel::Gaussian::Covariance(relCov));
@@ -303,13 +305,13 @@ GlobalGraphResult optimize_global_graph(
   }
   if (lastCov) {
     out.last_pose =
-      mrpt::gtsam_wrappers::to_mrpt_se3_pdf(result.at<gtsam::Pose3>(P(N - 1)), *lastCov);
+      mola::gtsam_compat::to_mrpt_se3_pdf(result.at<gtsam::Pose3>(P(N - 1)), *lastCov);
   }
 
   if (out.num_gnss_factors >= params.georef_min_gnss_factors && out.geodetic_datum && enuCov) {
     mola::Georeferencing g;
     g.geo_coord = *out.geodetic_datum;
-    g.T_enu_to_map = mrpt::gtsam_wrappers::to_mrpt_se3_pdf(result.at<gtsam::Pose3>(T(0)), *enuCov);
+    g.T_enu_to_map = mola::gtsam_compat::to_mrpt_se3_pdf(result.at<gtsam::Pose3>(T(0)), *enuCov);
     // Observable once the azimuth is: a single fix, or fixes close together for
     // their sigmas (standing still), leave it undetermined.
     // MRPT covariance order: x y z yaw pitch roll

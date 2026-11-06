@@ -33,7 +33,8 @@ params:
 
   # Camera images stored in the keyframes (regex; empty: none): each one goes to
   # the nearest keyframe, which keeps the nearest one of each camera. Written as
-  # jpg/png files to <output_simplemap>_Images/ ("inline": kept in RAM):
+  # jpg/png files to <output_simplemap>_Images/ ("inline": kept in RAM). Not
+  # recorded by record_input:
   image_sensor_labels_re: "${MOLA_MAPPER_IMAGE_LABELS|}"
   image_max_time_offset: ${MOLA_MAPPER_IMAGE_MAX_TIME_OFFSET|0.5}  # [s]
   image_format: "${MOLA_MAPPER_IMAGE_FORMAT|jpg}"  # jpg, png, inline

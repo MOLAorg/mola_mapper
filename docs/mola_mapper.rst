@@ -174,7 +174,9 @@ with an environment variable (shown in parentheses below).
    Once no closer image can replace it, an image is written to
    ``<output_simplemap>_Images/`` and the keyframe keeps a reference to that file
    (lazy-load); with ``inline`` or no ``output_simplemap``, images stay in RAM.
-   They are not used by the graph yet. In ``lio_smoother_mapper_from_rosbag2.yaml``
+   They are not used by the graph yet, nor recorded with ``record_input`` (replays
+   have no images). Images already stored as files (lazy-load datasets) are kept
+   as they are. In ``lio_smoother_mapper_from_rosbag2.yaml``
    the camera topic is ``MOLA_CAMERA_TOPIC`` (label ``camera``). The ROS 2 bridge
    has no image input yet, so this is not available live.
 

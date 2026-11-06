@@ -34,6 +34,7 @@
 #include <mola_mapper/LoopOdometryCheck.h>
 #include <mola_mapper/MapperInputLog.h>
 #include <mola_mapper/Parameters.h>
+#include <mrpt/core/WorkerThreadsPool.h>
 #include <mrpt/maps/CSimpleMap.h>
 #include <mrpt/obs/CObservationGPS.h>
 #include <mrpt/obs/CObservationIMU.h>
@@ -44,6 +45,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <deque>
+#include <future>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -279,25 +281,20 @@ private:
   void attach_gnss_locked(const mrpt::obs::CObservationGPS::Ptr & gps);
   void retry_pending_gnss_locked();
 
-  /// An image file to write, outside state_mtx_.
-  struct ImageWrite
-  {
-    mrpt::obs::CObservationImage::Ptr image;
-    std::string path;
-  };
-  void attach_image_locked(
-    const mrpt::obs::CObservationImage::Ptr & img, std::vector<ImageWrite> & writes);
+  /// Attaches the image, or keeps it pending (returns false if pending).
+  bool attach_or_pend_image_locked(const mrpt::obs::CObservationImage::Ptr & img);
   void retry_pending_images_locked();
-  void remember_unwritten_image_locked(std::size_t kfIdx, const std::string & slot);
   /** Replaces attached images that no closer image can replace any more (all,
-   *  if `newest` is empty) by copies referring to image files, which are
-   *  appended to `writes`. `newest`: label and time of the newest image. */
+   *  if `newest` is empty) by copies referring to image files, written by
+   *  disk_io_. `newest`: label and time of the newest image. */
   void finish_images_locked(
-    const std::optional<std::pair<std::string, mrpt::Clock::time_point>> & newest,
-    std::vector<ImageWrite> & writes);
-  void write_images(const std::vector<ImageWrite> & writes);
+    const std::optional<std::pair<std::string, mrpt::Clock::time_point>> & newest);
   /// Directory of the image files (empty: images are kept inline).
   std::string image_dir_;
+  /// Writes the image files, so encoding does not delay the data sources.
+  mrpt::WorkerThreadsPool disk_io_{1, mrpt::WorkerThreadsPool::POLICY_FIFO, "mapper_disk"};
+  /// Image writes not done yet, waited for before saving the outputs (state_mtx_).
+  std::deque<std::future<void>> image_writes_;
   std::optional<KeyFrameID> insert_keyframe_impl(
     const KeyframeInsertRequest & req, const RecordedGyroBias & bias,
     const mrpt::serialization::CSerializable::Ptr & recordEntry);

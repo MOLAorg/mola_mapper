@@ -34,10 +34,12 @@
 
 #include <Eigen/Dense>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <iostream>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace mola
@@ -232,8 +234,12 @@ void test_image_attachment()
   insert_keyframe(*m, 2.0, CPose3D(2, 0, 0, 0, 0, 0));
   const auto file102 = mrpt::system::pathJoin({dir, mrpt::format("cam_%.09f.png", T0 + 1.02)});
   ASSERT_(!mrpt::system::fileExists(file102));
-  feed(2.6);                                   // pending until keyframe 3
-  ASSERT_(mrpt::system::fileExists(file102));  // a later image came: 1.02 is final
+  feed(2.6);  // pending until keyframe 3
+  // A later image came: 1.02 is final, and written by a background thread:
+  for (int i = 0; i < 200 && !mrpt::system::fileExists(file102); i++) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  ASSERT_(mrpt::system::fileExists(file102));
   insert_keyframe(*m, 3.0, CPose3D(3, 0, 0, 0, 0, 0));
   m->finalize();
 

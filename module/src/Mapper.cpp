@@ -81,9 +81,6 @@ mrpt::obs::CObservationImage::Ptr external_image_copy(
   return copy;
 }
 
-/// Pending images older than this behind the newest one are dropped [s].
-constexpr double MAX_PENDING_IMAGE_AGE = 10.0;
-
 /// Runs one end-of-run step, so a failure in it does not prevent the others.
 void guarded(mrpt::system::COutputLogger & log, const char * what, const std::function<void()> & f)
 {
@@ -226,19 +223,16 @@ void Mapper::onNewObservation(const CObservation::ConstPtr & o)
   }
 
   if (isImage) {
-    // Image files are written outside the lock: encoding takes a while.
-    std::vector<ImageWrite> writes;
-    {
-      auto lck = mrpt::lockHelper(state_mtx_);
-      if (finalized_) {
-        return;
-      }
-      if (recorder_) {
-        recorder_->record(o);
-      }
-      attach_image_locked(std::const_pointer_cast<mrpt::obs::CObservationImage>(img), writes);
+    auto lck = mrpt::lockHelper(state_mtx_);
+    if (finalized_) {
+      return;
     }
-    write_images(writes);
+    // Not recorded: images do not change the graph, and they would make the
+    // record huge. Replays have no images.
+    const auto im = std::const_pointer_cast<mrpt::obs::CObservationImage>(img);
+    pending_images_.push_back(im);
+    retry_pending_images_locked();
+    finish_images_locked(std::make_pair(im->sensorLabel, im->timestamp));
     return;
   }
 
@@ -365,37 +359,26 @@ void Mapper::attach_gnss_locked(const mrpt::obs::CObservationGPS::Ptr & gps)
   }
 }
 
-void Mapper::attach_image_locked(
-  const mrpt::obs::CObservationImage::Ptr & img, std::vector<ImageWrite> & writes)
+bool Mapper::attach_or_pend_image_locked(const mrpt::obs::CObservationImage::Ptr & img)
 {
   const std::string slot = "image:" + img->sensorLabel;
   std::size_t kfIdx = 0;
   switch (attach_nearest_locked(img, slot, params_.image_max_time_offset, &kfIdx)) {
     case AttachResult::Pending:
-      pending_images_.push_back(img);
-      // Bounded, in case keyframes stop arriving:
-      while (mrpt::system::timeDifference(pending_images_.front()->timestamp, img->timestamp) >
-             MAX_PENDING_IMAGE_AGE) {
-        pending_images_.pop_front();
+      return false;
+    case AttachResult::Attached: {
+      const std::pair<std::size_t, std::string> entry{kfIdx, slot};
+      if (
+        std::find(unwritten_images_.begin(), unwritten_images_.end(), entry) ==
+        unwritten_images_.end()) {
+        unwritten_images_.push_back(entry);
       }
       break;
-    case AttachResult::Attached:
-      remember_unwritten_image_locked(kfIdx, slot);
-      break;
+    }
     case AttachResult::Dropped:
       break;
   }
-  finish_images_locked(std::make_pair(img->sensorLabel, img->timestamp), writes);
-}
-
-void Mapper::remember_unwritten_image_locked(std::size_t kfIdx, const std::string & slot)
-{
-  const std::pair<std::size_t, std::string> entry{kfIdx, slot};
-  if (
-    std::find(unwritten_images_.begin(), unwritten_images_.end(), entry) ==
-    unwritten_images_.end()) {
-    unwritten_images_.push_back(entry);
-  }
+  return true;
 }
 
 void Mapper::retry_pending_images_locked()
@@ -403,62 +386,67 @@ void Mapper::retry_pending_images_locked()
   const std::deque<mrpt::obs::CObservationImage::Ptr> pending = std::move(pending_images_);
   pending_images_.clear();
   for (const auto & img : pending) {
-    const std::string slot = "image:" + img->sensorLabel;
-    std::size_t kfIdx = 0;
-    switch (attach_nearest_locked(img, slot, params_.image_max_time_offset, &kfIdx)) {
-      case AttachResult::Pending:
-        pending_images_.push_back(img);
-        break;
-      case AttachResult::Attached:
-        remember_unwritten_image_locked(kfIdx, slot);
-        break;
-      case AttachResult::Dropped:
-        break;
+    if (!attach_or_pend_image_locked(img)) {
+      pending_images_.push_back(img);
     }
+  }
+  // Bounded, in case keyframes stop arriving (e.g. a stopped vehicle): older
+  // ones could only go to a keyframe farther than image_max_time_offset from
+  // them, but for the front end lag.
+  constexpr double FRONT_END_LAG_MARGIN = 2.0;  // [s]
+  while (!pending_images_.empty() &&
+         mrpt::system::timeDifference(
+           pending_images_.front()->timestamp, pending_images_.back()->timestamp) >
+           params_.image_max_time_offset + FRONT_END_LAG_MARGIN) {
+    pending_images_.pop_front();
   }
 }
 
 void Mapper::finish_images_locked(
-  const std::optional<std::pair<std::string, mrpt::Clock::time_point>> & newest,
-  std::vector<ImageWrite> & writes)
+  const std::optional<std::pair<std::string, mrpt::Clock::time_point>> & newest)
 {
   for (auto it = unwritten_images_.begin(); it != unwritten_images_.end();) {
     auto & kf = keyframes_.at(it->first);
     auto & n = kf.nearest.at(it->second);
-    // Images come in time order: a newer one, farther from the keyframe than
-    // the attached one, means that no closer one can come any more. Except
-    // for the newest keyframe: pending images may still go to it.
+    // Images of a camera come in time order: a newer one, farther from the
+    // keyframe than the attached one, means that no closer one can come any
+    // more. Except for the newest keyframe: pending images may still go to it.
     if (
       newest && (it->first + 1 == keyframes_.size() || it->second != "image:" + newest->first ||
                  abs_time_diff(kf.stamp, newest->second) <= n.dt || newest->second < kf.stamp)) {
       ++it;
       continue;
     }
-    if (!image_dir_.empty()) {
-      const auto img = std::dynamic_pointer_cast<mrpt::obs::CObservationImage>(n.obs);
-      ASSERT_(img);
+    const auto img = std::dynamic_pointer_cast<mrpt::obs::CObservationImage>(n.obs);
+    ASSERT_(img);
+    // Already a file (e.g. from a lazy-load dataset), or not 8-bit: kept as is.
+    if (
+      !image_dir_.empty() && !img->image.isExternallyStored() &&
+      img->image.getPixelDepth() == mrpt::img::PixelDepth::D8U) {
       const std::string fileName = mrpt::format(
         "%s_%.09f.%s", mrpt::system::fileNameStripInvalidChars(img->sensorLabel).c_str(),
         mrpt::Clock::toDouble(img->timestamp), params_.image_format.c_str());
       auto ext = external_image_copy(*img, fileName);
       kf.aux = replaced(*kf.aux, n.obs, ext);
       n.obs = ext;
-      writes.push_back({img, mrpt::system::pathJoin({image_dir_, fileName})});
+      const auto path = mrpt::system::pathJoin({image_dir_, fileName});
+      const int quality = params_.image_jpeg_quality;
+      image_writes_.push_back(disk_io_.enqueue([this, img, path, quality]() {
+        try {
+          if (!img->image.saveToFile(path, quality)) {
+            MRPT_LOG_ERROR_STREAM("Could not write the keyframe image: " << path);
+          }
+        } catch (const std::exception & e) {
+          MRPT_LOG_ERROR_STREAM("Could not write the keyframe image: " << path << ": " << e.what());
+        }
+      }));
     }
     it = unwritten_images_.erase(it);
   }
-}
-
-void Mapper::write_images(const std::vector<ImageWrite> & writes)
-{
-  for (const auto & w : writes) {
-    try {
-      if (!w.image->image.saveToFile(w.path, params_.image_jpeg_quality)) {
-        MRPT_LOG_ERROR_STREAM("Could not write the keyframe image: " << w.path);
-      }
-    } catch (const std::exception & e) {
-      MRPT_LOG_ERROR_STREAM("Could not write the keyframe image: " << w.path << ": " << e.what());
-    }
+  // Forget the writes already done:
+  while (!image_writes_.empty() &&
+         image_writes_.front().wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+    image_writes_.pop_front();
   }
 }
 
@@ -539,7 +527,7 @@ bool Mapper::attach_gravity_locked(Keyframe & kf)
   obs->set(mrpt::obs::IMU_X_ACC, sum.x / n);
   obs->set(mrpt::obs::IMU_Y_ACC, sum.y / n);
   obs->set(mrpt::obs::IMU_Z_ACC, sum.z / n);
-  kf.aux->insert(obs);
+  kf.aux = replaced(*kf.aux, nullptr, obs);
   return true;
 }
 
@@ -700,8 +688,15 @@ GlobalGraphInput Mapper::graph_input_locked() const
     g.initial_guess = kf.pose_in_map;
     g.gyro_rotation_from_prev = kf.gyro_rotation_from_prev;
     g.gyro_rotation_sigma = kf.gyro_rotation_sigma;
-    // A copy: the original may get new GNSS readings while solving.
-    g.aux_observations = std::make_shared<mrpt::obs::CSensoryFrame>(*kf.aux);
+    // A copy: the original may get new GNSS readings while solving. Without
+    // images, which the graph does not use:
+    auto aux = mrpt::obs::CSensoryFrame::Create();
+    for (const auto & o : *kf.aux) {
+      if (!std::dynamic_pointer_cast<const mrpt::obs::CObservationImage>(o)) {
+        aux->insert(std::const_pointer_cast<mrpt::obs::CObservation>(o));
+      }
+    }
+    g.aux_observations = aux;
     in.keyframes.push_back(std::move(g));
   }
   in.loops = loops_;
@@ -976,14 +971,19 @@ void Mapper::finalize()
       guarded(*this, "Final solve", [this] { optimize_now(); });
     }
   }
-  // The images still waiting for a possibly closer one:
+  // The images still waiting for a possibly closer one, and all the image
+  // files written before the simplemap that refers to them:
   guarded(*this, "Writing the keyframe images", [this] {
-    std::vector<ImageWrite> writes;
+    std::deque<std::future<void>> writes;
     {
       auto lck = mrpt::lockHelper(state_mtx_);
-      finish_images_locked(std::nullopt, writes);
+      finish_images_locked(std::nullopt);
+      writes = std::move(image_writes_);
+      image_writes_.clear();
     }
-    write_images(writes);
+    for (auto & w : writes) {
+      w.wait();
+    }
   });
   save_outputs();
 }

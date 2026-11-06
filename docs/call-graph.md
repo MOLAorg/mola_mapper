@@ -123,7 +123,9 @@ stores under `state_mtx_`:
 - Images: the same rule (slot "image:<label>", `pending_images_`). Once a later
   image of that camera is farther from the keyframe than the attached one (and a
   newer keyframe exists), `finish_images_locked()` swaps it for a copy referring
-  to a file, written by `write_images()` after releasing the lock.
+  to a file, written by the `disk_io_` thread; `finalize()` waits for those
+  writes before saving the outputs. Images are not recorded (`record_input`) nor
+  passed to the graph input.
 - Accelerometer: queued in `imu_samples_` (window plus a few seconds).
 - Gyroscope: the first IMU label matching `gyro_sensor_labels_re` is queued in
   `gyro_samples_` (last 60 s).

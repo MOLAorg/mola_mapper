@@ -306,7 +306,7 @@ with an environment variable (shown in parentheses below).
       loop_closure_consistency:
         neighborhood: 50.0               # [m] along the odometry path, at both ends
         max_xyz: 1.0                     # [m] (MOLA_MAPPER_LC_CONSISTENCY_MAX_XYZ)
-        max_xyz_per_m: 0.02              # [m/m] of odometry path in the cycle (MOLA_MAPPER_LC_CONSISTENCY_MAX_XYZ_PER_M)
+        max_xyz_per_m: 0.04              # [m/m] of odometry path in the cycle (MOLA_MAPPER_LC_CONSISTENCY_MAX_XYZ_PER_M)
         max_ang_deg: 3.0                 # [deg] (MOLA_MAPPER_LC_CONSISTENCY_MAX_ANG)
         max_ang_deg_per_m: 0.03          # [deg/m] (MOLA_MAPPER_LC_CONSISTENCY_MAX_ANG_PER_M)
         min_inconsistent: 2

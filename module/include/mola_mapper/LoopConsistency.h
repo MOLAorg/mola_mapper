@@ -45,7 +45,7 @@ struct LoopConsistencyParams
   double neighborhood = 50.0;
   /// Cycle error limits: a floor plus a fraction of the odometry path in the cycle.
   double max_xyz = 1.0;             ///< [m]
-  double max_xyz_per_m = 0.02;      ///< [m/m]
+  double max_xyz_per_m = 0.04;      ///< [m/m]
   double max_ang_deg = 3.0;         ///< [deg]
   double max_ang_deg_per_m = 0.03;  ///< [deg/m]
   /// A loop is an outlier when inconsistent with at least this many of the

@@ -29,6 +29,7 @@ modules:
   - name: mapper
     type: mola::mapper::Mapper
     enabled: ${MOLA_WITH_MAPPER|true}
+    execution_rate: 2 # Hz (GUI updates)
     verbosity_level: "${MOLA_VERBOSITY_MAPPER|INFO}"
     raw_data_source: "dataset_input"
     params: "${MOLA_MAPPER_YAML|../params/mapper-kitti.yaml}"

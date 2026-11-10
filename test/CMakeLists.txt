@@ -72,3 +72,10 @@ mola_add_test(
   LINK_LIBRARIES
     mola::mola_mapper
 )
+
+mola_add_test(
+  TARGET  test-graph-visualization
+  SOURCES test-graph-visualization.cpp
+  LINK_LIBRARIES
+    mola::mola_mapper
+)

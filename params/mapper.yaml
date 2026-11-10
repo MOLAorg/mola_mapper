@@ -153,3 +153,20 @@ params:
   # Everything the mapper receives, to replay the run exactly with mola-mapper-cli
   # (a gzip-compressed MRPT archive; empty: not recorded):
   record_input: "${MOLA_MAPPER_RECORD_INPUT|}"
+
+  # The keyframe graph in the GUI (only if a visualizer module runs, e.g. with
+  # MOLA_WITH_GUI=true): keyframes as spheres, odometry edges and accepted loop
+  # closures as lines; all of it also tunable from the "mola_mapper" window:
+  visualization:
+    keyframe_sphere_radius: ${MOLA_MAPPER_VIZ_KF_RADIUS|0.10}  # [m] (0: hidden)
+    odometry_edge_width: ${MOLA_MAPPER_VIZ_ODOM_EDGE_WIDTH|2.0}  # [px] (0: hidden)
+    loop_edge_width: ${MOLA_MAPPER_VIZ_LOOP_EDGE_WIDTH|4.0}  # [px] (0: hidden)
+    # Loops drawn as a bridge this high over their keyframes (once closed, they
+    # overlap; 0: straight lines):
+    loop_edge_lift: ${MOLA_MAPPER_VIZ_LOOP_EDGE_LIFT|1.0}  # [m]
+    show_rejected_loops: ${MOLA_MAPPER_VIZ_SHOW_REJECTED_LOOPS|false}
+    rejected_loop_edge_width: 1.0  # [px]
+    update_period: 1.0  # [s]
+    # Move the scene frame of each front end (LIO draws its local map and
+    # vehicle in its publish frame) with the optimized map, so all stays aligned:
+    align_front_end_frames: ${MOLA_MAPPER_VIZ_ALIGN_FRONT_ENDS|true}

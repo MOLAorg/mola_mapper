@@ -34,6 +34,7 @@ find_package(mola_sm_loop_closure REQUIRED)
 set(LIB_SOURCES
   module/src/GlobalGraph.cpp
   module/src/GyroIntegration.cpp
+  module/src/WheelOdometry.cpp
   module/src/GlobalGraphIO.cpp
   module/src/LoopOdometryCheck.cpp
   module/src/Mapper.cpp
@@ -52,6 +53,7 @@ set(LIB_PUBLIC_HEADERS
   module/include/mola_mapper/MapperInputLog.h
   module/include/mola_mapper/MapperReplay.h
   module/include/mola_mapper/Parameters.h
+  module/include/mola_mapper/WheelOdometry.h
 )
 
 mola_add_library(

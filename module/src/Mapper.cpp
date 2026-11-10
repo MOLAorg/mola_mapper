@@ -149,6 +149,10 @@ void Mapper::initialize(const mrpt::containers::yaml & cfg)
     }
 #endif
   }
+  use_wheel_odom_input_ = !params_.wheel_odom_sensor_labels_re.empty();
+  if (use_wheel_odom_input_) {
+    wheel_odom_labels_re_ = std::regex(params_.wheel_odom_sensor_labels_re);
+  }
 
   // Before attaching the sources, so their first readings are recorded too:
   if (!params_.record_input.empty()) {
@@ -187,6 +191,7 @@ void Mapper::initialize(const mrpt::containers::yaml & cfg)
     << (use_gnss_input_ ? params_.gnss_sensor_labels_re : "none")
     << ", gravity IMU=" << (use_imu_input_ ? params_.imu_sensor_labels_re : "none")
     << ", gyro IMU=" << (use_gyro_input_ ? params_.gyro_sensor_labels_re : "none")
+    << ", wheel odometry=" << (use_wheel_odom_input_ ? params_.wheel_odom_sensor_labels_re : "none")
     << ", images=" << (use_image_input_ ? params_.image_sensor_labels_re : "none")
     << ", loop closure=" << (params_.loop_closure_enabled ? "on" : "off")
     << ", feedback to the state estimator="
@@ -218,7 +223,10 @@ void Mapper::onNewObservation(const CObservation::ConstPtr & o)
   const auto img = std::dynamic_pointer_cast<const mrpt::obs::CObservationImage>(o);
   const bool isImage =
     use_image_input_ && img && std::regex_match(img->sensorLabel, image_labels_re_);
-  if (!isGnss && !isGyro && !isGravity && !isImage) {
+  const auto odo = std::dynamic_pointer_cast<const mrpt::obs::CObservationOdometry>(o);
+  const bool isWheelOdom =
+    use_wheel_odom_input_ && odo && std::regex_match(odo->sensorLabel, wheel_odom_labels_re_);
+  if (!isGnss && !isGyro && !isGravity && !isImage && !isWheelOdom) {
     return;
   }
 
@@ -255,6 +263,49 @@ void Mapper::onNewObservation(const CObservation::ConstPtr & o)
   if (isGravity) {
     add_gravity_sample_locked(*imu);
   }
+  if (isWheelOdom) {
+    add_wheel_odom_sample_locked(*odo);
+  }
+}
+
+void Mapper::add_wheel_odom_sample_locked(const mrpt::obs::CObservationOdometry & odo)
+{
+  if (wheel_odom_label_.empty()) {
+    wheel_odom_label_ = odo.sensorLabel;
+  }
+  if (
+    odo.sensorLabel != wheel_odom_label_ ||
+    (!wheel_odom_samples_.empty() && wheel_odom_samples_.back().stamp >= odo.timestamp)) {
+    return;
+  }
+  wheel_odom_samples_.push_back({odo.timestamp, odo.odometry.asTPose()});
+  while (!pending_wheel_odom_.empty() && attach_wheel_odom_locked(pending_wheel_odom_.front())) {
+    pending_wheel_odom_.pop_front();
+  }
+  // Keep enough for keyframes arriving late:
+  constexpr double WHEEL_ODOM_KEEP = 60.0;  // [s]
+  while (mrpt::system::timeDifference(wheel_odom_samples_.front().stamp, odo.timestamp) >
+         WHEEL_ODOM_KEEP) {
+    wheel_odom_samples_.pop_front();
+  }
+}
+
+bool Mapper::attach_wheel_odom_locked(std::size_t idx)
+{
+  if (idx == 0 || idx >= keyframes_.size()) {
+    return true;
+  }
+  mrpt::math::TPose2D inc;
+  const auto st = wheel_odometry_increment(
+    wheel_odom_samples_, keyframes_[idx - 1].stamp, keyframes_[idx].stamp,
+    params_.wheel_odom_max_gap, inc);
+  if (st == WheelOdomStatus::NotYet) {
+    return false;
+  }
+  if (st == WheelOdomStatus::Ok) {
+    keyframes_[idx].wheel_odom_from_prev = inc;
+  }
+  return true;
 }
 
 void Mapper::add_gyro_sample_locked(const mrpt::obs::CObservationIMU & imu)
@@ -618,6 +669,10 @@ std::optional<SharedKeyframeMap::KeyFrameID> Mapper::insert_keyframe_impl(
     if (!gravityAttached && imuBehind) {
       pending_gravity_.push_back(id);
     }
+    // In order: a keyframe waits if older ones do.
+    if (use_wheel_odom_input_ && (!pending_wheel_odom_.empty() || !attach_wheel_odom_locked(id))) {
+      pending_wheel_odom_.push_back(id);
+    }
 
     retry_pending_gnss_locked();
     retry_pending_images_locked();
@@ -688,6 +743,7 @@ GlobalGraphInput Mapper::graph_input_locked() const
     g.initial_guess = kf.pose_in_map;
     g.gyro_rotation_from_prev = kf.gyro_rotation_from_prev;
     g.gyro_rotation_sigma = kf.gyro_rotation_sigma;
+    g.wheel_odom_from_prev = kf.wheel_odom_from_prev;
     // A copy: the original may get new GNSS readings while solving. Without
     // images, which the graph does not use:
     auto aux = mrpt::obs::CSensoryFrame::Create();
@@ -753,16 +809,17 @@ void Mapper::solve_global_graph()
     last_num_gnss_factors_ = r.num_gnss_factors;
     last_num_gravity_factors_ = r.num_gravity_factors;
     last_num_gyro_factors_ = r.num_gyro_factors;
+    last_num_wheel_odom_factors_ = r.num_wheel_odom_factors;
   }
   solves_++;
 
   MRPT_LOG_THROTTLE_INFO_FMT(
     10.0,
-    "Global graph: %zu keyframes, %zu loops, %zu GNSS%s, %zu gravity, %zu gyro factors, solved "
-    "in %.0f ms",
+    "Global graph: %zu keyframes, %zu loops, %zu GNSS%s, %zu gravity, %zu gyro, %zu wheel "
+    "odometry factors, solved in %.0f ms",
     in.keyframes.size(), r.num_loop_factors, r.num_gnss_factors,
     r.gnss_degenerate ? " (degenerate, unused)" : "", r.num_gravity_factors, r.num_gyro_factors,
-    1e3 * dt);
+    r.num_wheel_odom_factors, 1e3 * dt);
 
   if (r.georeferencing) {
     publish_georeference(*r.georeferencing);
@@ -921,6 +978,7 @@ void Mapper::getDiagnostics(std::vector<mola::DiagnosticStatusMsg> & status)
     s.values.push_back({"gnss_factors", std::to_string(last_num_gnss_factors_)});
     s.values.push_back({"gravity_factors", std::to_string(last_num_gravity_factors_)});
     s.values.push_back({"gyro_factors", std::to_string(last_num_gyro_factors_)});
+    s.values.push_back({"wheel_odom_factors", std::to_string(last_num_wheel_odom_factors_)});
     s.values.push_back({"geo_referenced", georef_ ? "yes" : "no"});
     s.message = mrpt::format(
       "%zu keyframes, %zu loop closures%s", keyframes_.size(), loops_.size(),

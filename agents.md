@@ -34,6 +34,7 @@ module/include/mola_mapper/
   GlobalGraph.h     optimize_global_graph(): pure function, GTSAM batch LM + Marginals
   GlobalGraphIO.h   save/load the graph input (offline re-optimization), TUM, georef
   GyroIntegration.h integrate_gyro(): rotation between keyframes from gyro readings
+  WheelOdometry.h   wheel_odometry_increment(): wheel odometry between keyframes (interpolated)
   Parameters.h      Parameters (module) and GlobalGraphParams (graph)
   MapperInputLog.h  record (record_input, background writer) / read the mapper input
   MapperReplay.h    replay_mapper_input(): feeds a thread-less Mapper, scans and solves
@@ -66,6 +67,10 @@ mola-cli-launchs/lio_smoother_mapper_from_kitti.yaml    KITTI odometry (params/m
   `ImuBiasSource` with an estimate (else 0 with `gyro_bias_sigma`), rotated to the vehicle
   frame. Sigma: noise density * sqrt(T), bias sigma * T, scale sigma * accumulated angle. The
   bias error is modeled as independent per factor, though it is common to all of them.
+- Wheel odometry (`wheel_odom_sensor_labels_re`, `CObservationOdometry`, first matching label):
+  increment between consecutive keyframes, interpolated at both stamps (gaps over
+  `wheel_odom_max_gap`: none); keyframes the readings do not reach yet wait, in order
+  (`pending_wheel_odom_`). Recorded; saved as `<prefix>.wheel_odom.txt` with the graph input.
 - The bias sources are queried before taking `state_mtx_`.
 
 ## Global graph (GlobalGraph.cpp)
@@ -78,6 +83,17 @@ Keys `P(i)` (keyframe poses in `{map}`), `T(0)` (T_enu_to_map). Factors:
 - GNSS: `FactorGnssMapEnu` with a selectable robust kernel (default Cauchy);
 - gravity: `mola_georeferencing::add_imu_gravity_factors`;
 - gyro: `BetweenFactor<Pose3>` with free translation (sigma 1e3 m);
+- wheel odometry (if attached; `use_wheel_odometry`): forward and lateral translation of the
+  increment in the frame of the first keyframe (`ExpressionFactor<Point3>`, vertical free),
+  Gaussian by default; there, the chain edge forward component moves to a factor of its own
+  with `wheel_odom_chain_robust_kernel` (default Cauchy 1.0): a LIO slip along a degenerate
+  direction then gives way to the wheels, while the rest of the edge stays stiff. A robust kernel
+  on the wheel factors instead (`wheel_odom_robust_kernel`) rejects wheel slip, but also the
+  wheels when LIO is the one wrong: nothing in the graph tells them apart, except GNSS.
+  Increments whose yaw disagrees with the gyroscope (`wheel_odom_max_yaw_error_*`) or shorter
+  than the LIO forward motion (`wheel_odom_min_ratio_to_front_end`) are dropped: encoder count
+  losses read false turns and less motion, a degenerate LIO falls short, never beyond (wheel spin
+  is the case left);
 - weak prior on `T(0)`, prior on `P(0)` (gauge).
 The geo-reference is returned (published, saved) only once observable: `georef_min_gnss_factors`
 and a `T(0)` azimuth sigma below `georef_max_sigma_yaw_deg`.

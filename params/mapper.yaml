@@ -31,6 +31,11 @@ params:
   gyro_scale_sigma: ${MOLA_MAPPER_GYRO_SCALE_SIGMA|0.005}
   gyro_max_gap: 0.1  # [s]
 
+  # Wheel odometry (CObservationOdometry) whose increments between consecutive
+  # keyframes become factors (regex of sensor labels; empty: none):
+  wheel_odom_sensor_labels_re: "${MOLA_MAPPER_WHEEL_ODOM_LABELS|}"
+  wheel_odom_max_gap: 0.5  # [s]
+
   # Camera images stored in the keyframes (regex; empty: none): each one goes to
   # the nearest keyframe, which keeps the nearest one of each camera. Written as
   # jpg/png files to <output_simplemap>_Images/ ("inline": kept in RAM). Not
@@ -50,6 +55,30 @@ params:
     odometry_noise_ang_deg_per_sqrt_m: ${MOLA_MAPPER_ODOM_SIGMA_ANG_PER_SQRT_M|0.05}
     # plus per radian turned (LiDAR odometry heading errors concentrate in turns):
     odometry_noise_ang_per_rad: ${MOLA_MAPPER_ODOM_SIGMA_ANG_PER_RAD|0.02}
+
+    # Wheel odometry (if wheel_odom_sensor_labels_re is set): translation of each
+    # increment, forward and lateral, in the vehicle frame. Sigmas: floor + per
+    # meter traveled + per radian turned:
+    use_wheel_odometry: ${MOLA_MAPPER_USE_WHEEL_ODOM|true}
+    wheel_odom_min_sigma: ${MOLA_MAPPER_WHEEL_ODOM_MIN_SIGMA|0.01}  # [m]
+    wheel_odom_sigma_per_m: ${MOLA_MAPPER_WHEEL_ODOM_SIGMA_PER_M|0.03}
+    wheel_odom_lateral_sigma_per_m: ${MOLA_MAPPER_WHEEL_ODOM_LATERAL_SIGMA_PER_M|0.10}
+    wheel_odom_sigma_per_rad: ${MOLA_MAPPER_WHEEL_ODOM_SIGMA_PER_RAD|0.05}  # [m/rad]
+    # Increments not used if their yaw differs from the gyroscope one by more than
+    # this plus a fraction of it (wheels that lose encoder counts read false turns):
+    wheel_odom_max_yaw_error_deg: ${MOLA_MAPPER_WHEEL_ODOM_MAX_YAW_ERROR|3.0}  # [deg]
+    wheel_odom_max_yaw_error_ratio: 0.2
+    # Nor if shorter than this fraction of the front end forward motion, minus a
+    # floor (a degenerate front end reads less than real; wheels losing counts too):
+    wheel_odom_min_ratio_to_front_end: ${MOLA_MAPPER_WHEEL_ODOM_MIN_RATIO|0.75}
+    wheel_odom_ratio_floor: 0.02  # [m]
+    wheel_odom_robust_kernel: "${MOLA_MAPPER_WHEEL_ODOM_ROBUST_KERNEL|none}"
+    wheel_odom_robust_k: ${MOLA_MAPPER_WHEEL_ODOM_ROBUST_K|3.0}  # [sigmas]
+    # With wheel odometry, the forward component of the chain edges in a factor of
+    # its own with this kernel ("none": edges whole), so a slipping front end
+    # gives way to the wheels:
+    wheel_odom_chain_robust_kernel: "${MOLA_MAPPER_WHEEL_ODOM_CHAIN_ROBUST_KERNEL|cauchy}"
+    wheel_odom_chain_robust_k: ${MOLA_MAPPER_WHEEL_ODOM_CHAIN_ROBUST_K|1.0}  # [sigmas]
 
     use_gyro: ${MOLA_MAPPER_USE_GYRO|true}
     gyro_min_sigma_deg: 0.02

@@ -33,7 +33,9 @@ namespace mola::mapper
  *  - `<prefix>.aux.simplemap`: the attached GNSS and IMU observations, at the
  *    initial guesses;
  *  - `<prefix>.loops.txt`: from, to, relative pose and its covariance;
- *  - `<prefix>.datum.txt`: the ENU datum (latitude, longitude, height), if any.
+ *  - `<prefix>.datum.txt`: the ENU datum (latitude, longitude, height), if any;
+ *  - `<prefix>.wheel_odom.txt`: the wheel odometry increments since the previous
+ *    keyframe, if any: "idx dx dy dyaw".
  */
 void save_global_graph_input(const GlobalGraphInput & in, const std::string & prefix);
 

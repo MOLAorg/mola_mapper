@@ -41,8 +41,8 @@ The modules of a system are independent and composed by a launch file:
 The mapper:
 
 1. Attaches to each keyframe the nearest GNSS reading, the accelerometer
-   averaged before it (gravity) and the gyroscope rotation since the previous
-   keyframe.
+   averaged before it (gravity), and the gyroscope rotation and wheel odometry
+   increment since the previous keyframe.
 2. Searches for loop closures in a background thread, with the detector of
    ``mola_sm_loop_closure``.
 3. Optimizes the pose graph of all keyframes in another background thread.
@@ -163,6 +163,10 @@ with an environment variable (shown in parentheses below).
       gyro_scale_sigma: 0.005            # (MOLA_MAPPER_GYRO_SCALE_SIGMA)
       gyro_max_gap: 0.1                  # [s] longer gaps between readings: no factor
 
+      # Wheel odometry (CObservationOdometry) increments between keyframes (empty: none)
+      wheel_odom_sensor_labels_re: "${MOLA_MAPPER_WHEEL_ODOM_LABELS|}"
+      wheel_odom_max_gap: 0.5            # [s] longer gaps between readings: no factor
+
       # Camera images (CObservationImage) stored in the keyframes (empty: none)
       image_sensor_labels_re: "${MOLA_MAPPER_IMAGE_LABELS|}"
       image_max_time_offset: 0.5         # [s] (MOLA_MAPPER_IMAGE_MAX_TIME_OFFSET)
@@ -199,6 +203,45 @@ with an environment variable (shown in parentheses below).
         odometry_noise_xyz_per_sqrt_m: 0.01        # (MOLA_MAPPER_ODOM_SIGMA_XYZ_PER_SQRT_M)
         odometry_noise_ang_deg_per_sqrt_m: 0.05    # (MOLA_MAPPER_ODOM_SIGMA_ANG_PER_SQRT_M)
         odometry_noise_ang_per_rad: 0.02           # (MOLA_MAPPER_ODOM_SIGMA_ANG_PER_RAD)
+
+.. dropdown:: Graph: wheel odometry
+   :icon: list-unordered
+
+   .. code-block:: yaml
+
+      graph:
+        use_wheel_odometry: true                # (MOLA_MAPPER_USE_WHEEL_ODOM)
+        wheel_odom_min_sigma: 0.01              # [m] (MOLA_MAPPER_WHEEL_ODOM_MIN_SIGMA)
+        wheel_odom_sigma_per_m: 0.03            # forward (MOLA_MAPPER_WHEEL_ODOM_SIGMA_PER_M)
+        wheel_odom_lateral_sigma_per_m: 0.10    # (MOLA_MAPPER_WHEEL_ODOM_LATERAL_SIGMA_PER_M)
+        wheel_odom_sigma_per_rad: 0.05          # [m/rad] (MOLA_MAPPER_WHEEL_ODOM_SIGMA_PER_RAD)
+        wheel_odom_max_yaw_error_deg: 3.0       # [deg] (MOLA_MAPPER_WHEEL_ODOM_MAX_YAW_ERROR)
+        wheel_odom_max_yaw_error_ratio: 0.2
+        wheel_odom_min_ratio_to_front_end: 0.75 # (MOLA_MAPPER_WHEEL_ODOM_MIN_RATIO)
+        wheel_odom_ratio_floor: 0.02            # [m]
+        wheel_odom_robust_kernel: "none"        # (MOLA_MAPPER_WHEEL_ODOM_ROBUST_KERNEL)
+        wheel_odom_robust_k: 3.0                # (MOLA_MAPPER_WHEEL_ODOM_ROBUST_K)
+        wheel_odom_chain_robust_kernel: "cauchy"  # (MOLA_MAPPER_WHEEL_ODOM_CHAIN_ROBUST_KERNEL)
+        wheel_odom_chain_robust_k: 1.0          # (MOLA_MAPPER_WHEEL_ODOM_CHAIN_ROBUST_K)
+
+   Each wheel odometry increment constrains the forward and lateral translation
+   between consecutive keyframes, in the frame of the first one; the rotation is
+   left to the gyroscope (skid steer wheel yaw rates are poor). Where there is one,
+   the forward component of the odometry chain edge goes into a factor of its own
+   with ``wheel_odom_chain_robust_kernel``, so a front end that slips along a
+   degenerate direction (LiDAR odometry in long straight streets falls short)
+   gives way to the wheels, while the rest of the edge stays as stiff as before.
+   A robust kernel on the wheel factors instead (``wheel_odom_robust_kernel``)
+   rejects wheel slip, but it also rejects the wheels where the front end is the
+   one wrong: without GNSS, the graph cannot tell them apart. Increments whose
+   yaw disagrees with the gyroscope (by ``wheel_odom_max_yaw_error_deg`` plus
+   ``wheel_odom_max_yaw_error_ratio`` of the gyroscope yaw) are not used, nor is
+   the chain edge split there: wheels that lose encoder counts read false turns.
+   Nor are increments shorter than ``wheel_odom_min_ratio_to_front_end`` of the
+   front end forward motion (minus ``wheel_odom_ratio_floor``): a degenerate front
+   end falls short of the real motion, never beyond it, while wheels that lose
+   encoder counts read less than it. Wheel spin (more than real) is the case
+   left: it is taken as a front end slip.
 
 .. dropdown:: Graph: gyroscope, GNSS, gravity and loop closure factors
    :icon: list-unordered

@@ -51,6 +51,41 @@ struct GlobalGraphParams
   double gyro_min_sigma_deg = 0.02;  ///< floor of each factor sigma
   /** @} */
 
+  /** @name Wheel odometry between consecutive keyframes (if present)
+   *  A factor on the translation of the relative pose, in the vehicle frame of
+   *  the previous keyframe: its forward and lateral (nonholonomic) components.
+   *  The rotation is left to the gyroscope. Sigmas: a floor, plus a fraction of
+   *  the distance, plus a term per radian turned (skid steer slip in turns).
+   * @{ */
+  bool use_wheel_odometry = true;
+  double wheel_odom_min_sigma = 0.01;            ///< [m]
+  double wheel_odom_sigma_per_m = 0.03;          ///< forward, per meter traveled
+  double wheel_odom_lateral_sigma_per_m = 0.10;  ///< lateral, per meter traveled
+  double wheel_odom_sigma_per_rad = 0.05;        ///< [m/rad]
+  /// Increments whose yaw differs from the gyroscope one (if any) by more than
+  /// this, plus a fraction of the gyroscope yaw, are not used: wheels that lose
+  /// encoder counts read false turns. Skid steer wheels read turns short.
+  double wheel_odom_max_yaw_error_deg = 3.0;
+  double wheel_odom_max_yaw_error_ratio = 0.2;
+  /// Increments shorter than this fraction of the front end forward motion,
+  /// minus a floor [m], are not used: a degenerate front end falls short of the
+  /// real motion, while wheels that lose encoder counts read less than it.
+  double wheel_odom_min_ratio_to_front_end = 0.75;
+  double wheel_odom_ratio_floor = 0.02;
+  /// "none" or as gnss_robust_kernel. Wheel slip makes the wheels read more
+  /// motion than real, but a redescending kernel also rejects the wheels when
+  /// the front end is the one wrong.
+  std::string wheel_odom_robust_kernel = "none";
+  double wheel_odom_robust_k = 3.0;  ///< kernel parameter, in sigmas
+  /// Where there is a wheel odometry factor, the forward component of the chain
+  /// edge goes into a factor of its own with this robust kernel ("none": the
+  /// edge stays whole), so the edges of a front end that slips along its
+  /// degenerate direction (e.g. LiDAR odometry in long streets) give way to the
+  /// wheels instead of the other way around.
+  std::string wheel_odom_chain_robust_kernel = "cauchy";
+  double wheel_odom_chain_robust_k = 1.0;  ///< kernel parameter, in sigmas
+  /** @} */
+
   /** @name GNSS (CObservationGPS in the keyframes)
      * @{ */
   bool use_gnss = true;
@@ -121,6 +156,11 @@ struct Parameters
   double gyro_bias_sigma = 0.005;    ///< [rad/s] without a bias source estimate
   double gyro_scale_sigma = 0.005;   ///< relative scale factor error
   double gyro_max_gap = 0.1;         ///< [s] longer gaps between readings: no factor
+
+  /** Regex of the sensor label of the wheel odometry (CObservationOdometry)
+   *  whose increments between consecutive keyframes become factors (empty: none). */
+  std::string wheel_odom_sensor_labels_re;
+  double wheel_odom_max_gap = 0.5;  ///< [s] longer gaps between readings: no factor
 
   /** Regex of the sensor labels of camera images (CObservationImage) to store
    *  in the keyframes (empty: none), e.g. for visual place recognition. As

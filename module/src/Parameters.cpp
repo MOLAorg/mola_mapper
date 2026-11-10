@@ -36,6 +36,19 @@ void GlobalGraphParams::loadFrom(const mrpt::containers::yaml & cfg)
   MCP_LOAD_OPT(cfg, odometry_noise_xyz_per_sqrt_m);
   MCP_LOAD_OPT(cfg, odometry_noise_ang_deg_per_sqrt_m);
   MCP_LOAD_OPT(cfg, odometry_noise_ang_per_rad);
+  MCP_LOAD_OPT(cfg, use_wheel_odometry);
+  MCP_LOAD_OPT(cfg, wheel_odom_min_sigma);
+  MCP_LOAD_OPT(cfg, wheel_odom_sigma_per_m);
+  MCP_LOAD_OPT(cfg, wheel_odom_lateral_sigma_per_m);
+  MCP_LOAD_OPT(cfg, wheel_odom_sigma_per_rad);
+  MCP_LOAD_OPT(cfg, wheel_odom_max_yaw_error_deg);
+  MCP_LOAD_OPT(cfg, wheel_odom_max_yaw_error_ratio);
+  MCP_LOAD_OPT(cfg, wheel_odom_min_ratio_to_front_end);
+  MCP_LOAD_OPT(cfg, wheel_odom_ratio_floor);
+  MCP_LOAD_OPT(cfg, wheel_odom_robust_kernel);
+  MCP_LOAD_OPT(cfg, wheel_odom_robust_k);
+  MCP_LOAD_OPT(cfg, wheel_odom_chain_robust_kernel);
+  MCP_LOAD_OPT(cfg, wheel_odom_chain_robust_k);
   MCP_LOAD_OPT(cfg, use_gyro);
   MCP_LOAD_OPT(cfg, gyro_min_sigma_deg);
 
@@ -76,6 +89,8 @@ void Parameters::loadFrom(const mrpt::containers::yaml & cfg)
   MCP_LOAD_OPT(cfg, imu_gravity_window);
   MCP_LOAD_OPT(cfg, imu_gravity_min_samples);
   MCP_LOAD_OPT(cfg, gyro_sensor_labels_re);
+  MCP_LOAD_OPT(cfg, wheel_odom_sensor_labels_re);
+  MCP_LOAD_OPT(cfg, wheel_odom_max_gap);
   MCP_LOAD_OPT(cfg, image_sensor_labels_re);
   MCP_LOAD_OPT(cfg, image_max_time_offset);
   MCP_LOAD_OPT(cfg, image_format);

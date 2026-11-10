@@ -91,7 +91,8 @@ Keys `P(i)` (keyframe poses in `{map}`), `T(0)` (T_enu_to_map). Factors:
   on the wheel factors instead (`wheel_odom_robust_kernel`) rejects wheel slip, but also the
   wheels when LIO is the one wrong: nothing in the graph tells them apart, except GNSS.
   Increments whose yaw disagrees with the gyroscope (`wheel_odom_max_yaw_error_*`) or shorter
-  than the LIO forward motion (`wheel_odom_min_ratio_to_front_end`) are dropped: encoder count
+  than 0.95 of the LIO forward motion along the direction of travel
+  (`wheel_odom_min_ratio_to_front_end`, minus 2 cm) are dropped: encoder count
   losses read false turns and less motion, a degenerate LIO falls short, never beyond (wheel spin
   is the case left);
 - weak prior on `T(0)`, prior on `P(0)` (gauge).

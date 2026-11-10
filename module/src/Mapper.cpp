@@ -282,10 +282,20 @@ void Mapper::add_wheel_odom_sample_locked(const mrpt::obs::CObservationOdometry 
   while (!pending_wheel_odom_.empty() && attach_wheel_odom_locked(pending_wheel_odom_.front())) {
     pending_wheel_odom_.pop_front();
   }
-  // Keep enough for keyframes arriving late:
+  // Keep enough for keyframes arriving late, and always back to the keyframe the
+  // next increment starts at (however long the vehicle stood still):
+  std::optional<mrpt::Clock::time_point> needed;
+  if (!pending_wheel_odom_.empty()) {
+    needed =
+      keyframes_.at(pending_wheel_odom_.front() > 0 ? pending_wheel_odom_.front() - 1 : 0).stamp;
+  } else if (!keyframes_.empty()) {
+    needed = keyframes_.back().stamp;
+  }
   constexpr double WHEEL_ODOM_KEEP = 60.0;  // [s]
-  while (mrpt::system::timeDifference(wheel_odom_samples_.front().stamp, odo.timestamp) >
-         WHEEL_ODOM_KEEP) {
+  while (wheel_odom_samples_.size() > 1 &&
+         mrpt::system::timeDifference(wheel_odom_samples_.front().stamp, odo.timestamp) >
+           WHEEL_ODOM_KEEP &&
+         (!needed || wheel_odom_samples_[1].stamp <= *needed)) {
     wheel_odom_samples_.pop_front();
   }
 }
@@ -672,6 +682,16 @@ std::optional<SharedKeyframeMap::KeyFrameID> Mapper::insert_keyframe_impl(
     // In order: a keyframe waits if older ones do.
     if (use_wheel_odom_input_ && (!pending_wheel_odom_.empty() || !attach_wheel_odom_locked(id))) {
       pending_wheel_odom_.push_back(id);
+      constexpr std::size_t MANY_PENDING = 20;
+      if (pending_wheel_odom_.size() > MANY_PENDING) {
+        const std::string why = wheel_odom_samples_.empty()
+                                  ? "none received yet with a label matching '" +
+                                      params_.wheel_odom_sensor_labels_re + "'"
+                                  : "the newest one is older than the keyframes";
+        MRPT_LOG_THROTTLE_WARN_FMT(
+          30.0, "%zu keyframes waiting for wheel odometry readings: %s", pending_wheel_odom_.size(),
+          why.c_str());
+      }
     }
 
     retry_pending_gnss_locked();

@@ -104,6 +104,32 @@ std::vector<CPose3D> ground_truth()
   return gt;
 }
 
+/// Ground truth: 120 keyframes along arcs of 0.5 m turning 0.3 rad each (so the
+/// increments have a large lateral component), the turn changing side every 20.
+std::vector<CPose3D> ground_truth_arcs()
+{
+  std::vector<CPose3D> gt;
+  CPose3D p;
+  for (int i = 0; i < 120; i++) {
+    gt.push_back(p);
+    const double w = (i / 20) % 2 == 0 ? 0.3 : -0.3;
+    p = p + CPose3D(mrpt::poses::CPose2D(arc(1.0, 0.5, w)));
+  }
+  return gt;
+}
+
+/// Ground truth: 120 keyframes driving in reverse, 0.5 m apart, slightly turning.
+std::vector<CPose3D> ground_truth_reverse()
+{
+  std::vector<CPose3D> gt;
+  CPose3D p;
+  for (int i = 0; i < 120; i++) {
+    gt.push_back(p);
+    p = p + CPose3D(-0.5, 0, 0, 0.01, 0, 0);
+  }
+  return gt;
+}
+
 /// Front end and wheel increments from the ground truth, with small noise, and
 /// their forward components scaled in [SLIP_FIRST, SLIP_LAST].
 constexpr std::size_t SLIP_FIRST = 40;
@@ -242,11 +268,74 @@ void test_false_turns()
   ASSERT_LT_(err, 0.1);
 }
 
+/** Front end slip and correct wheels along tight arcs: the wheel factors must
+ *  use the right frame and signs of the lateral components. */
+void test_arcs()
+{
+  const auto gt = ground_truth_arcs();
+  const auto good = make_input(gt, 1.0, 1.0);
+  const auto r0 = mola::mapper::optimize_global_graph(good, base_params());
+  const auto in = make_input(gt, 0.5, 1.0);
+  const auto r1 = mola::mapper::optimize_global_graph(in, base_params());
+  auto p = base_params();
+  p.use_wheel_odometry = false;
+  const double errNone = end_error(mola::mapper::optimize_global_graph(in, p).poses, gt);
+  std::cout << "Arcs: end error " << end_error(r0.poses, gt) << " m without slip, "
+            << end_error(r1.poses, gt) << " m with a front end slip (" << errNone
+            << " m without wheels)\n";
+  ASSERT_EQUAL_(r0.num_wheel_odom_factors, gt.size() - 1);
+  ASSERT_EQUAL_(r1.num_wheel_odom_factors, gt.size() - 1);
+  ASSERT_LT_(end_error(r0.poses, gt), 0.1);
+  ASSERT_GT_(errNone, 1.0);
+  ASSERT_LT_(end_error(r1.poses, gt), 0.15);
+}
+
+/** Driving in reverse: the gate works along the direction of travel. Correct
+ *  wheels are used (and fix a front end slip), short ones are not. */
+void test_reverse()
+{
+  const auto gt = ground_truth_reverse();
+  const auto slip = make_input(gt, 0.5, 1.0);
+  const auto r0 = mola::mapper::optimize_global_graph(slip, base_params());
+  const auto shortWheels = make_input(gt, 1.0, 0.4);
+  const auto r1 = mola::mapper::optimize_global_graph(shortWheels, base_params());
+  std::cout << "Reverse: end error " << end_error(r0.poses, gt) << " m with a front end slip, "
+            << end_error(r1.poses, gt) << " m with short wheels (" << r1.num_wheel_odom_inconsistent
+            << " increments not used)\n";
+  ASSERT_EQUAL_(r0.num_wheel_odom_factors, gt.size() - 1);
+  ASSERT_LT_(end_error(r0.poses, gt), 0.3);
+  ASSERT_EQUAL_(r1.num_wheel_odom_inconsistent, SLIP_LAST - SLIP_FIRST + 1);
+  ASSERT_LT_(end_error(r1.poses, gt), 0.1);
+}
+
+/** Wheels reading short of a correct front end are not used (they would win
+ *  over it): all of them 15 % short; most of them 10 % short, which is near the
+ *  gate with this per-keyframe noise; none of them 3 % short. */
+void test_ratio_gate()
+{
+  const auto gt = ground_truth();
+  const auto r15 = mola::mapper::optimize_global_graph(make_input(gt, 1.0, 0.85), base_params());
+  const auto r10 = mola::mapper::optimize_global_graph(make_input(gt, 1.0, 0.9), base_params());
+  const auto r3 = mola::mapper::optimize_global_graph(make_input(gt, 1.0, 0.97), base_params());
+  std::cout << "Ratio gate: wheels 15 % short: " << r15.num_wheel_odom_inconsistent
+            << " not used, end error " << end_error(r15.poses, gt)
+            << " m; 10 % short: " << r10.num_wheel_odom_inconsistent << " not used, end error "
+            << end_error(r10.poses, gt) << " m; 3 % short: " << r3.num_wheel_odom_inconsistent
+            << " not used\n";
+  constexpr std::size_t N = SLIP_LAST - SLIP_FIRST + 1;
+  ASSERT_EQUAL_(r15.num_wheel_odom_inconsistent, N);
+  ASSERT_LT_(end_error(r15.poses, gt), 0.1);
+  ASSERT_GT_(r10.num_wheel_odom_inconsistent, N / 2);
+  ASSERT_LT_(end_error(r10.poses, gt), 0.2);
+  ASSERT_EQUAL_(r3.num_wheel_odom_inconsistent, 0U);
+}
+
 void test_io_round_trip()
 {
   const auto gt = ground_truth();
   const auto in = make_input(gt, 0.5, 1.0);
-  const auto dir = std::filesystem::temp_directory_path() / "mola_mapper_test_wheel_odom";
+  const auto dir = std::filesystem::temp_directory_path() /
+                   ("mola_mapper_test_wheel_odom_" + std::to_string(std::random_device{}()));
   std::filesystem::create_directories(dir);
   const std::string prefix = (dir / "graph").string();
   mola::mapper::save_global_graph_input(in, prefix);
@@ -277,6 +366,9 @@ int main()
     test_front_end_slip();
     test_wheel_slip();
     test_false_turns();
+    test_arcs();
+    test_reverse();
+    test_ratio_gate();
     test_io_round_trip();
     return 0;
   } catch (const std::exception & e) {

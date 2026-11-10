@@ -134,7 +134,9 @@ stores under `state_mtx_`:
 - Gyroscope: the first IMU label matching `gyro_sensor_labels_re` is queued in
   `gyro_samples_` (last 60 s).
 - Wheel odometry (`CObservationOdometry`): the first matching label is queued in
-  `wheel_odom_samples_` (last 60 s); each reading retries `pending_wheel_odom_`.
+  `wheel_odom_samples_` (last 60 s, and always back to the keyframe the next
+  increment starts at); each reading retries `pending_wheel_odom_` (a throttled
+  warning if many keyframes wait).
 
 ## Optimizer thread
 

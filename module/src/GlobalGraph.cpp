@@ -49,6 +49,9 @@ namespace
 using gtsam::symbol_shorthand::P;  // P(i): vehicle pose of keyframe i, in {map}
 using gtsam::symbol_shorthand::T;  // T(0): T_enu_to_map
 
+/// Sigma of the components a factor leaves unconstrained [m].
+constexpr double FREE_SIGMA = 1e3;
+
 gtsam::noiseModel::mEstimator::Base::shared_ptr robust_kernel(const std::string & name, double k)
 {
   namespace m = gtsam::noiseModel::mEstimator;
@@ -70,7 +73,8 @@ gtsam::noiseModel::mEstimator::Base::shared_ptr robust_kernel(const std::string 
 /// The wheel odometry increment of keyframe kf (prev: the one before it), if
 /// there is one and it is usable: wheels that lose encoder counts read false
 /// turns, and less motion than the front end (which, when degenerate, reads less
-/// than the real one, not more).
+/// than the real one, not more), along its direction of travel (forward or
+/// reverse).
 const mrpt::math::TPose2D * usable_wheel_odom(
   const GlobalGraphKeyframe & prev, const GlobalGraphKeyframe & kf, const GlobalGraphParams & p)
 {
@@ -79,10 +83,15 @@ const mrpt::math::TPose2D * usable_wheel_odom(
   }
   if (prev.source_frame == kf.source_frame) {
     const double frontEndForward = (kf.pose_in_source.mean - prev.pose_in_source.mean).x();
-    if (
-      kf.wheel_odom_from_prev->x <
-      p.wheel_odom_min_ratio_to_front_end * frontEndForward - p.wheel_odom_ratio_floor) {
-      return nullptr;
+    // Below the floor the direction of travel is unknown: no check.
+    if (std::abs(frontEndForward) > p.wheel_odom_ratio_floor) {
+      const double along =
+        frontEndForward > 0 ? kf.wheel_odom_from_prev->x : -kf.wheel_odom_from_prev->x;
+      if (
+        along < p.wheel_odom_min_ratio_to_front_end * std::abs(frontEndForward) -
+                  p.wheel_odom_ratio_floor) {
+        return nullptr;
+      }
     }
   }
   if (kf.gyro_rotation_from_prev) {
@@ -150,7 +159,6 @@ void add_odometry_factors(
       const bool robustForward = usable_wheel_odom(prev, cur, params) != nullptr &&
                                  params.wheel_odom_chain_robust_kernel != "none";
       if (robustForward) {
-        constexpr double FREE_SIGMA = 100.0;  // [m]
         const gtsam::Vector3 fs(s[0], FREE_SIGMA, FREE_SIGMA);
         s[0] = FREE_SIGMA;
         const auto model = gtsam::noiseModel::Robust::Create(
@@ -185,7 +193,6 @@ void add_gyro_factors(
   if (!params.use_gyro) {
     return;
   }
-  constexpr double FREE_TRANSLATION_SIGMA = 1e3;  // [m]
   for (std::size_t i = 1; i < in.keyframes.size(); i++) {
     const auto & cur = in.keyframes[i];
     if (!cur.gyro_rotation_from_prev) {
@@ -194,8 +201,7 @@ void add_gyro_factors(
     const double sigma =
       std::max(cur.gyro_rotation_sigma, mrpt::DEG2RAD(params.gyro_min_sigma_deg));
     gtsam::Vector6 sigmas;
-    sigmas << sigma, sigma, sigma, FREE_TRANSLATION_SIGMA, FREE_TRANSLATION_SIGMA,
-      FREE_TRANSLATION_SIGMA;
+    sigmas << sigma, sigma, sigma, FREE_SIGMA, FREE_SIGMA, FREE_SIGMA;
     fg.emplace_shared<gtsam::BetweenFactor<gtsam::Pose3>>(
       P(i - 1), P(i), mrpt::gtsam_wrappers::toPose3(*cur.gyro_rotation_from_prev),
       gtsam::noiseModel::Diagonal::Sigmas(sigmas));
@@ -213,7 +219,6 @@ void add_wheel_odometry_factors(
   if (!params.use_wheel_odometry) {
     return;
   }
-  constexpr double FREE_SIGMA = 1e3;  // [m]
   for (std::size_t i = 1; i < in.keyframes.size(); i++) {
     const auto * inc = usable_wheel_odom(in.keyframes[i - 1], in.keyframes[i], params);
     if (in.keyframes[i].wheel_odom_from_prev && !inc) {

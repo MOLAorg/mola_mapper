@@ -67,6 +67,18 @@ void GlobalGraphParams::loadFrom(const mrpt::containers::yaml & cfg)
       mrpt::format(
         "Unknown gnss_robust_kernel '%s' (huber, cauchy, geman_mcclure or tukey)",
         gnss_robust_kernel.c_str()));
+    // The wheel odometry ones may also be "none" (an empty value means the same):
+    for (auto * k : {&wheel_odom_robust_kernel, &wheel_odom_chain_robust_kernel}) {
+      if (k->empty()) {
+        *k = "none";
+      }
+      ASSERTMSG_(
+        *k == "none" || kernels.count(*k) != 0,
+        mrpt::format(
+          "Unknown wheel odometry robust kernel '%s' (none, huber, cauchy, geman_mcclure or "
+          "tukey)",
+          k->c_str()));
+    }
   }
 
   MCP_LOAD_OPT(cfg, use_imu_gravity);

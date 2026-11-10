@@ -18,7 +18,6 @@
  */
 
 #include <mola_mapper/WheelOdometry.h>
-#include <mrpt/core/bits_math.h>
 #include <mrpt/math/wrap2pi.h>
 #include <mrpt/poses/CPose2D.h>
 

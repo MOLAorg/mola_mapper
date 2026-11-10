@@ -70,7 +70,7 @@ params:
     wheel_odom_max_yaw_error_ratio: 0.2
     # Nor if shorter than this fraction of the front end forward motion, minus a
     # floor (a degenerate front end reads less than real; wheels losing counts too):
-    wheel_odom_min_ratio_to_front_end: ${MOLA_MAPPER_WHEEL_ODOM_MIN_RATIO|0.75}
+    wheel_odom_min_ratio_to_front_end: ${MOLA_MAPPER_WHEEL_ODOM_MIN_RATIO|0.95}
     wheel_odom_ratio_floor: 0.02  # [m]
     wheel_odom_robust_kernel: "${MOLA_MAPPER_WHEEL_ODOM_ROBUST_KERNEL|none}"
     wheel_odom_robust_k: ${MOLA_MAPPER_WHEEL_ODOM_ROBUST_K|3.0}  # [sigmas]

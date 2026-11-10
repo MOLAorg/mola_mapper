@@ -68,9 +68,11 @@ struct GlobalGraphParams
   double wheel_odom_max_yaw_error_deg = 3.0;
   double wheel_odom_max_yaw_error_ratio = 0.2;
   /// Increments shorter than this fraction of the front end forward motion,
-  /// minus a floor [m], are not used: a degenerate front end falls short of the
-  /// real motion, while wheels that lose encoder counts read less than it.
-  double wheel_odom_min_ratio_to_front_end = 0.75;
+  /// minus a floor [m], along its direction of travel, are not used: a
+  /// degenerate front end falls short of the real motion, while wheels that lose
+  /// encoder counts read less than it. Close to 1, since wheels that win over a
+  /// correct front end must not read less than it; the floor absorbs the noise.
+  double wheel_odom_min_ratio_to_front_end = 0.95;
   double wheel_odom_ratio_floor = 0.02;
   /// "none" or as gnss_robust_kernel. Wheel slip makes the wheels read more
   /// motion than real, but a redescending kernel also rejects the wheels when

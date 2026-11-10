@@ -217,7 +217,7 @@ with an environment variable (shown in parentheses below).
         wheel_odom_sigma_per_rad: 0.05          # [m/rad] (MOLA_MAPPER_WHEEL_ODOM_SIGMA_PER_RAD)
         wheel_odom_max_yaw_error_deg: 3.0       # [deg] (MOLA_MAPPER_WHEEL_ODOM_MAX_YAW_ERROR)
         wheel_odom_max_yaw_error_ratio: 0.2
-        wheel_odom_min_ratio_to_front_end: 0.75 # (MOLA_MAPPER_WHEEL_ODOM_MIN_RATIO)
+        wheel_odom_min_ratio_to_front_end: 0.95 # (MOLA_MAPPER_WHEEL_ODOM_MIN_RATIO)
         wheel_odom_ratio_floor: 0.02            # [m]
         wheel_odom_robust_kernel: "none"        # (MOLA_MAPPER_WHEEL_ODOM_ROBUST_KERNEL)
         wheel_odom_robust_k: 3.0                # (MOLA_MAPPER_WHEEL_ODOM_ROBUST_K)
@@ -238,7 +238,8 @@ with an environment variable (shown in parentheses below).
    ``wheel_odom_max_yaw_error_ratio`` of the gyroscope yaw) are not used, nor is
    the chain edge split there: wheels that lose encoder counts read false turns.
    Nor are increments shorter than ``wheel_odom_min_ratio_to_front_end`` of the
-   front end forward motion (minus ``wheel_odom_ratio_floor``): a degenerate front
+   front end forward motion (minus ``wheel_odom_ratio_floor``), along its
+   direction of travel (forward or reverse): a degenerate front
    end falls short of the real motion, never beyond it, while wheels that lose
    encoder counts read less than it. Wheel spin (more than real) is the case
    left: it is taken as a front end slip.

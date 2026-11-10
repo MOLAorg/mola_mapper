@@ -58,3 +58,10 @@ if(mola_test_datasets_FOUND)
     MOLA_MAPPER_LC_PIPELINE="${PROJECT_SOURCE_DIR}/params/loop-closure-f2f-mapper.yaml"
   )
 endif()
+
+mola_add_test(
+  TARGET  test-wheel-odometry
+  SOURCES test-wheel-odometry.cpp
+  LINK_LIBRARIES
+    mola::mola_mapper
+)

@@ -21,6 +21,7 @@
 #include <mola_kernel/Georeferencing.h>
 #include <mola_mapper/Parameters.h>
 #include <mrpt/core/Clock.h>
+#include <mrpt/math/TPose2D.h>
 #include <mrpt/obs/CSensoryFrame.h>
 #include <mrpt/poses/CPose3D.h>
 #include <mrpt/poses/CPose3DPDFGaussian.h>
@@ -57,6 +58,10 @@ struct GlobalGraphKeyframe
   /// the rotation part is used), and its sigma per axis [rad].
   std::optional<mrpt::poses::CPose3D> gyro_rotation_from_prev;
   double gyro_rotation_sigma = 0;
+
+  /// Wheel odometry increment since the previous keyframe, in the vehicle frame
+  /// of the previous keyframe (planar: x forward, y left, yaw).
+  std::optional<mrpt::math::TPose2D> wheel_odom_from_prev;
 };
 
 /** A loop closure: pose of keyframe `to` as seen from keyframe `from`. */
@@ -99,6 +104,10 @@ struct GlobalGraphResult
   std::size_t num_gravity_factors = 0;
   std::size_t num_gyro_factors = 0;
   std::size_t num_loop_factors = 0;
+  std::size_t num_wheel_odom_factors = 0;
+  /// Wheel odometry increments not used: inconsistent with the gyroscope or the
+  /// front end (see GlobalGraphParams).
+  std::size_t num_wheel_odom_inconsistent = 0;
 
   /// Azimuth sigma of T_enu_to_map [rad], compared against the observability
   /// limit (if computed).
@@ -111,8 +120,8 @@ struct GlobalGraphResult
   double final_error = 0;
 };
 
-/** Builds the pose graph of all the keyframes (odometry chain, loop closures, GNSS
- *  and gravity factors, with the GNSS and IMU factor builders of
+/** Builds the pose graph of all the keyframes (odometry chain, loop closures, GNSS,
+ *  gravity, gyroscope and wheel odometry factors, with the GNSS and IMU factor builders of
  *  mola_georeferencing) and optimizes it with Levenberg-Marquardt.
  *
  *  Variables: P(i), the vehicle pose of keyframe i in the map frame, and T(0),

@@ -105,6 +105,9 @@ keyframe index.
    first `mola::ImuBiasSource` that has an estimate, else zero with
    `gyro_bias_sigma`. The rotation is rotated to the vehicle frame and stored
    with its sigma.
+   With wheel odometry, `attach_wheel_odom_locked()` stores its increment since
+   the previous keyframe (`wheel_odometry_increment()`), or queues the keyframe in
+   `pending_wheel_odom_` until the readings reach its stamp.
 5. `retry_pending_gnss_locked()` re-attempts the GNSS readings that were waiting
    for a keyframe.
 6. After releasing the lock, `optimizer_new_data_` is set and the optimizer
@@ -113,7 +116,8 @@ keyframe index.
 ## Raw data attachment
 
 `onNewObservation()` filters by sensor label regex (`gnss_sensor_labels_re`,
-`imu_sensor_labels_re`, `gyro_sensor_labels_re`, `image_sensor_labels_re`) and
+`imu_sensor_labels_re`, `gyro_sensor_labels_re`, `image_sensor_labels_re`,
+`wheel_odom_sensor_labels_re`) and
 stores under `state_mtx_`:
 
 - GNSS: `attach_gnss_locked()` keeps the reading pending until a keyframe at or
@@ -129,6 +133,10 @@ stores under `state_mtx_`:
 - Accelerometer: queued in `imu_samples_` (window plus a few seconds).
 - Gyroscope: the first IMU label matching `gyro_sensor_labels_re` is queued in
   `gyro_samples_` (last 60 s).
+- Wheel odometry (`CObservationOdometry`): the first matching label is queued in
+  `wheel_odom_samples_` (last 60 s, and always back to the keyframe the next
+  increment starts at); each reading retries `pending_wheel_odom_` (a throttled
+  warning if many keyframes wait).
 
 ## Optimizer thread
 

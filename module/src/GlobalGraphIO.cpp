@@ -113,6 +113,26 @@ void save_global_graph_input(const GlobalGraphInput & in, const std::string & pr
       f << "\n";
     }
   }
+  {
+    bool any = false;
+    for (const auto & kf : in.keyframes) {
+      any = any || kf.wheel_odom_from_prev.has_value();
+    }
+    if (any) {
+      std::ofstream f(prefix + ".wheel_odom.txt");
+      ASSERTMSG_(f.is_open(), "Cannot write " + prefix + ".wheel_odom.txt");
+      f << std::setprecision(17);
+      f << "# idx dx dy dyaw (since the previous keyframe, in its vehicle frame)\n";
+      for (std::size_t i = 0; i < in.keyframes.size(); i++) {
+        const auto & w = in.keyframes[i].wheel_odom_from_prev;
+        if (w) {
+          f << i << " " << w->x << " " << w->y << " " << w->phi << "\n";
+        }
+      }
+    } else {
+      std::remove((prefix + ".wheel_odom.txt").c_str());
+    }
+  }
   if (in.geodetic_datum) {
     std::ofstream f(prefix + ".datum.txt");
     ASSERTMSG_(f.is_open(), "Cannot write " + prefix + ".datum.txt");
@@ -183,6 +203,20 @@ GlobalGraphInput load_global_graph_input(const std::string & prefix)
     lc.relative_pose.mean = read_pose(s);
     lc.relative_pose.cov = read_cov(s);
     in.loops.push_back(lc);
+  }
+
+  std::ifstream fw(prefix + ".wheel_odom.txt");
+  while (fw.is_open() && std::getline(fw, line)) {
+    if (line.empty() || line[0] == '#') {
+      continue;
+    }
+    std::istringstream s(line);
+    std::size_t idx = 0;
+    mrpt::math::TPose2D w;
+    s >> idx >> w.x >> w.y >> w.phi;
+    ASSERTMSG_(
+      !s.fail() && idx < in.keyframes.size(), "Bad line in " + prefix + ".wheel_odom.txt: " + line);
+    in.keyframes[idx].wheel_odom_from_prev = w;
   }
 
   std::ifstream fd(prefix + ".datum.txt");

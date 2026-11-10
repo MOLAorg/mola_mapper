@@ -34,11 +34,13 @@
 #include <mola_mapper/LoopOdometryCheck.h>
 #include <mola_mapper/MapperInputLog.h>
 #include <mola_mapper/Parameters.h>
+#include <mola_mapper/WheelOdometry.h>
 #include <mrpt/core/WorkerThreadsPool.h>
 #include <mrpt/maps/CSimpleMap.h>
 #include <mrpt/obs/CObservationGPS.h>
 #include <mrpt/obs/CObservationIMU.h>
 #include <mrpt/obs/CObservationImage.h>
+#include <mrpt/obs/CObservationOdometry.h>
 #include <mrpt/obs/CSensoryFrame.h>
 #include <mrpt/poses/CPose3D.h>
 
@@ -196,6 +198,8 @@ private:
     /// Gyroscope rotation (vehicle frame) since the previous keyframe, sigma [rad].
     std::optional<mrpt::poses::CPose3D> gyro_rotation_from_prev;
     double gyro_rotation_sigma = 0;
+    /// Wheel odometry increment (vehicle frame) since the previous keyframe.
+    std::optional<mrpt::math::TPose2D> wheel_odom_from_prev;
   };
 
   /// Gyroscope bias (and its sigma [rad/s]) at time t, from the bias sources.
@@ -211,6 +215,10 @@ private:
 
   /// Gyroscope rotation from the previous keyframe to kf (state_mtx_ held).
   void attach_gyro_rotation_locked(Keyframe & kf, const GyroBias & b);
+  /// Wheel odometry increment from the previous keyframe to keyframe `idx`.
+  /// Returns false if the readings do not reach it yet.
+  bool attach_wheel_odom_locked(std::size_t idx);
+  void add_wheel_odom_sample_locked(const mrpt::obs::CObservationOdometry & odo);
 
   struct ImuSample
   {
@@ -225,6 +233,8 @@ private:
   bool use_imu_input_ = false;
   std::regex gyro_labels_re_;
   bool use_gyro_input_ = false;
+  std::regex wheel_odom_labels_re_;
+  bool use_wheel_odom_input_ = false;
   std::regex image_labels_re_;
   bool use_image_input_ = false;
   std::vector<std::shared_ptr<mola::ImuBiasSource>> imu_bias_sources_;
@@ -247,6 +257,11 @@ private:
   std::deque<GyroSample> gyro_samples_;
   std::string gyro_label_;
   mrpt::poses::CPose3D gyro_sensor_pose_;
+  /// Wheel odometry readings of the first label matching wheel_odom_sensor_labels_re.
+  std::deque<WheelOdomSample> wheel_odom_samples_;
+  std::string wheel_odom_label_;
+  /// Keyframes inserted before the wheel odometry readings reached them.
+  std::deque<std::size_t> pending_wheel_odom_;
   std::vector<GlobalGraphLoopEdge> loops_;
   /// Keyframe pairs (min, max) of the merged loops.
   std::set<std::pair<std::size_t, std::size_t>> loop_pairs_;
@@ -258,6 +273,7 @@ private:
   std::size_t last_num_gnss_factors_ = 0;
   std::size_t last_num_gravity_factors_ = 0;
   std::size_t last_num_gyro_factors_ = 0;
+  std::size_t last_num_wheel_odom_factors_ = 0;
   /// Loops in the last solve advertised as a local map correction (solve_mtx_).
   std::size_t loops_in_last_correction_ = 0;
   /// Stamp of the last keyframe pose fed back to the state estimator.

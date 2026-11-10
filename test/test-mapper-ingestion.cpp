@@ -22,6 +22,7 @@
 
 #include <mola_kernel/MinimalModuleContainer.h>
 #include <mola_kernel/interfaces/NavStateFilter.h>
+#include <mola_mapper/GlobalGraphIO.h>
 #include <mola_mapper/Mapper.h>
 #include <mrpt/core/bits_math.h>
 #include <mrpt/core/exceptions.h>
@@ -30,14 +31,17 @@
 #include <mrpt/obs/CObservationGPS.h>
 #include <mrpt/obs/CObservationIMU.h>
 #include <mrpt/obs/CObservationImage.h>
+#include <mrpt/obs/CObservationOdometry.h>
 #include <mrpt/system/filesystem.h>
 
 #include <Eigen/Dense>
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <filesystem>
 #include <iostream>
 #include <memory>
+#include <random>
 #include <string>
 #include <thread>
 #include <vector>
@@ -459,6 +463,67 @@ void test_outputs_survive_a_failing_one()
   std::cout << "Outputs survive a failing one   OK\n";
 }
 
+/** Wheel odometry increments between keyframes: keyframes ahead of the readings
+ *  wait for them, in order; duplicated or unordered readings are ignored; gaps
+ *  leave no increment; a long standstill without keyframes keeps the readings
+ *  the next increment needs. */
+void test_wheel_odometry_attachment()
+{
+  const auto dir = std::filesystem::temp_directory_path() /
+                   ("mola_mapper_test_ingestion_" + std::to_string(std::random_device{}()));
+  std::filesystem::create_directories(dir);
+  const std::string prefix = (dir / "graph").string();
+  auto m = make_mapper(
+    "  wheel_odom_sensor_labels_re: \"odom\"\n"
+    "  wheel_odom_max_gap: 0.5\n"
+    "  output_graph_input: \"" +
+    prefix + "\"\n");
+  const auto odo = [&](double t, double x) {
+    auto o = mrpt::obs::CObservationOdometry::Create();
+    o->sensorLabel = "odom";
+    o->timestamp = at(t);
+    o->odometry = mrpt::poses::CPose2D(x, 0, 0);
+    m->onNewObservation(o);
+  };
+  const auto kf = [&](double t, double x) { insert_keyframe(*m, t, CPose3D(x, 0, 0, 0, 0, 0)); };
+
+  for (int i = 0; i <= 10; i++) {
+    odo(0.1 * i, 0.1 * i);
+  }
+  kf(0.05, 0.05);
+  kf(0.55, 0.55);  // 0.5
+  kf(1.25, 1.25);  // waits: the readings reach 1.0
+  kf(1.45, 1.45);  // waits behind it
+  odo(1.2, 1.2);
+  odo(1.2, 99.0);   // same stamp: ignored
+  odo(1.15, 99.0);  // older: ignored
+  odo(1.3, 1.3);    // keyframe at 1.25: 0.7
+  odo(2.5, 2.5);    // a 1.2 s gap: none for the keyframe at 1.45
+  kf(2.6, 2.6);     // starts inside the gap: none
+  odo(2.7, 2.7);
+  kf(2.65, 2.65);  // 0.05
+  // Standing still for longer than the readings are normally kept:
+  for (int i = 0; i <= 972; i++) {  // up to 100.0 s
+    odo(2.8 + 0.1 * i, 2.7);
+  }
+  odo(100.1, 2.8);
+  kf(100.05, 2.75);  // 2.75 - 2.65
+  m->finalize();
+
+  const auto in = mola::mapper::load_global_graph_input(prefix);
+  std::filesystem::remove_all(dir);
+  const std::vector<double> expected = {-1, 0.5, 0.7, -1, -1, 0.05, 0.1};
+  ASSERT_EQUAL_(in.keyframes.size(), expected.size());
+  for (std::size_t i = 0; i < expected.size(); i++) {
+    const auto & w = in.keyframes[i].wheel_odom_from_prev;
+    ASSERTMSG_(w.has_value() == (expected[i] >= 0), mrpt::format("keyframe %zu", i));
+    if (w) {
+      ASSERT_NEAR_(w->x, expected[i], 1e-9);
+    }
+  }
+  std::cout << "Wheel odometry attachment   OK\n";
+}
+
 void test_loop_odometry_limits_loaded()
 {
   auto m = make_mapper(
@@ -483,6 +548,15 @@ void test_unknown_robust_kernel_rejected_at_start()
     thrown = true;
   }
   ASSERT_(thrown);
+  thrown = false;
+  try {
+    auto m = make_mapper("  graph:\n    wheel_odom_chain_robust_kernel: \"cauchyy\"\n");
+  } catch (const std::exception &) {
+    thrown = true;
+  }
+  ASSERT_(thrown);
+  auto m = make_mapper("  graph:\n    wheel_odom_robust_kernel: \"\"\n");
+  ASSERT_EQUAL_(m->parameters().graph.wheel_odom_robust_kernel, std::string("none"));
   std::cout << "Unknown robust kernel rejected   OK\n";
 }
 
@@ -500,6 +574,7 @@ int main()
     test_outputs_survive_a_failing_one();
     test_unknown_robust_kernel_rejected_at_start();
     test_loop_odometry_limits_loaded();
+    test_wheel_odometry_attachment();
     std::cout << "All tests passed.\n";
     return 0;
   } catch (const std::exception & e) {

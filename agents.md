@@ -106,8 +106,12 @@ and a `T(0)` azimuth sigma below `georef_max_sigma_yaw_deg`.
   map, incremental scans plus a full one every `loop_closure_full_scan_every_n`; new edges
   merged in order, except those contradicting the odometry chain between their keyframes
   (`check_loop_against_odometry()`: floor + fraction of the distance traveled; only within one
-  source frame, so a front end that restarts must use a new `source_frame_id`). Closed and
-  rejected pairs (`loop_pairs_`, `rejected_loop_pairs_`) are excluded from later scans (exact
+  source frame, so a front end that restarts must use a new `source_frame_id`), then those
+  inconsistent with most of their neighbor loops (`LoopConsistencyGate`: cycles of two loops and
+  the odometry between their ends; each group of neighbor loops is decided again from scratch
+  when a loop joins it, off `state_mtx_`, so loops can be dropped and accepted again; `loops_`
+  is the accepted ones). Proposed and odometry-rejected pairs (`loop_pairs_`,
+  `rejected_loop_pairs_`) are excluded from later scans (exact
   keyframe pairs: nearby pairs remain candidates). One scan at a
   time (`lc_scan_mtx_`). `finalize()` (also from `onQuit()`)
   runs extra full scans and solves; each step and output is guarded, so one failure does not
@@ -128,4 +132,4 @@ and a `T(0)` azimuth sigma below `georef_max_sigma_yaw_deg`.
 
 `test/`: test-global-graph (loop closure, GNSS georef and its observability, gyro vs turn
 heading errors), test-gyro-integration, test-mapper-ingestion (GNSS/gravity/gyro attachment,
-feedback, outputs), test-loop-odometry-check, test-lc-wait-idle.
+feedback, outputs), test-loop-odometry-check, test-loop-consistency, test-lc-wait-idle.

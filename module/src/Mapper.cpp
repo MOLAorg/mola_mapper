@@ -749,7 +749,11 @@ void Mapper::stop_optimizer_thread()
   }
 }
 
-void Mapper::optimize_now() { solve_global_graph(); }
+void Mapper::optimize_now()
+{
+  optimizer_new_data_.store(false);
+  solve_global_graph();
+}
 
 GlobalGraphInput Mapper::graph_input_locked() const
 {
@@ -788,12 +792,16 @@ void Mapper::solve_global_graph()
   auto lckSolve = mrpt::lockHelper(solve_mtx_);
 
   GlobalGraphInput in;
+  std::size_t loopsRevision = 0;
+  std::size_t loopsAdded = 0;
   {
     auto lck = mrpt::lockHelper(state_mtx_);
     if (keyframes_.empty()) {
       return;
     }
     in = graph_input_locked();
+    loopsRevision = loops_revision_;
+    loopsAdded = loops_added_;
   }
 
   const auto t0 = std::chrono::steady_clock::now();
@@ -847,13 +855,14 @@ void Mapper::solve_global_graph()
   send_feedback(newestStamp, newestPose, r);
 
 #if defined(MOLA_MAPPER_HAS_LOCAL_MAP_CORRECTIONS)
-  // Only loop closures move the keyframes around the front end enough to
-  // rebuild its local map:
-  if (params_.local_map_corrections && in.loops.size() > loops_in_last_correction_) {
+  // Only loop closures (added or dropped) move the keyframes around the front
+  // end enough to rebuild its local map:
+  if (params_.local_map_corrections && loopsRevision != loops_revision_in_last_correction_) {
     mola::LocalMapCorrection c;
     c.timestamp = newestStamp;
-    c.new_loop_closures = in.loops.size() - loops_in_last_correction_;
-    loops_in_last_correction_ = in.loops.size();
+    c.new_loop_closures = loopsAdded - loops_added_in_last_correction_;
+    loops_revision_in_last_correction_ = loopsRevision;
+    loops_added_in_last_correction_ = loopsAdded;
     advertise_local_map_correction(c);
   }
 #endif
@@ -961,6 +970,17 @@ std::size_t Mapper::loop_closure_count() const
   return loops_.size();
 }
 
+std::vector<std::pair<std::size_t, std::size_t>> Mapper::loop_closure_pairs() const
+{
+  auto lck = mrpt::lockHelper(state_mtx_);
+  std::vector<std::pair<std::size_t, std::size_t>> out;
+  out.reserve(loops_.size());
+  for (const auto & l : loops_) {
+    out.emplace_back(std::min(l.from, l.to), std::max(l.from, l.to));
+  }
+  return out;
+}
+
 std::optional<mola::Georeferencing> Mapper::georeferencing() const
 {
   auto lck = mrpt::lockHelper(state_mtx_);
@@ -1008,6 +1028,9 @@ void Mapper::getDiagnostics(std::vector<mola::DiagnosticStatusMsg> & status)
   s.values.push_back({"lc_scans", std::to_string(lc_scans_.load())});
   s.values.push_back({"lc_candidates_checked", std::to_string(lc_candidates_checked_.load())});
   s.values.push_back({"lc_rejected_by_odometry", std::to_string(lc_rejected_by_odometry_.load())});
+  s.values.push_back(
+    {"lc_currently_rejected_by_consistency",
+     std::to_string(lc_currently_rejected_by_consistency_.load())});
   s.values.push_back({"lc_scan_in_progress", lc_busy_.load() ? "yes" : "no"});
   status.push_back(std::move(s));
 }
@@ -1040,10 +1063,16 @@ void Mapper::finalize()
   if (lc_engine_) {
     // Each correction may bring further loops within reach of the detector:
     for (uint32_t round = 0; round < params_.loop_closure_finalize_rounds; round++) {
+      const auto loopsRevision = [this] {
+        auto lck = mrpt::lockHelper(state_mtx_);
+        return loops_revision_;
+      };
+      const std::size_t revisionBefore = loopsRevision();
       std::size_t n = 0;
       guarded(*this, "Final loop closure pass", [&] { n = run_loop_closure_scan(true); });
       MRPT_LOG_INFO_STREAM("Final loop closure pass #" << round + 1 << ": " << n << " new loops");
-      if (n == 0) {
+      // Solved again whenever the loops changed (also if some were only dropped):
+      if (loopsRevision() == revisionBefore) {
         break;
       }
       guarded(*this, "Final solve", [this] { optimize_now(); });

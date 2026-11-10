@@ -184,8 +184,13 @@ Started by `initialize()` if `loop_closure_enabled`. It uses a
    `loop_closure_full_scan_every_n` incremental scans.
 3. `analyze()` runs without the lock. The edges are sorted by keyframe pair, so
    the result does not depend on thread timing.
-4. Under `state_mtx_`, new pairs are appended to `loops_`. If any, the
-   optimizer is woken.
+4. `merge_loop_edges()`: under `state_mtx_`, the odometry check of the new
+   pairs. Without the consistency check, they are appended to `loops_`.
+   With it, they join `lc_gate_` (all loops that passed the odometry check),
+   which decides again, without the lock, the groups of neighbor loops they
+   join; then `loops_` is set to the accepted ones. If `loops_` changed (also
+   `loops_revision_`, which triggers a local map correction after the next
+   solve), the optimizer is woken.
 
 `wait_for_loop_closure_idle()` blocks until no scan is running or requested.
 

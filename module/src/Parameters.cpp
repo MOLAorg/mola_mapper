@@ -138,6 +138,10 @@ void Parameters::loadFrom(const mrpt::containers::yaml & cfg)
   if (cfg.has("loop_closure_odometry_limits")) {
     loop_closure_odometry_limits.loadFrom(cfg["loop_closure_odometry_limits"]);
   }
+  MCP_LOAD_OPT(cfg, loop_closure_consistency_check);
+  if (cfg.has("loop_closure_consistency")) {
+    loop_closure_consistency.loadFrom(cfg["loop_closure_consistency"]);
+  }
 
   MCP_LOAD_OPT(cfg, output_tum_trajectory);
   MCP_LOAD_OPT(cfg, output_simplemap);

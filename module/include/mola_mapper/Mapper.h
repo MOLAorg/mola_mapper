@@ -31,6 +31,7 @@
 #endif
 #include <mola_mapper/GlobalGraph.h>
 #include <mola_mapper/GyroIntegration.h>
+#include <mola_mapper/LoopConsistency.h>
 #include <mola_mapper/LoopOdometryCheck.h>
 #include <mola_mapper/MapperInputLog.h>
 #include <mola_mapper/Parameters.h>
@@ -144,6 +145,12 @@ public:
 
   [[nodiscard]] std::size_t loop_closure_count() const;
 
+  /// Keyframe pairs (min, max) of the loop closures in the graph, in order.
+  [[nodiscard]] std::vector<std::pair<std::size_t, std::size_t>> loop_closure_pairs() const;
+
+  /// Whether there is new data (keyframes, loop closures) since the last solve.
+  [[nodiscard]] bool solve_pending() const { return optimizer_new_data_.load(); }
+
   [[nodiscard]] std::optional<mola::Georeferencing> georeferencing() const;
 
   /// The central map: optimized keyframe poses with all their observations.
@@ -168,6 +175,11 @@ public:
 
   /// Runs one loop closure scan in the calling thread. Returns the new edges.
   std::size_t run_loop_closure_scan_now(bool forceFullScan = true);
+
+  /** Adds loop closures found elsewhere (e.g. given by hand), through the same
+   *  checks as the detected ones. Returns how many joined the graph (new ones,
+   *  and older ones accepted again by the consistency check). */
+  std::size_t add_loop_closures(const std::vector<mola::ProposedLoopEdge> & edges);
 
   /** End of run: loop closure passes (full scan + re-optimization) until no new
      *  loop is found, then the final solve and the outputs. Called by the
@@ -263,7 +275,8 @@ private:
   /// Keyframes inserted before the wheel odometry readings reached them.
   std::deque<std::size_t> pending_wheel_odom_;
   std::vector<GlobalGraphLoopEdge> loops_;
-  /// Keyframe pairs (min, max) of the merged loops.
+  /// Keyframe pairs (min, max) of every loop that passed the odometry check,
+  /// in the graph or not (not proposed again).
   std::set<std::pair<std::size_t, std::size_t>> loop_pairs_;
   /// Keyframe pairs (min, max) of the loops rejected by the odometry check.
   std::set<std::pair<std::size_t, std::size_t>> rejected_loop_pairs_;
@@ -274,8 +287,17 @@ private:
   std::size_t last_num_gravity_factors_ = 0;
   std::size_t last_num_gyro_factors_ = 0;
   std::size_t last_num_wheel_odom_factors_ = 0;
-  /// Loops in the last solve advertised as a local map correction (solve_mtx_).
-  std::size_t loops_in_last_correction_ = 0;
+  /// Changes of loops_ (additions and removals), and loops ever added to it:
+  std::size_t loops_revision_ = 0;
+  std::size_t loops_added_ = 0;
+  /// The same, at the last solve advertised as a local map correction (solve_mtx_).
+  std::size_t loops_revision_in_last_correction_ = 0;
+  std::size_t loops_added_in_last_correction_ = 0;
+  /// Distance along its front end chain of each keyframe, for the loop
+  /// consistency check, and the newest keyframe of each chain:
+  std::vector<double> keyframe_path_;
+  std::map<std::string, std::size_t> chain_last_keyframe_;
+  std::map<std::string, std::size_t> chain_ids_;
   /// Stamp of the last keyframe pose fed back to the state estimator.
   std::optional<mrpt::Clock::time_point> last_feedback_stamp_;
   bool finalized_ = false;
@@ -365,6 +387,8 @@ private:
   std::atomic<std::size_t> lc_scans_{0};
   std::atomic<std::size_t> lc_candidates_checked_{0};
   std::atomic<std::size_t> lc_rejected_by_odometry_{0};
+  /// Loops rejected by the consistency check right now (it can decrease):
+  std::atomic<std::size_t> lc_currently_rejected_by_consistency_{0};
   std::size_t lc_kf_count_at_last_scan_ = 0;       // under lc_scan_mtx_
   std::size_t lc_snapshot_size_at_last_scan_ = 0;  // under lc_scan_mtx_
   std::size_t lc_incremental_scans_ = 0;           // under lc_scan_mtx_
@@ -377,6 +401,15 @@ private:
   /// nothing if they are not all from the same front end chain (state_mtx_ held).
   [[nodiscard]] std::optional<LoopOdometryCheck> check_against_odometry_locked(
     std::size_t first, std::size_t last, const mola::ProposedLoopEdge & e) const;
+  /// Odometry check, consistency check and merge of new loop edges
+  /// (lc_scan_mtx_ held). Returns how many joined the graph.
+  std::size_t merge_loop_edges(const std::vector<mola::ProposedLoopEdge> & edges);
+  /// The loop with the front end odometry of its keyframes (state_mtx_ held).
+  [[nodiscard]] LoopForConsistency loop_for_consistency_locked(const GlobalGraphLoopEdge & e);
+  /// All loops that passed the odometry check, and the ones accepted
+  /// (lc_scan_mtx_): loops_ is the accepted ones, in this order.
+  std::optional<LoopConsistencyGate> lc_gate_;
+  std::vector<GlobalGraphLoopEdge> lc_gate_edges_;
   /** @} */
 
   void publish_georeference(const mola::Georeferencing & g);

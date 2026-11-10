@@ -265,7 +265,7 @@ with an environment variable (shown in parentheses below).
         use_imu_gravity: true           # (MOLA_MAPPER_USE_GRAVITY)
         imu_gravity_sigma_deg: 3.0      # (MOLA_MAPPER_GRAVITY_SIGMA_DEG)
 
-        loop_closure_robust_huber_k: 1.5
+        loop_closure_robust_huber_k: 1.5      # (MOLA_MAPPER_LC_HUBER_K)
         loop_closure_min_sigma_xyz: 0.05      # [m] (MOLA_MAPPER_LC_MIN_SIGMA_XYZ)
         loop_closure_min_sigma_ang_deg: 0.25  # [deg] (MOLA_MAPPER_LC_MIN_SIGMA_ANG)
 
@@ -302,6 +302,14 @@ with an environment variable (shown in parentheses below).
         max_xyz_per_m: 0.10              # (MOLA_MAPPER_LC_ODOMETRY_MAX_XYZ_PER_M)
         max_ang_deg: 5.0                 # [deg]
         max_ang_deg_per_m: 0.03          # [deg/m]
+      loop_closure_consistency_check: true  # (MOLA_MAPPER_LC_CONSISTENCY_CHECK)
+      loop_closure_consistency:
+        neighborhood: 50.0               # [m] along the odometry path, at both ends
+        max_xyz: 1.0                     # [m] (MOLA_MAPPER_LC_CONSISTENCY_MAX_XYZ)
+        max_xyz_per_m: 0.04              # [m/m] of odometry path in the cycle (MOLA_MAPPER_LC_CONSISTENCY_MAX_XYZ_PER_M)
+        max_ang_deg: 3.0                 # [deg] (MOLA_MAPPER_LC_CONSISTENCY_MAX_ANG)
+        max_ang_deg_per_m: 0.03          # [deg/m] (MOLA_MAPPER_LC_CONSISTENCY_MAX_ANG_PER_M)
+        min_inconsistent: 2
 
    The detector is the ``mola_sm_loop_closure`` frame-to-frame engine, used only
    to find candidate edges. Scans are incremental (pairs with a new keyframe),
@@ -314,7 +322,30 @@ with an environment variable (shown in parentheses below).
    fraction of the distance traveled (``loop_closure_odometry_limits``), the loop
    is a false match (e.g. repetitive geometry) and is rejected. Over a short
    distance the odometry drift is small, so this mostly removes short range false
-   loops and loops matched facing the wrong way. Note that the default of
+   loops and loops matched facing the wrong way.
+
+   Over a long loop the odometry drift allows almost anything, so loops are also
+   checked against each other: two loops whose ends are near each other (along
+   the odometry path, ``neighborhood``) close a cycle through the short odometry
+   segments between their ends, which must be close to the identity
+   (``loop_closure_consistency`` limits: a floor plus a fraction of the odometry
+   path in the cycle). A loop inconsistent with most of its neighbors, and with
+   at least ``min_inconsistent`` of them (a tie is not), is an outlier: a place
+   matched to the wrong one along a repetitive street. Each group of loops
+   connected through neighbors is decided again from scratch whenever a loop
+   joins it: starting with all of them, the worst outlier is dropped, one at a
+   time, until there is none, and the dropped ones left without any
+   inconsistent accepted neighbor are accepted again. So the result does not depend on the order the
+   loops arrived in, and loops rejected early are accepted again once enough
+   correct loops around them agree. With fewer correct loops than wrong ones
+   that agree with each other, the wrong ones win until more correct loops
+   arrive. Of three visits to a place, loops pass1-pass3 and pass2-pass3 are
+   never compared (their first keyframes are far apart along the path). Votes
+   are not weighted by distance: since the tolerance grows with the path in the
+   cycle, a loop matched a few meters off can look consistent with correct loops
+   far enough away (4.5 m off, with loops over ~45 m away at 4 %).
+
+   Note that the default of
    ``loop_closure_enabled`` in the C++ ``Parameters`` struct is ``false``; the
    provided YAML enables it.
 

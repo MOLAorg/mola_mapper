@@ -21,9 +21,13 @@
 #include <mrpt/containers/yaml.h>
 #include <mrpt/img/TColor.h>
 #include <mrpt/math/TPoint3D.h>
+#include <mrpt/poses/CPose3D.h>
 #include <mrpt/viz/CSetOfObjects.h>
 
 #include <cstddef>
+#include <map>
+#include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -79,5 +83,24 @@ struct GraphVisualizationInput
  *  segments each if loop_edge_lift > 0). Pairs out of range are skipped. */
 [[nodiscard]] mrpt::viz::CSetOfObjects::Ptr build_graph_visualization(
   const GraphVisualizationInput & in, const GraphVisualizationParams & p);
+
+/** The scene frame a front end draws in, from the source frame of its
+ *  keyframes: "<f>" for "<f>_kf" (as LIO does), none otherwise. */
+[[nodiscard]] std::optional<std::string> front_end_viz_frame(const std::string & sourceFrame);
+
+/// A keyframe pose in the map and in the frame of its front end.
+struct FrontEndKeyframePose
+{
+  std::string source_frame;
+  mrpt::poses::CPose3D pose_in_map;
+  mrpt::poses::CPose3D pose_in_source;
+};
+
+/** Pose in the map of the scene frame of each front end (front_end_viz_frame()),
+ *  T_map_f = pose_in_map (+) inverse(pose_in_source), from the given keyframes
+ *  (later ones win: pass the newest of each chain last). Keyframes of source
+ *  frames without a scene frame are ignored. */
+[[nodiscard]] std::map<std::string, mrpt::poses::CPose3D> front_end_viz_frame_poses(
+  const std::vector<FrontEndKeyframePose> & keyframes);
 
 }  // namespace mola::mapper

@@ -415,6 +415,9 @@ section of ``params/mapper.yaml``:
 LIO, its ``publish_reference_frame``, whose keyframes come as
 ``<frame>_kf``) to its optimized pose in ``{map}``, so the LIO local map and
 vehicle stay on top of the corrected graph after loop closures.
+Everything a front end draws in that frame moves rigidly with its newest
+correction, so after a loop closure LIO's older path and decaying clouds no
+longer sit on the graph; only the mapper graph shows the corrected past.
 
 |
 

@@ -203,8 +203,14 @@ void Mapper::initialize(const mrpt::containers::yaml & cfg)
 
 void Mapper::spinOnce()
 {
-  if (visualizer_) {
+  if (!visualizer_) {
+    return;
+  }
+  // A GUI failure must never stop the mapping:
+  try {
     gui_update();
+  } catch (const std::exception & e) {
+    MRPT_LOG_THROTTLE_ERROR_STREAM(10.0, "GUI update failed: " << e.what());
   }
 }
 

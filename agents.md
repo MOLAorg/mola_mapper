@@ -125,6 +125,8 @@ and a `T(0)` azimuth sigma below `georef_max_sigma_yaw_deg`.
   `visualization.update_period`. It also moves the movable viz frame `<f>` of each front end
   whose keyframes come as `<f>_kf` (LIO draws in `publish_reference_frame`) to the optimized
   `T_map_<f>`, so LIO's local map and vehicle stay aligned with the corrected graph.
+  Its redraw key: keyframes, solves, loop revision and rejected counts. Known cost: one
+  `CSphere` per keyframe (fine up to a few thousand; very long sessions may need fewer).
 - Feedback to the state estimator: the newest keyframe pose, once per keyframe.
 - Limitations: one front end chain (keyframes of interleaved sources only get weak edges);
   all keyframe observations stay in RAM; every solve is a full batch.

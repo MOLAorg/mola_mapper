@@ -23,13 +23,19 @@
 #include <mrpt/viz/CSphere.h>
 
 #include <iostream>
+#include <optional>
+#include <string>
 #include <vector>
 
 namespace
 {
 using mola::mapper::build_graph_visualization;
+using mola::mapper::front_end_viz_frame;
+using mola::mapper::front_end_viz_frame_poses;
+using mola::mapper::FrontEndKeyframePose;
 using mola::mapper::GraphVisualizationInput;
 using mola::mapper::GraphVisualizationParams;
+using mrpt::poses::CPose3D;
 
 /// Two chains (10 + 5 keyframes), one loop within the first chain, one across
 /// both, rejected candidates and a pair out of range.
@@ -137,6 +143,33 @@ void test_params_from_yaml()
   ASSERT_NEAR_(p.odometry_edge_width, GraphVisualizationParams().odometry_edge_width, 1e-6f);
 }
 
+void test_front_end_frames()
+{
+  ASSERT_(front_end_viz_frame("lidar_odom_kf") == std::optional<std::string>("lidar_odom"));
+  ASSERT_(!front_end_viz_frame("lidar_odom"));
+  ASSERT_(!front_end_viz_frame("_kf"));
+
+  // The map frame is the source frame of the first chain moved by a correction:
+  const CPose3D correction(2.0, -1.0, 0.1, 0.3, 0.02, -0.01);
+  const CPose3D oldInSource(10.0, 0, 0, 0, 0, 0);
+  const CPose3D newInSource(20.0, 5.0, 0, 0.5, 0, 0);
+  const std::vector<FrontEndKeyframePose> kfs = {
+    {"lidar_odom_kf", correction + oldInSource, oldInSource},
+    {"vo", CPose3D(1, 2, 3, 0, 0, 0), CPose3D()},
+    // The newest one of the chain, after another correction, wins:
+    {"lidar_odom_kf", CPose3D(0, 0, 1.0, 0, 0, 0) + correction + newInSource, newInSource},
+  };
+  const auto frames = front_end_viz_frame_poses(kfs);
+  // "vo" keyframes do not come from "<f>_kf": no scene frame of theirs is moved.
+  ASSERT_EQUAL_(frames.size(), 1U);
+  const auto & T = frames.at("lidar_odom");
+  const auto expected = CPose3D(0, 0, 1.0, 0, 0, 0) + correction;
+  ASSERT_NEAR_((T.asVectorVal() - expected.asVectorVal()).norm(), 0.0, 1e-9);
+  // It maps the front end pose of its keyframe to its pose in the map:
+  ASSERT_NEAR_(
+    ((T + newInSource).asVectorVal() - kfs[2].pose_in_map.asVectorVal()).norm(), 0.0, 1e-9);
+}
+
 }  // namespace
 
 int main()
@@ -145,6 +178,7 @@ int main()
     test_defaults();
     test_options();
     test_params_from_yaml();
+    test_front_end_frames();
     std::cout << "All tests passed.\n";
     return 0;
   } catch (const std::exception & e) {

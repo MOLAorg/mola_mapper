@@ -23,12 +23,12 @@
 #include <mrpt/core/format.h>
 #include <mrpt/core/lock_helper.h>
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <map>
 #include <optional>
 #include <string>
-#include <tuple>
 
 namespace mola::mapper
 {
@@ -47,26 +47,17 @@ struct Mapper::Gui
 
   bool window_created = false;
   std::optional<std::chrono::steady_clock::time_point> last_update;
-  /// Keyframes, solves and loop revision of the last drawn graph.
-  std::tuple<std::size_t, std::size_t, std::size_t> last_drawn{0, 0, 0};
+
+  // Front end chain of each keyframe and the newest keyframe of each chain,
+  // extended as keyframes arrive (spinOnce() thread only):
+  std::vector<std::size_t> kf_chain;
+  std::map<std::string, std::size_t> chain_ids;
+  std::vector<std::size_t> chain_newest_kf;
+
+  /// Keyframes, solves, loop revision, rejected loops: the graph last drawn.
+  using RedrawKey = std::array<std::size_t, 5>;
+  std::optional<RedrawKey> last_drawn;
 };
-
-namespace
-{
-constexpr const char * KF_SUFFIX = "_kf";
-
-/// The frame a front end draws in, from the source frame of its keyframes.
-std::optional<std::string> front_end_viz_frame(const std::string & sourceFrame)
-{
-  const std::string suffix = KF_SUFFIX;
-  if (
-    sourceFrame.size() <= suffix.size() ||
-    sourceFrame.compare(sourceFrame.size() - suffix.size(), suffix.size(), suffix) != 0) {
-    return std::nullopt;
-  }
-  return sourceFrame.substr(0, sourceFrame.size() - suffix.size());
-}
-}  // namespace
 
 void Mapper::gui_initialize()
 {
@@ -103,7 +94,7 @@ void Mapper::gui_build_window()
     tab.widgets.emplace_back(Label{g->lbRejected});
     tab.widgets.emplace_back(Label{g->lbFactors});
     tab.widgets.emplace_back(Label{g->lbSolver});
-    if (params_.loop_closure_enabled) {
+    if (lc_engine_ && lc_thread_running_.load()) {
       tab.widgets.emplace_back(Separator{});
       tab.widgets.emplace_back(
         Button{"Loop closure scan now", 0, "", 0, [this]() { request_loop_closure_scan(); }});
@@ -162,7 +153,8 @@ void Mapper::gui_build_window()
     desc.tabs.emplace_back(std::move(tab));
   }
 
-  visualizer_->create_subwindow_from_description(desc).get();
+  // Not waited for: the visualizer may never run it (e.g. its window closed).
+  visualizer_->create_subwindow_from_description(desc);
 }
 
 void Mapper::gui_update()
@@ -188,64 +180,80 @@ void Mapper::gui_update()
     g.window_created = true;
   }
 
-  // Copy what is shown (cheap), then build the scene off the lock:
+  // Copy the graph only if it changed, then build the scene off the lock:
   GraphVisualizationInput in;
-  std::map<std::string, mrpt::poses::CPose3D> frontEndFrames;
+  std::vector<FrontEndKeyframePose> frontEnds;
+  bool redraw = false;
+  std::size_t numKeyframes = 0;
+  std::size_t numLoops = 0;
   std::size_t rejectedByOdometry = 0;
+  std::size_t rejectedByConsistency = 0;
   std::size_t gnssFactors = 0;
   std::size_t gravityFactors = 0;
   std::size_t gyroFactors = 0;
   std::size_t wheelFactors = 0;
   bool georeferenced = false;
-  std::size_t numChains = 0;
-  std::tuple<std::size_t, std::size_t, std::size_t> drawn;
   {
     auto lck = mrpt::lockHelper(state_mtx_);
-    drawn = {keyframes_.size(), solves_.load(), loops_revision_};
-    std::map<std::string, std::size_t> chainIds;
-    in.keyframes.reserve(keyframes_.size());
-    in.chain.reserve(keyframes_.size());
-    for (const auto & kf : keyframes_) {
-      in.keyframes.push_back(kf.pose_in_map.translation());
-      in.chain.push_back(chainIds.emplace(kf.source_frame, chainIds.size()).first->second);
-      if (const auto f = front_end_viz_frame(kf.source_frame); f) {
-        // The newest keyframe of each chain sets its frame: T_map_source.
-        frontEndFrames[*f] = kf.pose_in_map + (mrpt::poses::CPose3D() - kf.pose_in_source.mean);
-      }
-    }
-    numChains = chainIds.size();
-    for (const auto & l : loops_) {
-      in.loops.emplace_back(l.from, l.to);
-    }
-    in.rejected_by_consistency = consistency_rejected_pairs_;
-    in.rejected_by_odometry.assign(rejected_loop_pairs_.begin(), rejected_loop_pairs_.end());
+    numKeyframes = keyframes_.size();
+    numLoops = loops_.size();
     rejectedByOdometry = rejected_loop_pairs_.size();
+    rejectedByConsistency = consistency_rejected_pairs_.size();
     gnssFactors = last_num_gnss_factors_;
     gravityFactors = last_num_gravity_factors_;
     gyroFactors = last_num_gyro_factors_;
     wheelFactors = last_num_wheel_odom_factors_;
     georeferenced = georef_.has_value();
+
+    for (std::size_t i = g.kf_chain.size(); i < numKeyframes; i++) {
+      const auto [it, isNew] =
+        g.chain_ids.try_emplace(keyframes_[i].source_frame, g.chain_ids.size());
+      if (isNew) {
+        g.chain_newest_kf.push_back(i);
+      }
+      g.kf_chain.push_back(it->second);
+      g.chain_newest_kf[it->second] = i;
+    }
+
+    const Gui::RedrawKey key = {
+      numKeyframes, solves_.load(), loops_revision_, rejectedByOdometry, rejectedByConsistency};
+    redraw = styleChanged || key != g.last_drawn;
+    if (redraw) {
+      g.last_drawn = key;
+      in.keyframes.reserve(numKeyframes);
+      for (const auto & kf : keyframes_) {
+        in.keyframes.push_back(kf.pose_in_map.translation());
+      }
+      in.chain = g.kf_chain;
+      in.loops.reserve(numLoops);
+      for (const auto & l : loops_) {
+        in.loops.emplace_back(l.from, l.to);
+      }
+      in.rejected_by_consistency = consistency_rejected_pairs_;
+      in.rejected_by_odometry.assign(rejected_loop_pairs_.begin(), rejected_loop_pairs_.end());
+      for (const auto i : g.chain_newest_kf) {
+        const auto & kf = keyframes_[i];
+        frontEnds.push_back({kf.source_frame, kf.pose_in_map, kf.pose_in_source.mean});
+      }
+    }
   }
   g.last_update = now;
 
-  // The scene only if the graph or the style changed:
-  if (styleChanged || drawn != g.last_drawn) {
-    g.last_drawn = drawn;
+  if (redraw) {
     visualizer_->update_3d_object("mapper/graph", build_graph_visualization(in, p));
     // Not aligned: back to their own frames.
-    for (const auto & [name, pose] : frontEndFrames) {
+    for (const auto & [name, pose] : front_end_viz_frame_poses(frontEnds)) {
       const auto framePose = p.align_front_end_frames ? pose : mrpt::poses::CPose3D();
       visualizer_->update_3d_object_frame(name, framePose.asTPose());
     }
   }
 
   g.lbKeyframes->set(
-    mrpt::format("Keyframes: %zu (%zu front end chains)", in.keyframes.size(), numChains));
+    mrpt::format("Keyframes: %zu (%zu front end chains)", numKeyframes, g.chain_ids.size()));
   g.lbLoops->set(
-    mrpt::format("Loop closures: %zu accepted, %zu scans", in.loops.size(), lc_scans_.load()));
+    mrpt::format("Loop closures: %zu accepted, %zu scans", numLoops, lc_scans_.load()));
   g.lbRejected->set(mrpt::format(
-    "Rejected: %zu by odometry, %zu by consistency", rejectedByOdometry,
-    in.rejected_by_consistency.size()));
+    "Rejected: %zu by odometry, %zu by consistency", rejectedByOdometry, rejectedByConsistency));
   g.lbFactors->set(mrpt::format(
     "Factors: GNSS %zu, gravity %zu, gyro %zu, wheels %zu", gnssFactors, gravityFactors,
     gyroFactors, wheelFactors));

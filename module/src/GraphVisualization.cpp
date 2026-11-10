@@ -21,6 +21,8 @@
 #include <mrpt/viz/CSetOfLines.h>
 #include <mrpt/viz/CSphere.h>
 
+#include <string_view>
+
 namespace mola::mapper
 {
 namespace
@@ -35,7 +37,7 @@ mrpt::viz::CSetOfLines::Ptr make_lines(
   auto gl = mrpt::viz::CSetOfLines::Create();
   gl->setLineWidth(width);
   gl->setColor_u8(color);
-  gl->reserve(pairs.size());
+  gl->reserve(lift > 0 ? 3 * pairs.size() : pairs.size());
   for (const auto & [a, b] : pairs) {
     if (a >= kfs.size() || b >= kfs.size()) {
       continue;
@@ -104,6 +106,29 @@ mrpt::viz::CSetOfObjects::Ptr build_graph_visualization(
       p.loop_edge_lift));
   }
   return scene;
+}
+
+std::optional<std::string> front_end_viz_frame(const std::string & sourceFrame)
+{
+  constexpr std::string_view suffix = "_kf";
+  if (
+    sourceFrame.size() <= suffix.size() ||
+    sourceFrame.compare(sourceFrame.size() - suffix.size(), suffix.size(), suffix) != 0) {
+    return std::nullopt;
+  }
+  return sourceFrame.substr(0, sourceFrame.size() - suffix.size());
+}
+
+std::map<std::string, mrpt::poses::CPose3D> front_end_viz_frame_poses(
+  const std::vector<FrontEndKeyframePose> & keyframes)
+{
+  std::map<std::string, mrpt::poses::CPose3D> frames;
+  for (const auto & kf : keyframes) {
+    if (const auto f = front_end_viz_frame(kf.source_frame); f) {
+      frames[*f] = kf.pose_in_map + (mrpt::poses::CPose3D() - kf.pose_in_source);
+    }
+  }
+  return frames;
 }
 
 }  // namespace mola::mapper

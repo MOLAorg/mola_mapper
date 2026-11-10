@@ -65,3 +65,10 @@ mola_add_test(
   LINK_LIBRARIES
     mola::mola_mapper
 )
+
+mola_add_test(
+  TARGET  test-loop-consistency
+  SOURCES test-loop-consistency.cpp
+  LINK_LIBRARIES
+    mola::mola_mapper
+)

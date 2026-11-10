@@ -96,7 +96,7 @@ params:
     use_imu_gravity: ${MOLA_MAPPER_USE_GRAVITY|true}
     imu_gravity_sigma_deg: ${MOLA_MAPPER_GRAVITY_SIGMA_DEG|3.0}
 
-    loop_closure_robust_huber_k: 1.5
+    loop_closure_robust_huber_k: ${MOLA_MAPPER_LC_HUBER_K|1.5}
     loop_closure_min_sigma_xyz: ${MOLA_MAPPER_LC_MIN_SIGMA_XYZ|0.05}  # [m]
     loop_closure_min_sigma_ang_deg: ${MOLA_MAPPER_LC_MIN_SIGMA_ANG|0.25}  # [deg]
 
@@ -128,6 +128,18 @@ params:
     max_xyz_per_m: ${MOLA_MAPPER_LC_ODOMETRY_MAX_XYZ_PER_M|0.10}
     max_ang_deg: 5.0         # [deg]
     max_ang_deg_per_m: 0.03  # [deg/m]
+  # Reject loops inconsistent with most of their neighbor loops (cycles closed
+  # through the odometry between their ends), e.g. a place matched to the wrong
+  # one in a repetitive scene. Accepted loops are dropped too, once newer ones
+  # contradict them:
+  loop_closure_consistency_check: ${MOLA_MAPPER_LC_CONSISTENCY_CHECK|true}
+  loop_closure_consistency:
+    neighborhood: 50.0       # [m] along the odometry path, at both ends
+    max_xyz: 1.0             # [m]
+    max_xyz_per_m: 0.02      # [m/m] of odometry path in the cycle
+    max_ang_deg: 3.0         # [deg]
+    max_ang_deg_per_m: 0.03  # [deg/m]
+    min_inconsistent: 2
 
   # Outputs, written at the end (empty: not written):
   output_tum_trajectory: "${MOLA_MAPPER_OUTPUT_TUM|}"

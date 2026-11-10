@@ -18,6 +18,7 @@
  */
 #pragma once
 
+#include <mola_mapper/LoopConsistency.h>
 #include <mola_mapper/LoopOdometryCheck.h>
 #include <mrpt/containers/yaml.h>
 
@@ -220,6 +221,11 @@ struct Parameters
    *  (only checked when both are in the same chain, see LoopOdometryCheck.h). */
   bool loop_closure_odometry_check = true;
   LoopOdometryCheckParams loop_closure_odometry_limits;
+  /** Reject loops inconsistent with most of their neighbor loops, through the
+   *  odometry chain (see LoopConsistency.h). Already accepted loops are dropped
+   *  too, once newer ones contradict them. */
+  bool loop_closure_consistency_check = true;
+  LoopConsistencyParams loop_closure_consistency;
   /** @} */
 
   /** @name Outputs, written at the end (empty: not written)

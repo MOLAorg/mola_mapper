@@ -184,8 +184,10 @@ Started by `initialize()` if `loop_closure_enabled`. It uses a
    `loop_closure_full_scan_every_n` incremental scans.
 3. `analyze()` runs without the lock. The edges are sorted by keyframe pair, so
    the result does not depend on thread timing.
-4. Under `state_mtx_`, new pairs are appended to `loops_`. If any, the
-   optimizer is woken.
+4. Under `state_mtx_`, new pairs that pass the odometry check are appended to
+   `loops_`; then `drop_inconsistent_loops_locked()` removes those (new or
+   older) inconsistent with most of their neighbor loops. If any new loop
+   remains, the optimizer is woken.
 
 `wait_for_loop_closure_idle()` blocks until no scan is running or requested.
 

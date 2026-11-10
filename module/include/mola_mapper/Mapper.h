@@ -365,6 +365,7 @@ private:
   std::atomic<std::size_t> lc_scans_{0};
   std::atomic<std::size_t> lc_candidates_checked_{0};
   std::atomic<std::size_t> lc_rejected_by_odometry_{0};
+  std::atomic<std::size_t> lc_rejected_by_consistency_{0};
   std::size_t lc_kf_count_at_last_scan_ = 0;       // under lc_scan_mtx_
   std::size_t lc_snapshot_size_at_last_scan_ = 0;  // under lc_scan_mtx_
   std::size_t lc_incremental_scans_ = 0;           // under lc_scan_mtx_
@@ -377,6 +378,10 @@ private:
   /// nothing if they are not all from the same front end chain (state_mtx_ held).
   [[nodiscard]] std::optional<LoopOdometryCheck> check_against_odometry_locked(
     std::size_t first, std::size_t last, const mola::ProposedLoopEdge & e) const;
+  /// Drops the loops inconsistent with their neighbors (see LoopConsistency.h);
+  /// loops_[firstNew..] are the new ones. Returns how many new ones were dropped
+  /// (state_mtx_ held).
+  std::size_t drop_inconsistent_loops_locked(std::size_t firstNew);
   /** @} */
 
   void publish_georeference(const mola::Georeferencing & g);

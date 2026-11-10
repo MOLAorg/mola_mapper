@@ -17,6 +17,7 @@
  * @date   2026
  */
 
+#include <mola_mapper/LoopConsistency.h>
 #include <mola_mapper/LoopOdometryCheck.h>
 #include <mola_mapper/Mapper.h>
 #include <mola_sm_loop_closure/FrameToFrameLoopClosure.h>
@@ -28,6 +29,7 @@
 #include <algorithm>
 #include <chrono>
 #include <exception>
+#include <map>
 #include <mutex>
 #include <string>
 #include <utility>
@@ -159,6 +161,61 @@ std::optional<LoopOdometryCheck> Mapper::check_against_odometry_locked(
     params_.loop_closure_odometry_limits);
 }
 
+std::size_t Mapper::drop_inconsistent_loops_locked(std::size_t firstNew)
+{
+  OdometryChains odo;
+  odo.pose_in_source.reserve(keyframes_.size());
+  odo.chain_id.reserve(keyframes_.size());
+  std::map<std::string, std::size_t> chainIds;
+  for (const auto & kf : keyframes_) {
+    odo.pose_in_source.push_back(kf.pose_in_source.mean);
+    odo.chain_id.push_back(chainIds.try_emplace(kf.source_frame, chainIds.size()).first->second);
+  }
+  std::vector<LoopForConsistency> loops;
+  loops.reserve(loops_.size());
+  for (const auto & l : loops_) {
+    LoopForConsistency c;
+    c.from = l.from;
+    c.to = l.to;
+    c.relative_pose = l.relative_pose.mean;
+    loops.push_back(c);
+  }
+  const auto bad = find_inconsistent_loops(odo, loops, firstNew, params_.loop_closure_consistency);
+  if (bad.empty()) {
+    return 0;
+  }
+  std::size_t droppedNew = 0;
+  std::vector<bool> drop(loops_.size(), false);
+  for (const auto k : bad) {
+    drop[k] = true;
+    const auto & l = loops_[k];
+    const std::pair<std::size_t, std::size_t> key = {
+      std::min(l.from, l.to), std::max(l.from, l.to)};
+    loop_pairs_.erase(key);
+    rejected_loop_pairs_.insert(key);
+    if (k >= firstNew) {
+      droppedNew++;
+    }
+    MRPT_LOG_INFO_FMT(
+      "Loop %zu-%zu %s: inconsistent with most of its neighbor loops", key.first, key.second,
+      k >= firstNew ? "rejected" : "dropped");
+  }
+  std::vector<GlobalGraphLoopEdge> kept;
+  kept.reserve(loops_.size() - bad.size());
+  for (std::size_t k = 0; k < loops_.size(); k++) {
+    if (!drop[k]) {
+      kept.push_back(loops_[k]);
+    }
+  }
+  loops_ = std::move(kept);
+  lc_rejected_by_consistency_ += bad.size();
+  if (droppedNew < bad.size()) {
+    // An accepted loop was dropped: the graph must be solved again.
+    optimizer_new_data_.store(true);
+  }
+  return droppedNew;
+}
+
 std::size_t Mapper::run_loop_closure_scan_now(bool forceFullScan)
 {
   return run_loop_closure_scan(forceFullScan);
@@ -252,6 +309,10 @@ std::size_t Mapper::run_loop_closure_scan(bool forceFullScan)
       loop_pairs_.insert(key);
       loops_.push_back({e.from, e.to, e.relative_pose});
       merged++;
+    }
+    if (merged > 0 && params_.loop_closure_consistency_check) {
+      const std::size_t dropped = drop_inconsistent_loops_locked(loops_.size() - merged);
+      merged -= std::min(merged, dropped);
     }
   }
   lc_rejected_by_odometry_ += rejected;

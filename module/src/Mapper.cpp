@@ -749,7 +749,11 @@ void Mapper::stop_optimizer_thread()
   }
 }
 
-void Mapper::optimize_now() { solve_global_graph(); }
+void Mapper::optimize_now()
+{
+  optimizer_new_data_.store(false);
+  solve_global_graph();
+}
 
 GlobalGraphInput Mapper::graph_input_locked() const
 {
@@ -788,12 +792,16 @@ void Mapper::solve_global_graph()
   auto lckSolve = mrpt::lockHelper(solve_mtx_);
 
   GlobalGraphInput in;
+  std::size_t loopsRevision = 0;
+  std::size_t loopsAdded = 0;
   {
     auto lck = mrpt::lockHelper(state_mtx_);
     if (keyframes_.empty()) {
       return;
     }
     in = graph_input_locked();
+    loopsRevision = loops_revision_;
+    loopsAdded = loops_added_;
   }
 
   const auto t0 = std::chrono::steady_clock::now();
@@ -847,13 +855,14 @@ void Mapper::solve_global_graph()
   send_feedback(newestStamp, newestPose, r);
 
 #if defined(MOLA_MAPPER_HAS_LOCAL_MAP_CORRECTIONS)
-  // Only loop closures move the keyframes around the front end enough to
-  // rebuild its local map:
-  if (params_.local_map_corrections && in.loops.size() > loops_in_last_correction_) {
+  // Only loop closures (added or dropped) move the keyframes around the front
+  // end enough to rebuild its local map:
+  if (params_.local_map_corrections && loopsRevision != loops_revision_in_last_correction_) {
     mola::LocalMapCorrection c;
     c.timestamp = newestStamp;
-    c.new_loop_closures = in.loops.size() - loops_in_last_correction_;
-    loops_in_last_correction_ = in.loops.size();
+    c.new_loop_closures = loopsAdded - loops_added_in_last_correction_;
+    loops_revision_in_last_correction_ = loopsRevision;
+    loops_added_in_last_correction_ = loopsAdded;
     advertise_local_map_correction(c);
   }
 #endif
@@ -959,6 +968,17 @@ std::size_t Mapper::loop_closure_count() const
 {
   auto lck = mrpt::lockHelper(state_mtx_);
   return loops_.size();
+}
+
+std::vector<std::pair<std::size_t, std::size_t>> Mapper::loop_closure_pairs() const
+{
+  auto lck = mrpt::lockHelper(state_mtx_);
+  std::vector<std::pair<std::size_t, std::size_t>> out;
+  out.reserve(loops_.size());
+  for (const auto & l : loops_) {
+    out.emplace_back(std::min(l.from, l.to), std::max(l.from, l.to));
+  }
+  return out;
 }
 
 std::optional<mola::Georeferencing> Mapper::georeferencing() const

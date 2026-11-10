@@ -19,167 +19,424 @@
  */
 
 #include <mola_mapper/LoopConsistency.h>
+#include <mola_mapper/Mapper.h>
+#include <mola_sm_loop_closure/LoopClosureInterface.h>
 #include <mrpt/core/bits_math.h>
 #include <mrpt/core/exceptions.h>
 
 #include <algorithm>
 #include <iostream>
+#include <random>
+#include <set>
+#include <utility>
 #include <vector>
 
 namespace
 {
-using mola::mapper::find_inconsistent_loops;
+using mola::mapper::LoopConsistencyGate;
 using mola::mapper::LoopConsistencyParams;
 using mola::mapper::LoopForConsistency;
-using mola::mapper::OdometryChains;
 using mrpt::poses::CPose3D;
 
-/** A 100 x 50 m rectangle driven twice, a keyframe per meter. Ground truth, and
- *  odometry with 0.02 deg of heading drift and 1 % of scale error per meter. */
+constexpr std::size_t LAP = 300;  // keyframes (1 m apart) of the 100 x 50 m rectangle
+
+/** The rectangle driven twice (the second time the other way around if
+ *  `reverse`), and an odometry with a scale error per lap and a heading error at
+ *  each corner per lap. */
 struct Run
 {
   std::vector<CPose3D> gt;
-  OdometryChains odo;
+  std::vector<CPose3D> odo;
+  std::vector<double> path;
 };
 
-Run make_run()
+Run make_run(
+  double scale1, double cornerDeg1, double scale2, double cornerDeg2, bool reverse = false)
 {
   Run r;
   CPose3D gt;
-  CPose3D odo;
-  for (int lap = 0; lap < 2; lap++) {
-    for (const int side : {100, 50, 100, 50}) {
-      for (int i = 0; i < side; i++) {
-        r.gt.push_back(gt);
-        r.odo.pose_in_source.push_back(odo);
-        r.odo.chain_id.push_back(0);
-        const bool corner = (i == side - 1);
-        const CPose3D step(1.0, 0, 0, corner ? M_PI / 2 : 0.0, 0, 0);
-        gt = gt + step;
-        odo = odo + CPose3D(1.01, 0, 0, step.yaw() + mrpt::DEG2RAD(0.02), 0, 0);
-      }
+  for (const int side : {100, 50, 100, 50}) {
+    for (int i = 0; i < side; i++) {
+      r.gt.push_back(gt);
+      gt = gt + CPose3D(1.0, 0, 0, i == side - 1 ? M_PI / 2 : 0.0, 0, 0);
     }
+  }
+  for (std::size_t k = 0; k < LAP; k++) {
+    r.gt.push_back(reverse ? r.gt[LAP - 1 - k] + CPose3D(0, 0, 0, M_PI, 0, 0) : r.gt[k]);
+  }
+  CPose3D odo;
+  double path = 0;
+  for (std::size_t k = 0; k < r.gt.size(); k++) {
+    r.odo.push_back(odo);
+    r.path.push_back(path);
+    if (k + 1 == r.gt.size()) {
+      break;
+    }
+    const bool second = k + 1 >= LAP;
+    const double scale = second ? scale2 : scale1;
+    const double corner = second ? cornerDeg2 : cornerDeg1;
+    const CPose3D inc = r.gt[k + 1] - r.gt[k];
+    const bool turn = std::abs(inc.yaw()) > 1.0;
+    const CPose3D step(
+      inc.x() * (1 + scale), inc.y() * (1 + scale), 0,
+      inc.yaw() + (turn ? mrpt::DEG2RAD(corner) : 0.0), 0, 0);
+    odo = odo + step;
+    path += step.translation().norm();
   }
   return r;
 }
 
-constexpr std::size_t LAP = 300;
+/// The keyframe of the second lap at the same place as keyframe i of the first.
+std::size_t revisit(std::size_t i, bool reverse) { return reverse ? 2 * LAP - 1 - i : i + LAP; }
 
-/// A correct loop from keyframe i to the same place one lap later, with a small
-/// registration error.
-LoopForConsistency true_loop(const Run & r, std::size_t i, std::size_t shift = 0)
+LoopForConsistency make_loop(
+  const Run & r, std::size_t a, std::size_t b, const CPose3D & error = CPose3D())
 {
   LoopForConsistency l;
-  l.from = i;
-  l.to = i + LAP + shift;
-  l.relative_pose = (r.gt[l.to] - r.gt[l.from]) + CPose3D(0.05, -0.03, 0, 0.002, 0, 0);
+  l.from = a;
+  l.to = b;
+  l.relative_pose = (r.gt[b] - r.gt[a]) + error;
+  l.from_odometry = r.odo[a];
+  l.to_odometry = r.odo[b];
+  l.from_path = r.path[a];
+  l.to_path = r.path[b];
   return l;
 }
 
-/// A place matched to the wrong one, 20 m further along the same street: the
-/// registration says "same place" while the scans are 20 m apart.
-LoopForConsistency aliased_loop(const Run & r, std::size_t i)
+/// A correct loop, with a small registration error.
+LoopForConsistency correct(const Run & r, std::size_t i, bool reverse = false)
 {
-  LoopForConsistency l;
-  l.from = i;
-  l.to = i + LAP + 20;
-  l.relative_pose = r.gt[i + LAP] - r.gt[l.from];
-  return l;
+  return make_loop(r, i, revisit(i, reverse), CPose3D(0.05, -0.03, 0.01, 0.002, 0, 0));
 }
 
-bool contains(const std::vector<std::size_t> & v, std::size_t k)
+/// A place matched to the wrong one, `offset` meters along the street: all of
+/// them agree with each other, not with the correct ones.
+LoopForConsistency aliased(const Run & r, std::size_t i, double offset = 4.5)
 {
-  return std::find(v.begin(), v.end(), k) != v.end();
+  return make_loop(r, i, revisit(i, false), CPose3D(offset, 0, 0, 0, 0, 0));
 }
 
-void test_true_loops_kept()
+std::set<std::size_t> accepted_from(const LoopConsistencyGate & g)
 {
-  const auto r = make_run();
-  const LoopConsistencyParams p;
-  std::vector<LoopForConsistency> loops;
-  for (std::size_t i = 10; i < 290; i += 7) {
-    loops.push_back(true_loop(r, i, i % 3));
+  std::set<std::size_t> out;
+  for (std::size_t k = 0; k < g.size(); k++) {
+    if (g.is_accepted(k)) {
+      out.insert(std::min(g.loop(k).from, g.loop(k).to));
+    }
   }
-  const auto bad = find_inconsistent_loops(r.odo, loops, 0, p);
-  std::cout << "true loops: " << loops.size() << ", rejected " << bad.size() << "\n";
-  ASSERT_(bad.empty());
+  return out;
+}
+
+void test_correct_loops_kept()
+{
+  const LoopConsistencyParams p;
+  for (const bool reverse : {false, true}) {
+    // Odometry errors in both laps, different in each:
+    const Run r = make_run(0.01, 0.3, 0.03, 0.5, reverse);
+    LoopConsistencyGate g(p);
+    std::size_t n = 0;
+    for (std::size_t i = 2; i < LAP - 2; i += 4) {
+      ASSERT_(g.add({correct(r, i, reverse)}).empty());
+      n++;
+    }
+    std::cout << "correct loops (" << (reverse ? "reversed" : "same direction")
+              << " revisit): " << n << ", rejected " << g.rejected_count() << "\n";
+    ASSERT_EQUAL_(g.rejected_count(), 0U);
+  }
 }
 
 void test_aliased_loop_rejected()
 {
-  const auto r = make_run();
   const LoopConsistencyParams p;
-  // Accepted before: three correct loops along the first long side.
-  std::vector<LoopForConsistency> loops = {true_loop(r, 20), true_loop(r, 30), true_loop(r, 40)};
-  // New: one aliased loop among them, and one more correct one.
-  loops.push_back(aliased_loop(r, 35));
-  loops.push_back(true_loop(r, 45));
-  const auto bad = find_inconsistent_loops(r.odo, loops, 3, p);
-  ASSERT_EQUAL_(bad.size(), 1U);
-  ASSERT_EQUAL_(bad.at(0), 3U);
-
-  // The same, with the aliased loop stated the other way around (to -> from):
-  auto rev = loops;
-  std::swap(rev[3].from, rev[3].to);
-  rev[3].relative_pose = CPose3D() - rev[3].relative_pose;
-  const auto badRev = find_inconsistent_loops(r.odo, rev, 3, p);
-  ASSERT_EQUAL_(badRev.size(), 1U);
-  ASSERT_EQUAL_(badRev.at(0), 3U);
+  const Run r = make_run(0.01, 0.3, 0.02, 0.3);
+  for (const bool swapped : {false, true}) {
+    LoopConsistencyGate g(p);
+    ASSERT_(g.add({correct(r, 20), correct(r, 30), correct(r, 40)}).empty());
+    // One aliased loop among them, stated either way, and one more correct one:
+    auto a = aliased(r, 35, 3.0);
+    if (swapped) {
+      std::swap(a.from, a.to);
+      std::swap(a.from_odometry, a.to_odometry);
+      std::swap(a.from_path, a.to_path);
+      a.relative_pose = CPose3D() - a.relative_pose;
+    }
+    const auto changed = g.add({a, correct(r, 45)});
+    ASSERT_EQUAL_(changed.size(), 1U);
+    ASSERT_EQUAL_(changed.at(0), 3U);
+    ASSERT_(!g.is_accepted(3));
+    ASSERT_(g.is_accepted(4));
+  }
 }
 
 void test_single_neighbor_does_not_decide()
 {
-  const auto r = make_run();
   const LoopConsistencyParams p;
-  // An aliased loop accepted first, then one correct loop: one inconsistent
-  // neighbor each, so neither is dropped.
-  std::vector<LoopForConsistency> loops = {aliased_loop(r, 35), true_loop(r, 30)};
-  ASSERT_(find_inconsistent_loops(r.odo, loops, 1, p).empty());
-
-  // Two more correct loops arrive: the early aliased one is dropped, all the
-  // correct ones are kept.
-  loops.push_back(true_loop(r, 40));
-  loops.push_back(true_loop(r, 45));
-  const auto bad = find_inconsistent_loops(r.odo, loops, 2, p);
-  ASSERT_EQUAL_(bad.size(), 1U);
-  ASSERT_EQUAL_(bad.at(0), 0U);
+  const Run r = make_run(0, 0, 0, 0);
+  LoopConsistencyGate g(p);
+  // One aliased and one correct loop: one inconsistent neighbor each, both kept.
+  ASSERT_(g.add({aliased(r, 35), correct(r, 30)}).empty());
+  ASSERT_EQUAL_(g.rejected_count(), 0U);
 }
 
-void test_far_loops_not_compared()
+void test_tie_is_not_an_outlier()
 {
-  const auto r = make_run();
+  // X is consistent with C1, C2 and inconsistent with B1, B2 (2 of 4); the B
+  // ones are consistent with everything but X. A tie keeps X.
+  LoopConsistencyParams p;
+  p.max_xyz = 1.0;
+  p.max_xyz_per_m = 0.02;
+  const Run r = make_run(0, 0, 0, 0);
+  LoopConsistencyGate g(p);
+  const CPose3D plus(1.0, 0, 0, 0, 0, 0);
+  const CPose3D minus(-1.0, 0, 0, 0, 0, 0);
+  ASSERT_(
+    g.add({make_loop(r, 20, revisit(20, false)), make_loop(r, 25, revisit(25, false)),
+           make_loop(r, 30, revisit(30, false), plus), make_loop(r, 35, revisit(35, false), plus),
+           make_loop(r, 40, revisit(40, false), minus)})
+      .empty());
+}
+
+void test_aliased_first_then_correct_majority()
+{
+  // Two aliased loops first (they agree with each other), then correct ones one
+  // at a time: once the correct ones are the majority, the aliased ones are
+  // dropped and every correct one is accepted.
   const LoopConsistencyParams p;
-  // The aliased loop is far (along the path) from the correct ones: no evidence
-  // against it, kept.
-  std::vector<LoopForConsistency> loops = {
-    true_loop(r, 20), true_loop(r, 25), true_loop(r, 30), aliased_loop(r, 200)};
-  ASSERT_(find_inconsistent_loops(r.odo, loops, 3, p).empty());
+  const Run r = make_run(0.01, 0.3, 0.02, 0.3);
+  LoopConsistencyGate g(p);
+  ASSERT_(g.add({aliased(r, 20), aliased(r, 30)}).empty());
+  std::size_t n = 0;
+  for (std::size_t i = 22; i < 60; i += 3) {
+    (void)g.add({correct(r, i)});
+    n++;
+  }
+  ASSERT_(!g.is_accepted(0));
+  ASSERT_(!g.is_accepted(1));
+  ASSERT_EQUAL_(g.rejected_count(), 2U);
+  ASSERT_EQUAL_(accepted_from(g).size(), n);
+}
+
+void test_order_independent()
+{
+  // The same loops (correct, aliased by 3-5 m, and one far off), in different
+  // orders and batches, give the same accepted set.
+  const LoopConsistencyParams p;
+  const Run r = make_run(0.01, 0.3, 0.02, 0.3);
+  std::vector<LoopForConsistency> loops;
+  for (std::size_t i = 20; i < 60; i += 4) {
+    loops.push_back(correct(r, i));
+  }
+  for (const double off : {3.0, 4.0, 5.0}) {
+    loops.push_back(aliased(r, 31 + static_cast<std::size_t>(off), off));
+  }
+  loops.push_back(aliased(r, 45, 12.0));
+  std::optional<std::set<std::size_t>> reference;
+  std::mt19937 rng(3);
+  for (int trial = 0; trial < 20; trial++) {
+    auto order = loops;
+    std::shuffle(order.begin(), order.end(), rng);
+    LoopConsistencyGate g(p);
+    for (std::size_t k = 0; k < order.size();) {
+      const std::size_t batch = 1 + (k + trial) % 3;
+      std::vector<LoopForConsistency> b(
+        order.begin() + k, order.begin() + std::min(order.size(), k + batch));
+      (void)g.add(b);
+      k += b.size();
+    }
+    const auto acc = accepted_from(g);
+    if (!reference) {
+      reference = acc;
+    }
+    ASSERT_(acc == *reference);
+  }
+  ASSERT_EQUAL_(reference->size(), 10U);  // the correct ones
+}
+
+void test_two_wrong_then_more_correct()
+{
+  // One correct loop, then two aliased ones in one scan: two against one, the
+  // correct one is rejected (no way to tell). Three more correct ones turn the
+  // majority, and it is accepted again.
+  const LoopConsistencyParams p;
+  const Run r = make_run(0, 0, 0, 0);
+  LoopConsistencyGate g(p);
+  ASSERT_(g.add({correct(r, 25)}).empty());
+  const auto c1 = g.add({aliased(r, 20), aliased(r, 30)});
+  ASSERT_EQUAL_(c1.size(), 1U);
+  ASSERT_EQUAL_(c1.at(0), 0U);
+  const auto c2 = g.add({correct(r, 27), correct(r, 33), correct(r, 36)});
+  ASSERT_EQUAL_(c2.size(), 3U);  // 0 accepted again, 1 and 2 dropped
+  ASSERT_(g.is_accepted(0));
+  ASSERT_(!g.is_accepted(1));
+  ASSERT_(!g.is_accepted(2));
+}
+
+void test_worst_outlier_first()
+{
+  // Three correct loops, two aliased ones and one far off, in one batch: the far
+  // off one makes every loop an outlier at first; dropping the worst one first
+  // leaves the correct ones.
+  const LoopConsistencyParams p;
+  const Run r = make_run(0, 0, 0, 0);
+  LoopConsistencyGate g(p);
+  (void)g.add(
+    {correct(r, 25), correct(r, 33), correct(r, 36), aliased(r, 20), aliased(r, 30),
+     aliased(r, 28, 9.0)});
+  ASSERT_((accepted_from(g) == std::set<std::size_t>{25, 33, 36}));
+}
+
+void test_exact_tie_drops_older_pair()
+{
+  // Two against two, all with the same votes: the oldest keyframe pair is
+  // dropped first, which settles it.
+  const LoopConsistencyParams p;
+  const Run r = make_run(0, 0, 0, 0);
+  LoopConsistencyGate g(p);
+  (void)g.add({aliased(r, 35), aliased(r, 30), correct(r, 25), correct(r, 20)});
+  ASSERT_((accepted_from(g) == std::set<std::size_t>{30, 35}));
+}
+
+void test_far_at_one_end_not_compared()
+{
+  // A wrong loop whose first keyframe is next to those of the correct ones but
+  // whose second one is 60 m further: not a neighbor, so not judged by them.
+  const LoopConsistencyParams p;
+  const Run r = make_run(0, 0, 0, 0);
+  LoopConsistencyGate g(p);
+  ASSERT_(g.add({correct(r, 20), correct(r, 25), correct(r, 30)}).empty());
+  ASSERT_(g.add({make_loop(r, 25, revisit(25, false) + 60, CPose3D(5, 0, 0, 0, 0, 0))}).empty());
+  // Far at both ends either:
+  ASSERT_(g.add({make_loop(r, 200, revisit(200, false), CPose3D(5, 0, 0, 0, 0, 0))}).empty());
+  ASSERT_EQUAL_(g.rejected_count(), 0U);
 }
 
 void test_other_chain_not_compared()
 {
-  auto r = make_run();
   const LoopConsistencyParams p;
-  // The second lap comes from another front end: its poses cannot be composed
-  // with the first one, so loops between them are never compared.
-  for (std::size_t i = LAP; i < r.odo.chain_id.size(); i++) {
-    r.odo.chain_id[i] = 1;
-  }
-  std::vector<LoopForConsistency> loops = {
-    true_loop(r, 20), true_loop(r, 30), true_loop(r, 40), aliased_loop(r, 35)};
-  // Loops from chain 0 to chain 1 can still be compared with each other:
-  // (from, from) and (to, to) are in the same chains.
-  const auto bad = find_inconsistent_loops(r.odo, loops, 3, p);
-  ASSERT_(contains(bad, 3U));
+  const Run r = make_run(0, 0, 0, 0);
+  LoopConsistencyGate g(p);
+  ASSERT_(g.add({correct(r, 20), correct(r, 25), correct(r, 30)}).empty());
+  // The same wrong loop, but its second keyframe from another front end:
+  auto w = aliased(r, 27);
+  w.to_chain = 1;
+  ASSERT_(g.add({w}).empty());
+  // With both in chain 0, rejected:
+  ASSERT_EQUAL_(g.add({aliased(r, 28)}).size(), 1U);
+}
 
-  // But not with a loop whose ends are both in chain 0:
-  std::vector<LoopForConsistency> mixed = {true_loop(r, 20), true_loop(r, 30)};
-  LoopForConsistency within;
-  within.from = 10;
-  within.to = 290;
-  within.relative_pose = CPose3D(50, 0, 0, 0, 0, 0);  // wrong, but not comparable
-  mixed.push_back(within);
-  ASSERT_(find_inconsistent_loops(r.odo, mixed, 2, p).empty());
+// ---------------------------------------------------------------------------
+// The mapper: merge, drops and re-acceptance, bookkeeping, optimizer
+// notification and local map corrections.
+// ---------------------------------------------------------------------------
+mola::ProposedLoopEdge edge(const LoopForConsistency & l)
+{
+  mola::ProposedLoopEdge e;
+  e.from = l.from;
+  e.to = l.to;
+  e.relative_pose.mean = l.relative_pose;
+  e.relative_pose.cov.setDiagonal(1e-4);
+  return e;
+}
+
+void test_mapper()
+{
+  auto m = std::make_shared<mola::mapper::Mapper>();
+  m->setMinLoggingLevel(mrpt::system::LVL_WARN);
+  m->initialize(mrpt::containers::yaml::FromText(R"###(
+params:
+  reference_frame_name: "map"
+  enable_optimizer_thread: false
+  gnss_sensor_labels_re: ""
+  loop_closure_enabled: false
+  local_map_corrections: true
+)###"));
+#if defined(MOLA_MAPPER_HAS_LOCAL_MAP_CORRECTIONS)
+  std::vector<mola::LocalMapCorrection> received;
+  m->subscribe_to_local_map_corrections(
+    [&](const mola::LocalMapCorrection & c) { received.push_back(c); });
+#endif
+  const Run r = make_run(0.005, 0.2, 0.01, 0.2);
+  for (std::size_t i = 0; i < r.gt.size(); i++) {
+    mola::SharedKeyframeMap::KeyframeInsertRequest req;
+    req.timestamp = mrpt::Clock::fromDouble(1000.0 + 0.5 * static_cast<double>(i));
+    req.source_frame_id = "odom_kf";
+    req.pose_in_source.mean = r.odo[i];
+    req.pose_in_source.cov.setDiagonal(1e-6);
+    ASSERT_(m->requestInsertKeyframe(req).has_value());
+  }
+  m->optimize_now();
+  ASSERT_(!m->solve_pending());
+
+  using Pairs = std::vector<std::pair<std::size_t, std::size_t>>;
+  const auto pairOf = [](std::size_t i) { return std::make_pair(i, revisit(i, false)); };
+  const auto expectCorrection = [&](std::size_t n, std::size_t newLoops) {
+#if defined(MOLA_MAPPER_HAS_LOCAL_MAP_CORRECTIONS)
+    ASSERT_EQUAL_(received.size(), n);
+    if (n > 0) {
+      ASSERT_EQUAL_(received.back().new_loop_closures, newLoops);
+    }
+#else
+    (void)n;
+    (void)newLoops;
+#endif
+  };
+
+  // A correct loop:
+  ASSERT_EQUAL_(m->add_loop_closures({edge(correct(r, 25))}), 1U);
+  ASSERT_(m->solve_pending());
+  m->optimize_now();
+  expectCorrection(1, 1);
+
+  // Two aliased loops (two against one): the correct one is dropped.
+  ASSERT_EQUAL_(m->add_loop_closures({edge(aliased(r, 20)), edge(aliased(r, 30))}), 2U);
+  ASSERT_((m->loop_closure_pairs() == Pairs{pairOf(20), pairOf(30)}));
+  ASSERT_(m->solve_pending());
+  m->optimize_now();
+  expectCorrection(2, 2);
+
+  // Two more correct ones: it is accepted again, the aliased ones dropped. As
+  // many loops as before plus one, all of them new to the graph:
+  ASSERT_EQUAL_(m->add_loop_closures({edge(correct(r, 33)), edge(correct(r, 36))}), 3U);
+  ASSERT_((m->loop_closure_pairs() == Pairs{pairOf(25), pairOf(33), pairOf(36)}));
+  ASSERT_(m->solve_pending());
+  m->optimize_now();
+  expectCorrection(3, 3);
+
+  // A loop inconsistent with all of them: rejected, nothing changes, no solve
+  // nor correction needed.
+  ASSERT_EQUAL_(m->add_loop_closures({edge(aliased(r, 28, 9.0))}), 0U);
+  ASSERT_(!m->solve_pending());
+  m->optimize_now();
+  expectCorrection(3, 3);  // none new
+
+  // Pairs already proposed (accepted or not) are ignored:
+  ASSERT_EQUAL_(m->add_loop_closures({edge(aliased(r, 20)), edge(correct(r, 25))}), 0U);
+  ASSERT_EQUAL_(m->loop_closure_count(), 3U);
+
+  // Without the check, every loop goes in:
+  auto m2 = std::make_shared<mola::mapper::Mapper>();
+  m2->setMinLoggingLevel(mrpt::system::LVL_WARN);
+  m2->initialize(mrpt::containers::yaml::FromText(R"###(
+params:
+  reference_frame_name: "map"
+  enable_optimizer_thread: false
+  gnss_sensor_labels_re: ""
+  loop_closure_enabled: false
+  loop_closure_consistency_check: false
+)###"));
+  for (std::size_t i = 0; i < r.gt.size(); i++) {
+    mola::SharedKeyframeMap::KeyframeInsertRequest req;
+    req.timestamp = mrpt::Clock::fromDouble(1000.0 + 0.5 * static_cast<double>(i));
+    req.source_frame_id = "odom_kf";
+    req.pose_in_source.mean = r.odo[i];
+    req.pose_in_source.cov.setDiagonal(1e-6);
+    ASSERT_(m2->requestInsertKeyframe(req).has_value());
+  }
+  ASSERT_EQUAL_(
+    m2->add_loop_closures(
+      {edge(correct(r, 25)), edge(aliased(r, 20)), edge(aliased(r, 30)),
+       edge(aliased(r, 28, 9.0))}),
+    4U);
 }
 
 }  // namespace
@@ -187,15 +444,22 @@ void test_other_chain_not_compared()
 int main()
 {
   try {
-    test_true_loops_kept();
+    test_correct_loops_kept();
     test_aliased_loop_rejected();
     test_single_neighbor_does_not_decide();
-    test_far_loops_not_compared();
+    test_tie_is_not_an_outlier();
+    test_aliased_first_then_correct_majority();
+    test_order_independent();
+    test_two_wrong_then_more_correct();
+    test_worst_outlier_first();
+    test_exact_tie_drops_older_pair();
+    test_far_at_one_end_not_compared();
     test_other_chain_not_compared();
+    test_mapper();
     std::cout << "All tests passed.\n";
     return 0;
   } catch (const std::exception & e) {
-    std::cerr << e.what() << "\n";
+    std::cerr << mrpt::exception_to_str(e) << "\n";
     return 1;
   }
 }

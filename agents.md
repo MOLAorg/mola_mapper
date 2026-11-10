@@ -107,9 +107,11 @@ and a `T(0)` azimuth sigma below `georef_max_sigma_yaw_deg`.
   merged in order, except those contradicting the odometry chain between their keyframes
   (`check_loop_against_odometry()`: floor + fraction of the distance traveled; only within one
   source frame, so a front end that restarts must use a new `source_frame_id`), then those
-  inconsistent with most of their neighbor loops (`find_inconsistent_loops()`: cycles of two
-  loops and the odometry between their ends; accepted loops are dropped too). Closed and
-  rejected pairs (`loop_pairs_`, `rejected_loop_pairs_`) are excluded from later scans (exact
+  inconsistent with most of their neighbor loops (`LoopConsistencyGate`: cycles of two loops and
+  the odometry between their ends; each group of neighbor loops is decided again from scratch
+  when a loop joins it, off `state_mtx_`, so loops can be dropped and accepted again; `loops_`
+  is the accepted ones). Proposed and odometry-rejected pairs (`loop_pairs_`,
+  `rejected_loop_pairs_`) are excluded from later scans (exact
   keyframe pairs: nearby pairs remain candidates). One scan at a
   time (`lc_scan_mtx_`). `finalize()` (also from `onQuit()`)
   runs extra full scans and solves; each step and output is guarded, so one failure does not

@@ -130,15 +130,15 @@ params:
     max_ang_deg_per_m: 0.03  # [deg/m]
   # Reject loops inconsistent with most of their neighbor loops (cycles closed
   # through the odometry between their ends), e.g. a place matched to the wrong
-  # one in a repetitive scene. Accepted loops are dropped too, once newer ones
-  # contradict them:
+  # one in a repetitive scene. Decided again for the whole neighborhood as new
+  # loops arrive, so loops can be dropped or accepted again:
   loop_closure_consistency_check: ${MOLA_MAPPER_LC_CONSISTENCY_CHECK|true}
   loop_closure_consistency:
-    neighborhood: 50.0       # [m] along the odometry path, at both ends
-    max_xyz: 1.0             # [m]
-    max_xyz_per_m: 0.02      # [m/m] of odometry path in the cycle
-    max_ang_deg: 3.0         # [deg]
-    max_ang_deg_per_m: 0.03  # [deg/m]
+    neighborhood: 50.0  # [m] along the odometry path, at both ends
+    max_xyz: ${MOLA_MAPPER_LC_CONSISTENCY_MAX_XYZ|1.0}  # [m]
+    max_xyz_per_m: ${MOLA_MAPPER_LC_CONSISTENCY_MAX_XYZ_PER_M|0.02}  # [m/m] of odometry path in the cycle
+    max_ang_deg: ${MOLA_MAPPER_LC_CONSISTENCY_MAX_ANG|3.0}  # [deg]
+    max_ang_deg_per_m: ${MOLA_MAPPER_LC_CONSISTENCY_MAX_ANG_PER_M|0.03}  # [deg/m]
     min_inconsistent: 2
 
   # Outputs, written at the end (empty: not written):

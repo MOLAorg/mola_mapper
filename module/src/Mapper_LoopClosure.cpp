@@ -29,7 +29,6 @@
 #include <algorithm>
 #include <chrono>
 #include <exception>
-#include <map>
 #include <mutex>
 #include <string>
 #include <utility>
@@ -161,59 +160,141 @@ std::optional<LoopOdometryCheck> Mapper::check_against_odometry_locked(
     params_.loop_closure_odometry_limits);
 }
 
-std::size_t Mapper::drop_inconsistent_loops_locked(std::size_t firstNew)
+LoopForConsistency Mapper::loop_for_consistency_locked(const GlobalGraphLoopEdge & e)
 {
-  OdometryChains odo;
-  odo.pose_in_source.reserve(keyframes_.size());
-  odo.chain_id.reserve(keyframes_.size());
-  std::map<std::string, std::size_t> chainIds;
-  for (const auto & kf : keyframes_) {
-    odo.pose_in_source.push_back(kf.pose_in_source.mean);
-    odo.chain_id.push_back(chainIds.try_emplace(kf.source_frame, chainIds.size()).first->second);
-  }
-  std::vector<LoopForConsistency> loops;
-  loops.reserve(loops_.size());
-  for (const auto & l : loops_) {
-    LoopForConsistency c;
-    c.from = l.from;
-    c.to = l.to;
-    c.relative_pose = l.relative_pose.mean;
-    loops.push_back(c);
-  }
-  const auto bad = find_inconsistent_loops(odo, loops, firstNew, params_.loop_closure_consistency);
-  if (bad.empty()) {
-    return 0;
-  }
-  std::size_t droppedNew = 0;
-  std::vector<bool> drop(loops_.size(), false);
-  for (const auto k : bad) {
-    drop[k] = true;
-    const auto & l = loops_[k];
-    const std::pair<std::size_t, std::size_t> key = {
-      std::min(l.from, l.to), std::max(l.from, l.to)};
-    loop_pairs_.erase(key);
-    rejected_loop_pairs_.insert(key);
-    if (k >= firstNew) {
-      droppedNew++;
+  // Distance along each chain, for the keyframes not done yet:
+  for (std::size_t i = keyframe_path_.size(); i < keyframes_.size(); i++) {
+    const auto & kf = keyframes_[i];
+    double path = 0;
+    if (const auto it = chain_last_keyframe_.find(kf.source_frame);
+        it != chain_last_keyframe_.end()) {
+      const auto prev = it->second;
+      path = keyframe_path_[prev] + (kf.pose_in_source.mean.translation() -
+                                     keyframes_[prev].pose_in_source.mean.translation())
+                                      .norm();
     }
-    MRPT_LOG_INFO_FMT(
-      "Loop %zu-%zu %s: inconsistent with most of its neighbor loops", key.first, key.second,
-      k >= firstNew ? "rejected" : "dropped");
+    keyframe_path_.push_back(path);
+    chain_last_keyframe_[kf.source_frame] = i;
   }
-  std::vector<GlobalGraphLoopEdge> kept;
-  kept.reserve(loops_.size() - bad.size());
-  for (std::size_t k = 0; k < loops_.size(); k++) {
-    if (!drop[k]) {
-      kept.push_back(loops_[k]);
+  const auto chainOf = [this](std::size_t i) {
+    return chain_ids_.try_emplace(keyframes_[i].source_frame, chain_ids_.size()).first->second;
+  };
+  LoopForConsistency c;
+  c.from = e.from;
+  c.to = e.to;
+  c.relative_pose = e.relative_pose.mean;
+  c.from_odometry = keyframes_[e.from].pose_in_source.mean;
+  c.to_odometry = keyframes_[e.to].pose_in_source.mean;
+  c.from_chain = chainOf(e.from);
+  c.to_chain = chainOf(e.to);
+  c.from_path = keyframe_path_[e.from];
+  c.to_path = keyframe_path_[e.to];
+  return c;
+}
+
+std::size_t Mapper::add_loop_closures(const std::vector<mola::ProposedLoopEdge> & edges)
+{
+  auto lckScan = mrpt::lockHelper(lc_scan_mtx_);
+  return merge_loop_edges(edges);
+}
+
+std::size_t Mapper::merge_loop_edges(const std::vector<mola::ProposedLoopEdge> & edges)
+{
+  const bool useGate = params_.loop_closure_consistency_check;
+  std::size_t merged = 0;
+  std::size_t rejected = 0;
+  std::vector<GlobalGraphLoopEdge> newEdges;
+  std::vector<LoopForConsistency> newLoops;
+  {
+    auto lck = mrpt::lockHelper(state_mtx_);
+    for (const auto & e : edges) {
+      if (e.from == e.to || e.from >= keyframes_.size() || e.to >= keyframes_.size()) {
+        continue;
+      }
+      const std::pair<std::size_t, std::size_t> key = {
+        std::min<std::size_t>(e.from, e.to), std::max<std::size_t>(e.from, e.to)};
+      if (loop_pairs_.count(key) != 0) {
+        continue;
+      }
+      if (params_.loop_closure_odometry_check) {
+        if (const auto c = check_against_odometry_locked(key.first, key.second, e);
+            c && !c->accepted) {
+          if (rejected_loop_pairs_.insert(key).second) {
+            MRPT_LOG_INFO_FMT(
+              "Loop %zu-%zu rejected: %.2f m / %.1f deg off the odometry over %.1f m", key.first,
+              key.second, c->xyz_error, c->ang_error_deg, c->distance_traveled);
+            rejected++;
+          }
+          continue;
+        }
+      }
+      // Kept for good: a loop rejected by the consistency check may be accepted
+      // later, so its pair is not proposed again either.
+      loop_pairs_.insert(key);
+      const GlobalGraphLoopEdge edge = {e.from, e.to, e.relative_pose};
+      if (!useGate) {
+        loops_.push_back(edge);
+        loops_revision_++;
+        loops_added_++;
+        merged++;
+        continue;
+      }
+      newEdges.push_back(edge);
+      newLoops.push_back(loop_for_consistency_locked(edge));
     }
   }
-  loops_ = std::move(kept);
-  lc_rejected_by_consistency_ += bad.size();
-  if (droppedNew < bad.size()) {
-    // An accepted loop was dropped: the graph must be solved again.
+  lc_rejected_by_odometry_ += rejected;
+
+  bool changed = merged > 0;
+  if (!newEdges.empty()) {
+    // Off the state lock (this thread is the only writer of loops):
+    if (!lc_gate_) {
+      lc_gate_.emplace(params_.loop_closure_consistency);
+    }
+    const std::size_t firstNew = lc_gate_->size();
+    const auto changes = lc_gate_->add(newLoops);
+    lc_gate_edges_.insert(lc_gate_edges_.end(), newEdges.begin(), newEdges.end());
+
+    std::size_t added = newEdges.size();
+    std::size_t removed = 0;
+    for (const auto k : changes) {
+      const auto & l = lc_gate_edges_.at(k);
+      const char * what = nullptr;
+      if (k >= firstNew) {
+        added--;
+        what = "rejected: inconsistent with most of its neighbor loops";
+      } else if (lc_gate_->is_accepted(k)) {
+        added++;
+        what = "accepted again: consistent with most of its neighbor loops";
+      } else {
+        removed++;
+        what = "dropped: inconsistent with most of its neighbor loops";
+      }
+      MRPT_LOG_INFO_FMT("Loop %zu-%zu %s", std::min(l.from, l.to), std::max(l.from, l.to), what);
+    }
+    std::vector<GlobalGraphLoopEdge> accepted;
+    for (std::size_t k = 0; k < lc_gate_->size(); k++) {
+      if (lc_gate_->is_accepted(k)) {
+        accepted.push_back(lc_gate_edges_[k]);
+      }
+    }
+    {
+      auto lck = mrpt::lockHelper(state_mtx_);
+      loops_ = std::move(accepted);
+      if (added > 0 || removed > 0) {
+        loops_revision_++;
+        loops_added_ += added;
+      }
+    }
+    lc_rejected_by_consistency_ = lc_gate_->rejected_count();
+    merged = added;
+    changed = added > 0 || removed > 0;
+  }
+  if (changed) {
     optimizer_new_data_.store(true);
+    notify_optimizer();
   }
-  return droppedNew;
+  return merged;
 }
 
 std::size_t Mapper::run_loop_closure_scan_now(bool forceFullScan)
@@ -281,41 +362,7 @@ std::size_t Mapper::run_loop_closure_scan(bool forceFullScan)
     return std::minmax(a.from, a.to) < std::minmax(b.from, b.to);
   });
 
-  std::size_t merged = 0;
-  std::size_t rejected = 0;
-  {
-    auto lck = mrpt::lockHelper(state_mtx_);
-    for (const auto & e : edges) {
-      if (e.from == e.to || e.from >= keyframes_.size() || e.to >= keyframes_.size()) {
-        continue;
-      }
-      const std::pair<std::size_t, std::size_t> key = {
-        std::min<std::size_t>(e.from, e.to), std::max<std::size_t>(e.from, e.to)};
-      if (loop_pairs_.count(key) != 0) {
-        continue;
-      }
-      if (params_.loop_closure_odometry_check) {
-        if (const auto c = check_against_odometry_locked(key.first, key.second, e);
-            c && !c->accepted) {
-          if (rejected_loop_pairs_.insert(key).second) {
-            MRPT_LOG_INFO_FMT(
-              "Loop %zu-%zu rejected: %.2f m / %.1f deg off the odometry over %.1f m", key.first,
-              key.second, c->xyz_error, c->ang_error_deg, c->distance_traveled);
-            rejected++;
-          }
-          continue;
-        }
-      }
-      loop_pairs_.insert(key);
-      loops_.push_back({e.from, e.to, e.relative_pose});
-      merged++;
-    }
-    if (merged > 0 && params_.loop_closure_consistency_check) {
-      const std::size_t dropped = drop_inconsistent_loops_locked(loops_.size() - merged);
-      merged -= std::min(merged, dropped);
-    }
-  }
-  lc_rejected_by_odometry_ += rejected;
+  const std::size_t merged = merge_loop_edges(edges);
   lc_snapshot_size_at_last_scan_ = snapshot.size();
   lc_scans_++;
   lc_candidates_checked_ += stats.candidates_evaluated;
@@ -325,8 +372,6 @@ std::size_t Mapper::run_loop_closure_scan(bool forceFullScan)
       "Loop closure: " << merged << " new edge(s) from a " << (fullScan ? "full" : "incremental")
                        << " scan of " << snapshot.size() << " keyframes ("
                        << stats.candidates_evaluated << " candidates checked)");
-    optimizer_new_data_.store(true);
-    notify_optimizer();
   }
   return merged;
 }

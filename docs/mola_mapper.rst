@@ -305,10 +305,10 @@ with an environment variable (shown in parentheses below).
       loop_closure_consistency_check: true  # (MOLA_MAPPER_LC_CONSISTENCY_CHECK)
       loop_closure_consistency:
         neighborhood: 50.0               # [m] along the odometry path, at both ends
-        max_xyz: 1.0                     # [m]
-        max_xyz_per_m: 0.02              # [m/m] of odometry path in the cycle
-        max_ang_deg: 3.0                 # [deg]
-        max_ang_deg_per_m: 0.03          # [deg/m]
+        max_xyz: 1.0                     # [m] (MOLA_MAPPER_LC_CONSISTENCY_MAX_XYZ)
+        max_xyz_per_m: 0.02              # [m/m] of odometry path in the cycle (MOLA_MAPPER_LC_CONSISTENCY_MAX_XYZ_PER_M)
+        max_ang_deg: 3.0                 # [deg] (MOLA_MAPPER_LC_CONSISTENCY_MAX_ANG)
+        max_ang_deg_per_m: 0.03          # [deg/m] (MOLA_MAPPER_LC_CONSISTENCY_MAX_ANG_PER_M)
         min_inconsistent: 2
 
    The detector is the ``mola_sm_loop_closure`` frame-to-frame engine, used only
@@ -330,9 +330,16 @@ with an environment variable (shown in parentheses below).
    segments between their ends, which must be close to the identity
    (``loop_closure_consistency`` limits: a floor plus a fraction of the odometry
    path in the cycle). A loop inconsistent with most of its neighbors, and with
-   at least ``min_inconsistent`` of them, is rejected: a place matched to the
-   wrong one along a repetitive street. Accepted loops are checked again as new
-   ones arrive, and dropped once most of their neighbors contradict them.
+   at least ``min_inconsistent`` of them (a tie is not), is an outlier: a place
+   matched to the wrong one along a repetitive street. Each group of loops
+   connected through neighbors is decided again from scratch whenever a loop
+   joins it: starting with all of them, the worst outlier is dropped, one at a
+   time, until there is none. So the result does not depend on the order the
+   loops arrived in, and loops rejected early are accepted again once enough
+   correct loops around them agree. With fewer correct loops than wrong ones
+   that agree with each other, the wrong ones win until more correct loops
+   arrive. Of three visits to a place, loops pass1-pass3 and pass2-pass3 are
+   never compared (their first keyframes are far apart along the path).
 
    Note that the default of
    ``loop_closure_enabled`` in the C++ ``Parameters`` struct is ``false``; the

@@ -1029,7 +1029,8 @@ void Mapper::getDiagnostics(std::vector<mola::DiagnosticStatusMsg> & status)
   s.values.push_back({"lc_candidates_checked", std::to_string(lc_candidates_checked_.load())});
   s.values.push_back({"lc_rejected_by_odometry", std::to_string(lc_rejected_by_odometry_.load())});
   s.values.push_back(
-    {"lc_rejected_by_consistency", std::to_string(lc_rejected_by_consistency_.load())});
+    {"lc_currently_rejected_by_consistency",
+     std::to_string(lc_currently_rejected_by_consistency_.load())});
   s.values.push_back({"lc_scan_in_progress", lc_busy_.load() ? "yes" : "no"});
   status.push_back(std::move(s));
 }
@@ -1062,10 +1063,16 @@ void Mapper::finalize()
   if (lc_engine_) {
     // Each correction may bring further loops within reach of the detector:
     for (uint32_t round = 0; round < params_.loop_closure_finalize_rounds; round++) {
+      const auto loopsRevision = [this] {
+        auto lck = mrpt::lockHelper(state_mtx_);
+        return loops_revision_;
+      };
+      const std::size_t revisionBefore = loopsRevision();
       std::size_t n = 0;
       guarded(*this, "Final loop closure pass", [&] { n = run_loop_closure_scan(true); });
       MRPT_LOG_INFO_STREAM("Final loop closure pass #" << round + 1 << ": " << n << " new loops");
-      if (n == 0) {
+      // Solved again whenever the loops changed (also if some were only dropped):
+      if (loopsRevision() == revisionBefore) {
         break;
       }
       guarded(*this, "Final solve", [this] { optimize_now(); });

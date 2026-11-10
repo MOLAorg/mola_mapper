@@ -334,12 +334,16 @@ with an environment variable (shown in parentheses below).
    matched to the wrong one along a repetitive street. Each group of loops
    connected through neighbors is decided again from scratch whenever a loop
    joins it: starting with all of them, the worst outlier is dropped, one at a
-   time, until there is none. So the result does not depend on the order the
+   time, until there is none, and the dropped ones left without any
+   inconsistent accepted neighbor are accepted again. So the result does not depend on the order the
    loops arrived in, and loops rejected early are accepted again once enough
    correct loops around them agree. With fewer correct loops than wrong ones
    that agree with each other, the wrong ones win until more correct loops
    arrive. Of three visits to a place, loops pass1-pass3 and pass2-pass3 are
-   never compared (their first keyframes are far apart along the path).
+   never compared (their first keyframes are far apart along the path). Votes
+   are not weighted by distance: since the tolerance grows with the path in the
+   cycle, a loop matched a few meters off can look consistent with correct loops
+   far enough away (4.5 m off, with loops over ~45 m away at 4 %).
 
    Note that the default of
    ``loop_closure_enabled`` in the C++ ``Parameters`` struct is ``false``; the

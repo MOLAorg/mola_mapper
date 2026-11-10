@@ -77,9 +77,15 @@ struct LoopForConsistency
  *  Each group of loops connected through neighbors is decided as a whole, from
  *  scratch, every time a loop joins it: starting with all of them accepted, the
  *  outlier with the largest share of inconsistent accepted neighbors is dropped,
- *  one at a time, until there is none. So the decision depends on the set of
- *  loops, not on the order they arrived in, and a loop rejected early is accepted
- *  again once enough correct loops around it agree with it. */
+ *  one at a time, until there is none; then the dropped loops left without any
+ *  inconsistent accepted neighbor are accepted again. So the decision depends on
+ *  the set of loops, not on the order they arrived in, and a loop rejected early
+ *  is accepted again once enough correct loops around it agree with it.
+ *
+ *  Votes are not weighted by distance: with the tolerance growing with the path
+ *  in the cycle, a loop matched a few meters off along the street can be
+ *  consistent with correct loops far enough away (e.g. 4.5 m off with loops more
+ *  than ~45 m away at the default 4 %), which dilutes the vote against it. */
 class LoopConsistencyGate
 {
 public:

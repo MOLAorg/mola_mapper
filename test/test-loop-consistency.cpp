@@ -227,9 +227,18 @@ void test_order_independent()
     loops.push_back(correct(r, i));
   }
   for (const double off : {3.0, 4.0, 5.0}) {
-    loops.push_back(aliased(r, 31 + static_cast<std::size_t>(off), off));
+    loops.push_back(aliased(r, 27 + 2 * static_cast<std::size_t>(off), off));  // 33, 35, 37
   }
   loops.push_back(aliased(r, 45, 12.0));
+  // Errors with a rotation, some near the limits (where the frame the cycle
+  // error is measured in matters):
+  std::size_t i = 22;
+  for (const auto & [yawDeg, lateral] :
+       std::vector<std::pair<double, double>>{{0.5, 4.1}, {1.0, 3.0}, {2.0, 2.0}, {0.5, 1.2}}) {
+    loops.push_back(
+      make_loop(r, i, revisit(i, false), CPose3D(0, lateral, 0, mrpt::DEG2RAD(yawDeg), 0, 0)));
+    i += i == 26 ? 16 : 4;
+  }
   std::optional<std::set<std::size_t>> reference;
   std::mt19937 rng(3);
   for (int trial = 0; trial < 20; trial++) {
@@ -249,7 +258,68 @@ void test_order_independent()
     }
     ASSERT_(acc == *reference);
   }
-  ASSERT_EQUAL_(reference->size(), 10U);  // the correct ones
+  for (std::size_t k = 20; k < 60; k += 4) {
+    ASSERT_(reference->count(k) == 1);  // all the correct ones
+  }
+  for (const std::size_t k : {33U, 35U, 37U, 45U}) {
+    ASSERT_(reference->count(k) == 0);  // none of the aliased ones
+  }
+}
+
+void test_symmetric()
+{
+  // Two loops 40 m apart, one with a rotation and a lateral error: the verdict
+  // does not depend on which one is first.
+  const LoopConsistencyParams p;
+  const Run r = make_run(0, 0, 0, 0);
+  const LoopConsistencyGate g(p);
+  std::size_t numConsistent = 0;
+  std::size_t total = 0;
+  for (double deg = 0; deg <= 5.0; deg += 0.5) {
+    for (double dy = 0; dy < 5.0; dy += 0.1) {
+      const auto x = correct(r, 10);
+      const auto y =
+        make_loop(r, 50, revisit(50, false), CPose3D(0, dy, 0, mrpt::DEG2RAD(deg), 0, 0));
+      const auto a = g.consistent(x, y);
+      const auto b = g.consistent(y, x);
+      ASSERT_(a.has_value() && b.has_value());
+      ASSERT_EQUAL_(*a, *b);
+      numConsistent += *a ? 1 : 0;
+      total++;
+    }
+  }
+  ASSERT_(numConsistent > 0 && numConsistent < total);  // both verdicts exercised
+
+  // As the last loop or as the first one, the same verdict:
+  for (const double dy : {4.0, 4.1, 4.2}) {
+    const auto y =
+      make_loop(r, 50, revisit(50, false), CPose3D(0, dy, 0, mrpt::DEG2RAD(0.5), 0, 0));
+    LoopConsistencyGate last(p);
+    (void)last.add({correct(r, 10)});
+    (void)last.add({correct(r, 13)});
+    (void)last.add({correct(r, 16)});
+    (void)last.add({y});
+    LoopConsistencyGate first(p);
+    (void)first.add({y});
+    (void)first.add({correct(r, 10)});
+    (void)first.add({correct(r, 13)});
+    (void)first.add({correct(r, 16)});
+    ASSERT_EQUAL_(last.is_accepted(3), first.is_accepted(0));
+  }
+}
+
+void test_stranded_loop_accepted_again()
+{
+  // A correct loop C outvoted by two aliased ones next to it, which are outvoted
+  // in turn by three correct ones further on (not neighbors of C): C is left
+  // without any inconsistent accepted neighbor, and is accepted again.
+  const LoopConsistencyParams p;
+  const Run r = make_run(0, 0, 0, 0);
+  LoopConsistencyGate g(p);
+  (void)g.add(
+    {correct(r, 2), aliased(r, 32), aliased(r, 37), correct(r, 62), correct(r, 67),
+     correct(r, 72)});
+  ASSERT_((accepted_from(g) == std::set<std::size_t>{2, 62, 67, 72}));
 }
 
 void test_two_wrong_then_more_correct()
@@ -413,6 +483,18 @@ params:
   ASSERT_EQUAL_(m->add_loop_closures({edge(aliased(r, 20)), edge(correct(r, 25))}), 0U);
   ASSERT_EQUAL_(m->loop_closure_count(), 3U);
 
+  // Three more aliased ones, the majority now: the correct ones are dropped, and
+  // the end of the run solves the graph with the final loops:
+  const auto before = m->keyframe_poses();
+  ASSERT_EQUAL_(
+    m->add_loop_closures({edge(aliased(r, 22)), edge(aliased(r, 34)), edge(aliased(r, 38))}), 5U);
+  ASSERT_(m->solve_pending());
+  m->finalize();
+  ASSERT_(!m->solve_pending());
+  const auto after = m->keyframe_poses();
+  const std::size_t probe = revisit(30, false);
+  ASSERT_GT_((after[probe].translation() - before[probe].translation()).norm(), 1.0);
+
   // Without the check, every loop goes in:
   auto m2 = std::make_shared<mola::mapper::Mapper>();
   m2->setMinLoggingLevel(mrpt::system::LVL_WARN);
@@ -450,6 +532,8 @@ int main()
     test_tie_is_not_an_outlier();
     test_aliased_first_then_correct_majority();
     test_order_independent();
+    test_symmetric();
+    test_stranded_loop_accepted_again();
     test_two_wrong_then_more_correct();
     test_worst_outlier_first();
     test_exact_tie_drops_older_pair();

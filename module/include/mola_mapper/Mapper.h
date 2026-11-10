@@ -275,7 +275,8 @@ private:
   /// Keyframes inserted before the wheel odometry readings reached them.
   std::deque<std::size_t> pending_wheel_odom_;
   std::vector<GlobalGraphLoopEdge> loops_;
-  /// Keyframe pairs (min, max) of the merged loops.
+  /// Keyframe pairs (min, max) of every loop that passed the odometry check,
+  /// in the graph or not (not proposed again).
   std::set<std::pair<std::size_t, std::size_t>> loop_pairs_;
   /// Keyframe pairs (min, max) of the loops rejected by the odometry check.
   std::set<std::pair<std::size_t, std::size_t>> rejected_loop_pairs_;
@@ -386,7 +387,8 @@ private:
   std::atomic<std::size_t> lc_scans_{0};
   std::atomic<std::size_t> lc_candidates_checked_{0};
   std::atomic<std::size_t> lc_rejected_by_odometry_{0};
-  std::atomic<std::size_t> lc_rejected_by_consistency_{0};
+  /// Loops rejected by the consistency check right now (it can decrease):
+  std::atomic<std::size_t> lc_currently_rejected_by_consistency_{0};
   std::size_t lc_kf_count_at_last_scan_ = 0;       // under lc_scan_mtx_
   std::size_t lc_snapshot_size_at_last_scan_ = 0;  // under lc_scan_mtx_
   std::size_t lc_incremental_scans_ = 0;           // under lc_scan_mtx_

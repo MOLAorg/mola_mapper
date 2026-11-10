@@ -286,7 +286,7 @@ std::size_t Mapper::merge_loop_edges(const std::vector<mola::ProposedLoopEdge> &
         loops_added_ += added;
       }
     }
-    lc_rejected_by_consistency_ = lc_gate_->rejected_count();
+    lc_currently_rejected_by_consistency_ = lc_gate_->rejected_count();
     merged = added;
     changed = added > 0 || removed > 0;
   }

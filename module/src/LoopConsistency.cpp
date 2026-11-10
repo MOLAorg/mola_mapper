@@ -59,8 +59,13 @@ LoopForConsistency oldest_first(LoopForConsistency l)
 }  // namespace
 
 std::optional<bool> LoopConsistencyGate::consistent(
-  const LoopForConsistency & x, const LoopForConsistency & y) const
+  const LoopForConsistency & a, const LoopForConsistency & b) const
 {
+  // The cycle error is measured in the frame of x.from: the same x for either
+  // order of the arguments, so the result is symmetric.
+  const bool aFirst = std::make_pair(a.from, a.to) <= std::make_pair(b.from, b.to);
+  const auto & x = aFirst ? a : b;
+  const auto & y = aFirst ? b : a;
   if (x.from_chain != y.from_chain || x.to_chain != y.to_chain) {
     return std::nullopt;
   }
@@ -186,6 +191,28 @@ void LoopConsistencyGate::decide_group(const std::vector<std::size_t> & group)
       if (!c) {
         numInconsistent[j]--;
       }
+    }
+  }
+
+  // A loop dropped early may have no inconsistent accepted neighbor left once
+  // the ones that outvoted it are dropped too: accepted again, oldest keyframe
+  // pair first (each one only adds consistent votes to the accepted ones).
+  std::vector<std::size_t> rejected;
+  for (const auto k : group) {
+    if (!accepted_[k]) {
+      rejected.push_back(k);
+    }
+  }
+  std::sort(rejected.begin(), rejected.end(), [this](std::size_t a, std::size_t b) {
+    return std::make_pair(loops_[a].from, loops_[a].to) <
+           std::make_pair(loops_[b].from, loops_[b].to);
+  });
+  for (const auto k : rejected) {
+    const bool contradicted = std::any_of(
+      neighbors_[k].begin(), neighbors_[k].end(),
+      [this](const auto & n) { return accepted_[n.first] && !n.second; });
+    if (!contradicted) {
+      accepted_[k] = true;
     }
   }
 }

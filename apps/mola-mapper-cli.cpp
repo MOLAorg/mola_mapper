@@ -108,7 +108,6 @@ int main(int argc, char ** argv)
     auto p = cfg["params"];
     p["enable_optimizer_thread"] = false;
     p["enable_loop_closure_thread"] = false;
-    p["feedback_to_state_estimator"] = false;
     p["record_input"] = std::string();
     p["output_tum_trajectory"] = out("mapper.tum");
     p["output_georeference"] = out("mapper_georef.yaml");

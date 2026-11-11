@@ -190,17 +190,6 @@ struct Parameters
   double optimizer_min_period = 1.0;
   /** @} */
 
-  /** @name Feedback to the state estimator (mola::NavStateFilter)
-     * @{ */
-  /** If true, after each solve the optimized pose of the newest keyframe is
-     *  fused into the state estimator as an absolute pose in reference_frame_name,
-     *  so loop closures and GNSS reach the live estimate. */
-  bool feedback_to_state_estimator = false;
-  /// Floors of the sigmas of that pose [m] and [deg].
-  double feedback_min_sigma_xyz = 0.10;
-  double feedback_min_sigma_ang_deg = 0.5;
-  /** @} */
-
   /** If true, after each solve with new loop closures the front ends are told
    *  (mola::LocalMapCorrectionSource), so they can rebuild their local maps
    *  from the corrected keyframes. */

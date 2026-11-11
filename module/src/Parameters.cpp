@@ -121,9 +121,6 @@ void Parameters::loadFrom(const mrpt::containers::yaml & cfg)
   MCP_LOAD_OPT(cfg, enable_optimizer_thread);
   MCP_LOAD_OPT(cfg, optimizer_min_period);
 
-  MCP_LOAD_OPT(cfg, feedback_to_state_estimator);
-  MCP_LOAD_OPT(cfg, feedback_min_sigma_xyz);
-  MCP_LOAD_OPT(cfg, feedback_min_sigma_ang_deg);
   MCP_LOAD_OPT(cfg, local_map_corrections);
 
   MCP_LOAD_OPT(cfg, loop_closure_enabled);

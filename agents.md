@@ -12,19 +12,19 @@ Separate MOLA modules, composed by `mola-cli-launchs/*.yaml`:
 - LIO (`mola::LidarOdometry`) keeps the smoother as its only `NavStateFilter`, and pushes
   sparse keyframes to the mapper through `mola::SharedKeyframeMap` (source frame
   `lidar_odom_kf`).
-- The smoother fuses LIO increments (and, in "owner" mode, the mapper's absolute `{map}`
-  corrections). Optionally it tracks IMU biases (`MOLA_NAVSTATE_IMU_BIAS_TRACKING`) and
-  offers them as `mola::ImuBiasSource`.
+- The smoother is the live estimator: it fuses LIO increments and, optionally, GNSS with
+  its own online geo-reference. Optionally it tracks IMU biases
+  (`MOLA_NAVSTATE_IMU_BIAS_TRACKING`) and offers them as `mola::ImuBiasSource`.
 - `mola::mapper::Mapper` (ExecutableBase, RawDataConsumer, MapSourceBase,
   DiagnosticsProvider, SharedKeyframeMap, LocalMapCorrectionSource) is NOT a NavStateFilter.
   After solves with new loops it advertises a `LocalMapCorrection`; LIO then pulls
   the keyframes around its newest one (ids are indices in `keyframes_`, poses
   relative to it) and rebuilds its local map.
 
-The mapper owns GNSS and the geo-reference: in owner mode the smoother runs without GNSS and
-without absolute attitude, and gets the optimized newest keyframe pose with
-`fuse_pose(t, pose, "map")` (`feedback_to_state_estimator`). The smoother's
-`set_geo_reference()` is not used mid-run (it resets the smoother).
+No estimate flows from the mapper into the smoother. Both may take the same GNSS readings:
+the smoother for a live geo-referenced estimate, the mapper for the geo-reference of its
+global map (estimated in its own graph). The smoother's `set_geo_reference()` is not used
+mid-run (it resets the smoother).
 
 ## Layout
 
@@ -127,14 +127,13 @@ and a `T(0)` azimuth sigma below `georef_max_sigma_yaw_deg`.
   `T_map_<f>`, so LIO's local map and vehicle stay aligned with the corrected graph.
   Its redraw key: keyframes, solves, loop revision and rejected counts. Known cost: one
   `CSphere` per keyframe (fine up to a few thousand; very long sessions may need fewer).
-- Feedback to the state estimator: the newest keyframe pose, once per keyframe.
 - Limitations: one front end chain (keyframes of interleaved sources only get weak edges);
   all keyframe observations stay in RAM; every solve is a full batch.
 
 ## Reference results
 
-- 1.3 km ground robot loop, low-cost GNSS only (RTK as ground truth), mapper feeding back to the
-  smoother: absolute horizontal RMSE 5.4 m initially; 4.6 m with smoother bias tracking and
+- 1.3 km ground robot loop, low-cost GNSS only (RTK as ground truth), measured with a feedback
+  of the mapper poses into the smoother since removed: absolute horizontal RMSE 5.4 m initially; 4.6 m with smoother bias tracking and
   the per-radian odometry sigma; 4.35 m adding gyro factors. LIO alone drifts ~11 m.
 - KITTI 00 (3.7 km, loop closures only): LIO APE RMSE 6.85 m, mapper 2.21 m (50 loops).
 
@@ -142,5 +141,5 @@ and a `T(0)` azimuth sigma below `georef_max_sigma_yaw_deg`.
 
 `test/`: test-global-graph (loop closure, GNSS georef and its observability, gyro vs turn
 heading errors), test-gyro-integration, test-mapper-ingestion (GNSS/gravity/gyro attachment,
-feedback, outputs), test-loop-odometry-check, test-loop-consistency, test-lc-wait-idle,
+outputs), test-loop-odometry-check, test-loop-consistency, test-lc-wait-idle,
 test-graph-visualization (GUI scene, no visualizer needed).

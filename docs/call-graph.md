@@ -12,7 +12,6 @@ flowchart TD
     subgraph front["Other modules"]
         LIO(["LIO: requestInsertKeyframe()"])
         RAW(["Raw data source: onNewObservation()"])
-        SE["State estimator (NavStateFilter)"]
     end
 
     subgraph api["Mapper API"]
@@ -40,7 +39,6 @@ flowchart TD
         GINPUT["graph_input_locked()"]
         OGG["optimize_global_graph()"]
         PUBGEO["publish_georeference()"]
-        FB["send_feedback()"]
     end
 
     subgraph lc["Loop closure thread"]
@@ -69,8 +67,6 @@ flowchart TD
     SOLVE --> OGG
     SOLVE -->|"poses, georef"| KFS
     SOLVE --> PUBGEO
-    SOLVE --> FB
-    FB -->|"fuse_pose(map)"| SE
 
     LLOOP --> LSCAN
     LSCAN -->|"snapshot"| KFS
@@ -151,17 +147,13 @@ every `optimizer_min_period`. With `enable_optimizer_thread: false`, only
    releases it.
 2. Runs `optimize_global_graph()` (see `GlobalGraph.h`): GTSAM batch
    Levenberg-Marquardt over the keyframe poses `P(i)` and `T_enu_to_map` `T(0)`,
-   plus marginal covariances.
+   plus the marginal covariance of `T_enu_to_map` when it can be geo-referenced.
 3. Under `state_mtx_`, stores the optimized poses. Keyframes inserted while
    solving are re-chained onto the new estimates. Stores the datum and the
    geo-reference.
 4. Publishes the geo-reference through `advertiseUpdatedMap()`
    (`publish_georeference()`), if there is one.
-5. `send_feedback()`, if `feedback_to_state_estimator` is true: finds the single
-   `NavStateFilter` module and calls `fuse_pose(stamp, pose, reference_frame_name)`
-   with the optimized pose of the newest keyframe, its marginal covariance
-   floored by `feedback_min_sigma_xyz` and `feedback_min_sigma_ang_deg`.
-6. If the solve added loop closures and `local_map_corrections` is true,
+5. If the solve added loop closures and `local_map_corrections` is true,
    `advertise_local_map_correction()` (`mola::LocalMapCorrectionSource`), still
    under `solve_mtx_` but not `state_mtx_`. Subscribers (LIO) then call
    `local_map_keyframes()`, which copies the keyframes near a reference one

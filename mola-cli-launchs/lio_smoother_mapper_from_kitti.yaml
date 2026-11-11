@@ -8,7 +8,7 @@
 #   export KITTI_BASE_DIR=/path/to/kitti   KITTI_SEQ=00
 #   mola-cli $(ros2 pkg prefix mola_mapper)/share/mola_mapper/mola-cli-launchs/lio_smoother_mapper_from_kitti.yaml
 #
-# Main switches: MOLA_WITH_MAPPER, MOLA_MAPPER_LOOP_CLOSURE, MOLA_MAPPER_FEEDBACK,
+# Main switches: MOLA_WITH_MAPPER, MOLA_MAPPER_LOOP_CLOSURE,
 # MOLA_MAPPER_OUTPUT_* (see params/mapper.yaml).
 # =============================================================================
 

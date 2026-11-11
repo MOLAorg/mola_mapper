@@ -195,9 +195,7 @@ void Mapper::initialize(const mrpt::containers::yaml & cfg)
     << ", gyro IMU=" << (use_gyro_input_ ? params_.gyro_sensor_labels_re : "none")
     << ", wheel odometry=" << (use_wheel_odom_input_ ? params_.wheel_odom_sensor_labels_re : "none")
     << ", images=" << (use_image_input_ ? params_.image_sensor_labels_re : "none")
-    << ", loop closure=" << (params_.loop_closure_enabled ? "on" : "off")
-    << ", feedback to the state estimator="
-    << (params_.feedback_to_state_estimator ? "on" : "off"));
+    << ", loop closure=" << (params_.loop_closure_enabled ? "on" : "off"));
   MRPT_END
 }
 
@@ -823,7 +821,6 @@ void Mapper::solve_global_graph()
   last_solve_seconds_ = dt;
 
   mrpt::Clock::time_point newestStamp;
-  mrpt::poses::CPose3D newestPose;
   {
     auto lck = mrpt::lockHelper(state_mtx_);
     const std::size_t n = in.keyframes.size();
@@ -847,7 +844,6 @@ void Mapper::solve_global_graph()
       georef_ = r.georeferencing;
     }
     newestStamp = keyframes_[n - 1].stamp;
-    newestPose = keyframes_[n - 1].pose_in_map;
     last_num_gnss_factors_ = r.num_gnss_factors;
     last_num_gravity_factors_ = r.num_gravity_factors;
     last_num_gyro_factors_ = r.num_gyro_factors;
@@ -866,7 +862,6 @@ void Mapper::solve_global_graph()
   if (r.georeferencing) {
     publish_georeference(*r.georeferencing);
   }
-  send_feedback(newestStamp, newestPose, r);
 
 #if defined(MOLA_MAPPER_HAS_LOCAL_MAP_CORRECTIONS)
   // Only loop closures (added or dropped) move the keyframes around the front
@@ -908,44 +903,6 @@ std::optional<std::vector<mola::LocalMapKeyframe>> Mapper::local_map_keyframes_i
   return out;
 }
 #endif
-
-void Mapper::send_feedback(
-  const mrpt::Clock::time_point & stamp, const mrpt::poses::CPose3D & pose,
-  const GlobalGraphResult & r)
-{
-  if (!params_.feedback_to_state_estimator) {
-    return;
-  }
-  // Each keyframe is fed back once: solves without a new keyframe (loops, late
-  // GNSS) would otherwise count the same information again.
-  if (last_feedback_stamp_ && *last_feedback_stamp_ >= stamp) {
-    return;
-  }
-  auto se = state_estimator_.lock();
-  if (!se) {
-    const auto mods = findService<mola::NavStateFilter>();
-    if (mods.size() != 1) {
-      MRPT_LOG_THROTTLE_WARN(
-        30.0, "feedback_to_state_estimator: there must be exactly one NavStateFilter module");
-      return;
-    }
-    se = std::dynamic_pointer_cast<mola::NavStateFilter>(mods[0]);
-    state_estimator_ = se;
-  }
-
-  mrpt::poses::CPose3DPDFGaussian pdf;
-  pdf.mean = pose;
-  if (r.last_pose) {
-    pdf.cov = r.last_pose->cov;
-  }
-  const double sXyz2 = mrpt::square(params_.feedback_min_sigma_xyz);
-  const double sAng2 = mrpt::square(mrpt::DEG2RAD(params_.feedback_min_sigma_ang_deg));
-  for (int i = 0; i < 6; i++) {
-    pdf.cov(i, i) = std::max(pdf.cov(i, i), i < 3 ? sXyz2 : sAng2);
-  }
-  se->fuse_pose(stamp, pdf, params_.reference_frame_name);
-  last_feedback_stamp_ = stamp;
-}
 
 void Mapper::publish_georeference(const mola::Georeferencing & g)
 {

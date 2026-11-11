@@ -36,9 +36,11 @@ set(LIB_SOURCES
   module/src/GyroIntegration.cpp
   module/src/WheelOdometry.cpp
   module/src/GlobalGraphIO.cpp
+  module/src/GraphVisualization.cpp
   module/src/LoopConsistency.cpp
   module/src/LoopOdometryCheck.cpp
   module/src/Mapper.cpp
+  module/src/Mapper_GUI.cpp
   module/src/Mapper_LoopClosure.cpp
   module/src/MapperInputLog.cpp
   module/src/MapperReplay.cpp
@@ -48,6 +50,7 @@ set(LIB_SOURCES
 set(LIB_PUBLIC_HEADERS
   module/include/mola_mapper/GlobalGraph.h
   module/include/mola_mapper/GlobalGraphIO.h
+  module/include/mola_mapper/GraphVisualization.h
   module/include/mola_mapper/GyroIntegration.h
   module/include/mola_mapper/LoopConsistency.h
   module/include/mola_mapper/LoopOdometryCheck.h

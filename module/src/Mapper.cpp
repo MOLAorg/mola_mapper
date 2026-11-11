@@ -180,6 +180,8 @@ void Mapper::initialize(const mrpt::containers::yaml & cfg)
     }
   }
 
+  gui_initialize();
+
   if (params_.enable_optimizer_thread) {
     optimizer_should_exit_.store(false);
     optimizer_thread_ = std::thread(&Mapper::optimizer_thread_loop, this);
@@ -199,7 +201,18 @@ void Mapper::initialize(const mrpt::containers::yaml & cfg)
   MRPT_END
 }
 
-void Mapper::spinOnce() {}
+void Mapper::spinOnce()
+{
+  if (!visualizer_) {
+    return;
+  }
+  // A GUI failure must never stop the mapping:
+  try {
+    gui_update();
+  } catch (const std::exception & e) {
+    MRPT_LOG_THROTTLE_ERROR_STREAM(10.0, "GUI update failed: " << e.what());
+  }
+}
 
 void Mapper::onQuit() { finalize(); }
 
@@ -807,6 +820,7 @@ void Mapper::solve_global_graph()
   const auto t0 = std::chrono::steady_clock::now();
   GlobalGraphResult r = optimize_global_graph(in, params_.graph, this);
   const double dt = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+  last_solve_seconds_ = dt;
 
   mrpt::Clock::time_point newestStamp;
   mrpt::poses::CPose3D newestPose;

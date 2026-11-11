@@ -18,6 +18,7 @@
  */
 #pragma once
 
+#include <mola_mapper/GraphVisualization.h>
 #include <mola_mapper/LoopConsistency.h>
 #include <mola_mapper/LoopOdometryCheck.h>
 #include <mrpt/containers/yaml.h>
@@ -252,6 +253,9 @@ struct Parameters
    *  replay the run exactly with mola-mapper-cli. */
   std::string record_input;
   /** @} */
+
+  /// The keyframe graph in the GUI (only with a visualizer module).
+  GraphVisualizationParams visualization;
 
   void loadFrom(const mrpt::containers::yaml & cfg);
 };

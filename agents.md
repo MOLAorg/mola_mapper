@@ -35,11 +35,12 @@ module/include/mola_mapper/
   GlobalGraphIO.h   save/load the graph input (offline re-optimization), TUM, georef
   GyroIntegration.h integrate_gyro(): rotation between keyframes from gyro readings
   WheelOdometry.h   wheel_odometry_increment(): wheel odometry between keyframes (interpolated)
+  GraphVisualization.h  build_graph_visualization(): the GUI scene of the keyframe graph
   Parameters.h      Parameters (module) and GlobalGraphParams (graph)
   MapperInputLog.h  record (record_input, background writer) / read the mapper input
   MapperReplay.h    replay_mapper_input(): feeds a thread-less Mapper, scans and solves
                     at fixed periods of data time (bit-exact with one TBB thread)
-module/src/         Mapper.cpp, Mapper_LoopClosure.cpp, GlobalGraph*.cpp, ...
+module/src/         Mapper.cpp, Mapper_LoopClosure.cpp, Mapper_GUI.cpp, GlobalGraph*.cpp, ...
 apps/mola-mapper-reoptimize.cpp   re-solves a saved graph input with other parameters
 apps/mola-mapper-cli.cpp          replays a recorded mapper input (tuning, reproducible runs)
 params/mapper.yaml                every setting with a MOLA_MAPPER_* environment hook
@@ -117,6 +118,15 @@ and a `T(0)` azimuth sigma below `georef_max_sigma_yaw_deg`.
   runs extra full scans and solves; each step and output is guarded, so one failure does not
   lose the other outputs.
 - `state_mtx_` guards keyframes, loops and pending data; never call other modules with it held.
+- GUI (`Mapper_GUI.cpp`, only if a `VizInterface` module exists): `spinOnce()` (launcher thread,
+  `execution_rate`) redraws `mapper/graph` (keyframe spheres, odometry edges, accepted and
+  optionally rejected loops as `CSetOfLines` with their own widths) when the graph changed,
+  copying it under `state_mtx_` and building the scene off it, at most every
+  `visualization.update_period`. It also moves the movable viz frame `<f>` of each front end
+  whose keyframes come as `<f>_kf` (LIO draws in `publish_reference_frame`) to the optimized
+  `T_map_<f>`, so LIO's local map and vehicle stay aligned with the corrected graph.
+  Its redraw key: keyframes, solves, loop revision and rejected counts. Known cost: one
+  `CSphere` per keyframe (fine up to a few thousand; very long sessions may need fewer).
 - Feedback to the state estimator: the newest keyframe pose, once per keyframe.
 - Limitations: one front end chain (keyframes of interleaved sources only get weak edges);
   all keyframe observations stay in RAM; every solve is a full batch.
@@ -132,4 +142,5 @@ and a `T(0)` azimuth sigma below `georef_max_sigma_yaw_deg`.
 
 `test/`: test-global-graph (loop closure, GNSS georef and its observability, gyro vs turn
 heading errors), test-gyro-integration, test-mapper-ingestion (GNSS/gravity/gyro attachment,
-feedback, outputs), test-loop-odometry-check, test-loop-consistency, test-lc-wait-idle.
+feedback, outputs), test-loop-odometry-check, test-loop-consistency, test-lc-wait-idle,
+test-graph-visualization (GUI scene, no visualizer needed).

@@ -151,6 +151,9 @@ void Parameters::loadFrom(const mrpt::containers::yaml & cfg)
   MCP_LOAD_OPT(cfg, output_state_estimator_georeference);
   MCP_LOAD_OPT(cfg, output_graph_input);
   MCP_LOAD_OPT(cfg, record_input);
+  if (cfg.has("visualization")) {
+    visualization.loadFrom(cfg["visualization"]);
+  }
 }
 
 }  // namespace mola::mapper

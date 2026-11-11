@@ -379,6 +379,48 @@ with an environment variable (shown in parentheses below).
 
 |
 
+.. _mola_mapper_gui:
+
+GUI
+---------------------------
+
+With a visualizer module in the launch (``MOLA_WITH_GUI=true``), the mapper draws
+its keyframe graph in ``{map}``, refreshed when it changes:
+
+* keyframes as small spheres (orange);
+* edges between consecutive keyframes of each front end (blue lines);
+* accepted loop closures (green, thicker lines), as bridges over their two
+  keyframes, which overlap once the loop is closed;
+* optionally, rejected loop candidates (red: by the consistency check, gray: by
+  the odometry check).
+
+A ``mola_mapper`` window shows the counts of keyframes, loops (accepted,
+rejected), factors and solves, a button to run a loop closure scan now, and
+sliders for the sphere radius and line widths. Defaults in the ``visualization``
+section of ``params/mapper.yaml``:
+
+.. code-block:: yaml
+
+   visualization:
+     keyframe_sphere_radius: 0.10   # [m] (0: hidden)    (MOLA_MAPPER_VIZ_KF_RADIUS)
+     odometry_edge_width: 2.0       # [px] (0: hidden)   (MOLA_MAPPER_VIZ_ODOM_EDGE_WIDTH)
+     loop_edge_width: 4.0           # [px] (0: hidden)   (MOLA_MAPPER_VIZ_LOOP_EDGE_WIDTH)
+     loop_edge_lift: 1.0            # [m] bridge height  (MOLA_MAPPER_VIZ_LOOP_EDGE_LIFT)
+     show_rejected_loops: false     # (MOLA_MAPPER_VIZ_SHOW_REJECTED_LOOPS)
+     rejected_loop_edge_width: 1.0  # [px]
+     update_period: 1.0             # [s]
+     align_front_end_frames: true   # (MOLA_MAPPER_VIZ_ALIGN_FRONT_ENDS)
+
+``align_front_end_frames`` moves the scene frame each front end draws in (for
+LIO, its ``publish_reference_frame``, whose keyframes come as
+``<frame>_kf``) to its optimized pose in ``{map}``, so the LIO local map and
+vehicle stay on top of the corrected graph after loop closures.
+Everything a front end draws in that frame moves rigidly with its newest
+correction, so after a loop closure LIO's older path and decaying clouds no
+longer sit on the graph; only the mapper graph shows the corrected past.
+
+|
+
 .. _mola_mapper_reoptimize:
 
 mola-mapper-reoptimize

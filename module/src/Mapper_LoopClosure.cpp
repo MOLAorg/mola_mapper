@@ -273,14 +273,19 @@ std::size_t Mapper::merge_loop_edges(const std::vector<mola::ProposedLoopEdge> &
       MRPT_LOG_INFO_FMT("Loop %zu-%zu %s", std::min(l.from, l.to), std::max(l.from, l.to), what);
     }
     std::vector<GlobalGraphLoopEdge> accepted;
+    std::vector<std::pair<std::size_t, std::size_t>> rejectedPairs;
     for (std::size_t k = 0; k < lc_gate_->size(); k++) {
+      const auto & l = lc_gate_edges_[k];
       if (lc_gate_->is_accepted(k)) {
-        accepted.push_back(lc_gate_edges_[k]);
+        accepted.push_back(l);
+      } else {
+        rejectedPairs.emplace_back(std::min(l.from, l.to), std::max(l.from, l.to));
       }
     }
     {
       auto lck = mrpt::lockHelper(state_mtx_);
       loops_ = std::move(accepted);
+      consistency_rejected_pairs_ = std::move(rejectedPairs);
       if (added > 0 || removed > 0) {
         loops_revision_++;
         loops_added_ += added;

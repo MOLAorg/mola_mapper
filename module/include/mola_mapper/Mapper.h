@@ -65,6 +65,7 @@ namespace mola
 class LoopClosureInterface;
 struct ProposedLoopEdge;
 class ImuBiasSource;
+class VizInterface;
 }  // namespace mola
 
 namespace mola::mapper
@@ -280,6 +281,8 @@ private:
   std::set<std::pair<std::size_t, std::size_t>> loop_pairs_;
   /// Keyframe pairs (min, max) of the loops rejected by the odometry check.
   std::set<std::pair<std::size_t, std::size_t>> rejected_loop_pairs_;
+  /// Keyframe pairs of the loops rejected by the consistency check right now.
+  std::vector<std::pair<std::size_t, std::size_t>> consistency_rejected_pairs_;
   std::optional<mrpt::topography::TGeodeticCoords> geodetic_datum_;
   std::optional<mola::Georeferencing> georef_;
   /// Factor counts of the last solve, for diagnostics.
@@ -354,6 +357,7 @@ private:
   std::atomic_bool optimizer_should_exit_{false};
   std::atomic_bool optimizer_new_data_{false};
   std::atomic<std::size_t> solves_{0};
+  std::atomic<double> last_solve_seconds_{0};
 
   void optimizer_thread_loop();
   void notify_optimizer();
@@ -410,6 +414,17 @@ private:
   /// (lc_scan_mtx_): loops_ is the accepted ones, in this order.
   std::optional<LoopConsistencyGate> lc_gate_;
   std::vector<GlobalGraphLoopEdge> lc_gate_edges_;
+  /** @} */
+
+  /** @name GUI (only with a visualizer module), see Mapper_GUI.cpp
+     * @{ */
+  std::shared_ptr<mola::VizInterface> visualizer_;
+  struct Gui;
+  std::shared_ptr<Gui> gui_;
+  void gui_initialize();
+  /// Redraws the graph if it changed (spinOnce() thread).
+  void gui_update();
+  void gui_build_window();
   /** @} */
 
   void publish_georeference(const mola::Georeferencing & g);

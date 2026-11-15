@@ -394,23 +394,22 @@ GlobalGraphResult optimize_global_graph(
     out.poses.emplace_back(mrpt::gtsam_wrappers::toTPose3D(result.at<gtsam::Pose3>(P(i))));
   }
 
-  std::optional<gtsam::Matrix6> lastCov;
+  // The marginal covariance of T_enu_to_map is only needed for a geo-reference:
+  const bool georefPossible =
+    out.num_gnss_factors >= params.georef_min_gnss_factors && out.geodetic_datum.has_value();
   std::optional<gtsam::Matrix6> enuCov;
-  try {
-    const gtsam::Marginals marginals(fg, result);
-    lastCov = marginals.marginalCovariance(P(N - 1));
-    enuCov = marginals.marginalCovariance(T(0));
-  } catch (const std::exception & e) {
-    if (logger != nullptr) {
-      logger->logFmt(mrpt::system::LVL_WARN, "[GlobalGraph] marginals failed: %s", e.what());
+  if (georefPossible) {
+    try {
+      const gtsam::Marginals marginals(fg, result);
+      enuCov = marginals.marginalCovariance(T(0));
+    } catch (const std::exception & e) {
+      if (logger != nullptr) {
+        logger->logFmt(mrpt::system::LVL_WARN, "[GlobalGraph] marginals failed: %s", e.what());
+      }
     }
   }
-  if (lastCov) {
-    out.last_pose =
-      mola::gtsam_compat::to_mrpt_se3_pdf(result.at<gtsam::Pose3>(P(N - 1)), *lastCov);
-  }
 
-  if (out.num_gnss_factors >= params.georef_min_gnss_factors && out.geodetic_datum && enuCov) {
+  if (georefPossible && enuCov) {
     mola::Georeferencing g;
     g.geo_coord = *out.geodetic_datum;
     g.T_enu_to_map = mola::gtsam_compat::to_mrpt_se3_pdf(result.at<gtsam::Pose3>(T(0)), *enuCov);

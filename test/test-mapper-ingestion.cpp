@@ -14,14 +14,12 @@
 /**
  * @file   test-mapper-ingestion.cpp
  * @brief  Unit tests of the Mapper module itself: what it attaches to each
- *         keyframe (GNSS, gravity, gyroscope rotation), the feedback to the state
- *         estimator, and the end of run outputs.
+ *         keyframe (GNSS, gravity, gyroscope rotation) and the end of run
+ *         outputs.
  * @author Jose Luis Blanco Claraco
  * @date   2026
  */
 
-#include <mola_kernel/MinimalModuleContainer.h>
-#include <mola_kernel/interfaces/NavStateFilter.h>
 #include <mola_mapper/GlobalGraphIO.h>
 #include <mola_mapper/Mapper.h>
 #include <mrpt/core/bits_math.h>
@@ -35,7 +33,6 @@
 #include <mrpt/system/filesystem.h>
 
 #include <Eigen/Dense>
-#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <filesystem>
@@ -45,41 +42,6 @@
 #include <string>
 #include <thread>
 #include <vector>
-
-namespace mola
-{
-/** A state estimator that only counts the poses fused into it. */
-class MockNavState : public NavStateFilter
-{
-  DEFINE_MRPT_OBJECT(MockNavState, mola)
-public:
-  void reset() override {}
-  void spinOnce() override {}
-  void onNewObservation(const CObservation::ConstPtr & /*o*/) override {}
-  void fuse_pose(
-    const mrpt::Clock::time_point &, const mrpt::poses::CPose3DPDFGaussian &,
-    const std::string &) override
-  {
-    fused_poses++;
-  }
-  void fuse_odometry(const mrpt::obs::CObservationOdometry &, const std::string &) override {}
-  void fuse_imu(const mrpt::obs::CObservationIMU &) override {}
-  void fuse_gnss(const mrpt::obs::CObservationGPS &) override {}
-  void fuse_twist(
-    const mrpt::Clock::time_point &, const mrpt::math::TTwist3D &,
-    const mrpt::math::CMatrixDouble66 &) override
-  {
-  }
-  std::optional<NavState> estimated_navstate(
-    const mrpt::Clock::time_point &, const std::string &) override
-  {
-    return std::nullopt;
-  }
-
-  std::atomic<int> fused_poses{0};
-};
-}  // namespace mola
-IMPLEMENTS_MRPT_OBJECT(MockNavState, mola::NavStateFilter, mola)
 
 namespace
 {
@@ -416,35 +378,6 @@ void test_gyro_rotation_in_vehicle_frame()
   ASSERT_LT_(tiltGyro, 0.5);
 }
 
-/** The newest keyframe pose is fed back to the state estimator once, however
- *  many solves happen before the next keyframe. */
-void test_feedback_once_per_keyframe()
-{
-  auto m = std::make_shared<mola::mapper::Mapper>();
-  auto se = std::make_shared<mola::MockNavState>();
-  mola::MinimalModuleContainer container({m, se});
-  m->setMinLoggingLevel(mrpt::system::LVL_WARN);
-  m->initialize(mrpt::containers::yaml::FromText(R"###(
-params:
-  enable_optimizer_thread: false
-  loop_closure_enabled: false
-  gnss_sensor_labels_re: ""
-  feedback_to_state_estimator: true
-)###"));
-  for (int i = 0; i < 3; i++) {
-    insert_keyframe(*m, i, CPose3D(i, 0, 0, 0, 0, 0));
-  }
-  for (int k = 0; k < 3; k++) {
-    m->optimize_now();
-  }
-  ASSERT_EQUAL_(se->fused_poses.load(), 1);
-  insert_keyframe(*m, 3.0, CPose3D(3, 0, 0, 0, 0, 0));
-  m->optimize_now();
-  m->optimize_now();
-  ASSERT_EQUAL_(se->fused_poses.load(), 2);
-  std::cout << "Feedback once per keyframe   OK\n";
-}
-
 /** An output that cannot be written does not prevent the others. */
 void test_outputs_survive_a_failing_one()
 {
@@ -570,7 +503,6 @@ int main()
     test_gravity_from_a_single_imu();
     test_gravity_when_imu_arrives_late();
     test_gyro_rotation_in_vehicle_frame();
-    test_feedback_once_per_keyframe();
     test_outputs_survive_a_failing_one();
     test_unknown_robust_kernel_rejected_at_start();
     test_loop_odometry_limits_loaded();

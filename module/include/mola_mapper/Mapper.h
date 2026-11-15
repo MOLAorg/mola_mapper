@@ -301,8 +301,6 @@ private:
   std::vector<double> keyframe_path_;
   std::map<std::string, std::size_t> chain_last_keyframe_;
   std::map<std::string, std::size_t> chain_ids_;
-  /// Stamp of the last keyframe pose fed back to the state estimator.
-  std::optional<mrpt::Clock::time_point> last_feedback_stamp_;
   bool finalized_ = false;
   /** @} */
 
@@ -364,10 +362,6 @@ private:
   void stop_optimizer_thread();
   void solve_global_graph();
   [[nodiscard]] GlobalGraphInput graph_input_locked() const;
-  void send_feedback(
-    const mrpt::Clock::time_point & stamp, const mrpt::poses::CPose3D & pose,
-    const GlobalGraphResult & r);
-  std::weak_ptr<mola::NavStateFilter> state_estimator_;
   /** @} */
 
   /** @name Loop closure

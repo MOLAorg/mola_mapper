@@ -103,11 +103,6 @@ params:
   enable_optimizer_thread: true
   optimizer_min_period: ${MOLA_MAPPER_OPTIMIZER_PERIOD|1.0}  # [s]
 
-  # Fuse the optimized newest keyframe pose into the state estimator:
-  feedback_to_state_estimator: ${MOLA_MAPPER_FEEDBACK|false}
-  feedback_min_sigma_xyz: ${MOLA_MAPPER_FEEDBACK_MIN_SIGMA_XYZ|0.10}  # [m]
-  feedback_min_sigma_ang_deg: ${MOLA_MAPPER_FEEDBACK_MIN_SIGMA_ANG|0.5}  # [deg]
-
   # After a solve with new loop closures, tell the front ends, so they can
   # rebuild their local maps from the corrected keyframes:
   local_map_corrections: ${MOLA_MAPPER_LOCAL_MAP_CORRECTIONS|true}

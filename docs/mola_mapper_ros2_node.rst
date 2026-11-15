@@ -98,8 +98,9 @@ Environment variables of the launch file:
 The mapper settings (``MOLA_MAPPER_*``) are listed in :ref:`mola_mapper_params`.
 Useful combinations:
 
-* GNSS owned by the mapper, with its corrections fed back to the state
-  estimator: ``MOLA_NAVSTATE_GNSS_SENSOR_NAME=none MOLA_MAPPER_FEEDBACK=true``.
+* A live geo-referenced estimate too: ``MOLA_ESTIMATE_GEO_REF=true`` (the state
+  estimator geo-references itself on the fly from the same GNSS readings as the
+  mapper).
 * Gyroscope factors: ``MOLA_MAPPER_GYRO_LABELS=imu``, optionally with
   ``MOLA_NAVSTATE_IMU_BIAS_TRACKING=true`` in the state estimator.
 * Gravity factors: ``MOLA_MAPPER_GRAVITY_IMU_LABELS=imu``.

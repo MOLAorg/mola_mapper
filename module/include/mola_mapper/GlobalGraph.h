@@ -89,9 +89,6 @@ struct GlobalGraphResult
   /// Optimized vehicle pose in the map frame, one per input keyframe.
   std::vector<mrpt::poses::CPose3D> poses;
 
-  /// The newest keyframe pose with its marginal covariance (if computable).
-  std::optional<mrpt::poses::CPose3DPDFGaussian> last_pose;
-
   /// Set once observable: enough GNSS factors and a T_enu_to_map azimuth sigma
   /// within the GlobalGraphParams limit.
   std::optional<mola::Georeferencing> georeferencing;

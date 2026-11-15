@@ -18,9 +18,6 @@
 # Main switches (environment variables):
 #   MOLA_WITH_MAPPER=false        LIO + state estimator only
 #   MOLA_MAPPER_LOOP_CLOSURE      loop closure detection (default: true)
-#   MOLA_MAPPER_FEEDBACK=true     mapper corrections into the state estimator
-#   MOLA_NAVSTATE_GNSS_SENSOR_NAME=none  keep GNSS out of the state estimator
-#                                        (the mapper owns it)
 #   MOLA_MAPPER_OUTPUT_TUM, _GEOREF, _SIMPLEMAP, _LOOPS, _SE_TUM, _SE_GEOREF
 #   See params/mapper.yaml for the rest.
 # =============================================================================

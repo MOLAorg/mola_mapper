@@ -24,9 +24,6 @@ estimation of its own and is not a `mola::NavStateFilter`.
   from the raw data source as a `mola::RawDataConsumer`. It also implements
   `mola::MapSourceBase` (geo-reference), `mola::DiagnosticsProvider` and
   `mola::ExecutableBase`.
-- Optionally (`feedback_to_state_estimator`), the optimized pose of the newest
-  keyframe is fused into the state estimator as an absolute pose in the map
-  frame.
 - After loop closures, it tells the front ends (`mola::LocalMapCorrectionSource`),
   which can then rebuild their local maps from the corrected keyframes around
   them, including those of earlier visits.

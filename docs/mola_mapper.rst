@@ -32,11 +32,9 @@ The modules of a system are independent and composed by a launch file:
   ``mola::SharedKeyframeMap``.
 * ``mola::mapper::Mapper`` receives those keyframes and, as a
   ``mola::RawDataConsumer``, the GNSS and IMU readings of the dataset.
-* Optionally (``feedback_to_state_estimator``), after each solve the mapper
-  fuses the optimized pose of the newest keyframe (once per keyframe) into the
-  state estimator as an absolute pose in the map frame (``fuse_pose()``), so loop
-  closures and GNSS reach the live estimate. In that mode, the state estimator should run without
-  GNSS (``MOLA_NAVSTATE_GNSS_SENSOR_NAME=none``): the mapper owns it.
+* No estimate flows from the mapper into the state estimator. Both may take the
+  same GNSS readings: the state estimator for a live geo-referenced estimate (its
+  own online geo-reference), the mapper for the geo-reference of its global map.
 
 The mapper:
 
@@ -98,8 +96,8 @@ Global pose graph
 ----------------------
 
 The graph has one pose variable per keyframe in ``{map}`` and ``T_enu_to_map``.
-It is solved in batch with Levenberg-Marquardt (GTSAM), and the marginal
-covariance of the newest pose is computed. Its factors are:
+It is solved in batch with Levenberg-Marquardt (GTSAM), and, when it can be
+geo-referenced, the marginal covariance of ``T_enu_to_map`` is computed. Its factors are:
 
 * **Odometry chain**: between consecutive keyframes of the same front end source
   frame. Stiff by default. The sigma is a floor plus terms per square root of
@@ -269,20 +267,13 @@ with an environment variable (shown in parentheses below).
         loop_closure_min_sigma_xyz: 0.05      # [m] (MOLA_MAPPER_LC_MIN_SIGMA_XYZ)
         loop_closure_min_sigma_ang_deg: 0.25  # [deg] (MOLA_MAPPER_LC_MIN_SIGMA_ANG)
 
-.. dropdown:: Optimizer and feedback to the state estimator
+.. dropdown:: Optimizer
    :icon: list-unordered
 
    .. code-block:: yaml
 
       enable_optimizer_thread: true
       optimizer_min_period: 1.0          # [s] (MOLA_MAPPER_OPTIMIZER_PERIOD)
-
-      feedback_to_state_estimator: false # (MOLA_MAPPER_FEEDBACK)
-      feedback_min_sigma_xyz: 0.10       # [m] (MOLA_MAPPER_FEEDBACK_MIN_SIGMA_XYZ)
-      feedback_min_sigma_ang_deg: 0.5    # [deg] (MOLA_MAPPER_FEEDBACK_MIN_SIGMA_ANG)
-
-   With ``feedback_to_state_estimator``, there must be exactly one
-   ``mola::NavStateFilter`` module in the system.
 
 .. dropdown:: Loop closure
    :icon: list-unordered

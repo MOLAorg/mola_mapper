@@ -293,6 +293,8 @@ with an environment variable (shown in parentheses below).
         max_xyz_per_m: 0.10              # (MOLA_MAPPER_LC_ODOMETRY_MAX_XYZ_PER_M)
         max_ang_deg: 5.0                 # [deg]
         max_ang_deg_per_m: 0.03          # [deg/m]
+        max_z: 0                         # [m] vertical limit, 0: off (MOLA_MAPPER_LC_ODOMETRY_MAX_Z)
+        max_z_per_m: 0.008               # [m/m] (MOLA_MAPPER_LC_ODOMETRY_MAX_Z_PER_M)
       loop_closure_consistency_check: true  # (MOLA_MAPPER_LC_CONSISTENCY_CHECK)
       loop_closure_consistency:
         neighborhood: 50.0               # [m] along the odometry path, at both ends
@@ -314,6 +316,11 @@ with an environment variable (shown in parentheses below).
    is a false match (e.g. repetitive geometry) and is rejected. Over a short
    distance the odometry drift is small, so this mostly removes short range false
    loops and loops matched facing the wrong way.
+   Optionally (``max_z`` > 0), a tighter limit applies to the vertical error alone
+   (z of the odometry frame), which rejects matches between stacked floors. Its
+   per meter allowance must stay below the floor height over the loop length, but
+   above the vertical drift of the odometry, so it depends on the scene and the
+   front end.
 
    Over a long loop the odometry drift allows almost anything, so loops are also
    checked against each other: two loops whose ends are near each other (along

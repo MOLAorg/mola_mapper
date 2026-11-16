@@ -463,11 +463,15 @@ void test_loop_odometry_limits_loaded()
     "  loop_closure_odometry_check: false\n"
     "  loop_closure_odometry_limits:\n"
     "    max_xyz: 3.0\n"
-    "    max_xyz_per_m: 0.2\n");
+    "    max_xyz_per_m: 0.2\n"
+    "    max_z: 1.5\n"
+    "    max_z_per_m: 0.01\n");
   const auto & p = m->parameters();
   ASSERT_(!p.loop_closure_odometry_check);
   ASSERT_NEAR_(p.loop_closure_odometry_limits.max_xyz, 3.0, 1e-12);
   ASSERT_NEAR_(p.loop_closure_odometry_limits.max_xyz_per_m, 0.2, 1e-12);
+  ASSERT_NEAR_(p.loop_closure_odometry_limits.max_z, 1.5, 1e-12);
+  ASSERT_NEAR_(p.loop_closure_odometry_limits.max_z_per_m, 0.01, 1e-12);
   ASSERT_NEAR_(p.loop_closure_odometry_limits.max_ang_deg, 5.0, 1e-12);  // default kept
   std::cout << "Loop odometry limits loaded   OK\n";
 }

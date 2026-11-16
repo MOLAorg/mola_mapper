@@ -36,6 +36,13 @@ struct LoopOdometryCheckParams
   double max_ang_deg = 5.0;         ///< [deg]
   double max_ang_deg_per_m = 0.03;  ///< [deg/m]
 
+  /** Optional, tighter limit on the vertical part alone (z of the odometry
+   *  frame, gravity aligned in LiDAR-inertial odometry), whose drift is usually
+   *  much smaller than the horizontal one. It rejects matches between stacked
+   *  floors with a similar layout. max_z <= 0 disables it. */
+  double max_z = 0;            ///< [m]
+  double max_z_per_m = 0.008;  ///< [m/m]
+
   void loadFrom(const mrpt::containers::yaml & cfg);
 };
 
@@ -44,6 +51,7 @@ struct LoopOdometryCheck
   double distance_traveled = 0;  ///< along the odometry chain [m]
   double xyz_error = 0;          ///< [m]
   double ang_error_deg = 0;      ///< [deg]
+  double z_error = 0;            ///< vertical, in the odometry frame [m]
   bool accepted = true;
 };
 

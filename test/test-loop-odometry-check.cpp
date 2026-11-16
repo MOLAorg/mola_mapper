@@ -22,6 +22,7 @@
 #include <mrpt/core/bits_math.h>
 #include <mrpt/core/exceptions.h>
 
+#include <cmath>
 #include <iostream>
 #include <vector>
 
@@ -104,6 +105,74 @@ void test_false_loops_rejected()
   }
 }
 
+void test_vertical_limit()
+{
+  // A building with 4 m floors: a keyframe per meter along a 40 m corridor, out
+  // and back, on each floor; odometry with 1 % of scale error and 0.2 % of
+  // vertical drift.
+  std::vector<CPose3D> odo;
+  for (int i = 0; i < 160; i++) {
+    const int j = i % 80;
+    const double z = (i < 80 ? 0.0 : 4.0) + 0.002 * i;
+    odo.emplace_back(1.01 * (j < 40 ? j : 80 - j), 0, z, 0, 0, 0);
+  }
+  // Floor 1 matched to the same spot one floor up (4 m apart), and a true loop:
+  const CPose3D sameSpot(0, 0, 0, 0, 0, 0);
+  const CPose3D oneUp(0, 0, 4.0, 0, 0, 0);
+  mola::mapper::LoopOdometryCheckParams p;
+  p.max_xyz_per_m = 0.05;
+  const auto off = check_loop_against_odometry(odo, 20, 100, sameSpot, p);
+  ASSERT_(off.accepted);  // 4.16 m in 3D is within 2 m + 5 % of ~84 m
+  ASSERT_NEAR_(off.z_error, 4.16, 1e-6);
+
+  // The vertical limit, with the default per meter allowance:
+  p.max_z = 1.0;
+  const auto offZ = check_loop_against_odometry(odo, 20, 100, sameSpot, p);
+  std::cout << "stacked floors: " << offZ.z_error << " m vertical over " << offZ.distance_traveled
+            << " m\n";
+  ASSERT_(!offZ.accepted);
+  const auto trueZ = check_loop_against_odometry(odo, 20, 100, oneUp, p);
+  ASSERT_(trueZ.accepted);
+  ASSERT_LT_(trueZ.z_error, 0.5);
+
+  // The same edge stated the other way around gives the same vertical error:
+  const auto offZr = check_loop_against_odometry(odo, 100, 20, -sameSpot, p);
+  ASSERT_NEAR_(offZr.z_error, offZ.z_error, 1e-9);
+}
+
+void test_vertical_limit_tilted_keyframes()
+{
+  // A straight 30 deg ramp, a keyframe per meter, exact odometry. The vertical
+  // error is measured along z of the odometry frame, not of the tilted keyframe.
+  const double a = mrpt::DEG2RAD(30.0);
+  std::vector<CPose3D> odo;
+  for (int k = 0; k < 100; k++) {
+    odo.emplace_back(k * std::cos(a), 0, k * std::sin(a), 0, -a, 0);
+  }
+  const std::size_t i = 10;
+  const std::size_t j = 40;
+  mola::mapper::LoopOdometryCheckParams p;
+  p.max_z = 1.0;
+
+  const auto ok = check_loop_against_odometry(odo, i, j, odo[j] - odo[i], p);
+  ASSERT_(ok.accepted);
+  ASSERT_LT_(ok.z_error, 1e-6);
+
+  // The last keyframe displaced 4 m up, or 3 m horizontally, in the odometry frame:
+  const auto & last = odo[j];
+  const CPose3D up(last.x(), last.y(), last.z() + 4.0, last.yaw(), last.pitch(), last.roll());
+  const CPose3D side(last.x() + 3.0, last.y(), last.z(), last.yaw(), last.pitch(), last.roll());
+
+  const auto cUp = check_loop_against_odometry(odo, i, j, up - odo[i], p);
+  ASSERT_NEAR_(cUp.z_error, 4.0, 1e-6);
+  ASSERT_(!cUp.accepted);
+
+  const auto cSide = check_loop_against_odometry(odo, i, j, side - odo[i], p);
+  ASSERT_LT_(cSide.z_error, 1e-6);
+  ASSERT_NEAR_(cSide.xyz_error, 3.0, 1e-6);
+  ASSERT_(cSide.accepted);
+}
+
 }  // namespace
 
 int main()
@@ -111,6 +180,8 @@ int main()
   try {
     test_true_loops_accepted();
     test_false_loops_rejected();
+    test_vertical_limit();
+    test_vertical_limit_tilted_keyframes();
     std::cout << "All tests passed.\n";
     return 0;
   } catch (const std::exception & e) {

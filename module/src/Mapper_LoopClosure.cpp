@@ -221,8 +221,10 @@ std::size_t Mapper::merge_loop_edges(const std::vector<mola::ProposedLoopEdge> &
             c && !c->accepted) {
           if (rejected_loop_pairs_.insert(key).second) {
             MRPT_LOG_INFO_FMT(
-              "Loop %zu-%zu rejected: %.2f m / %.1f deg off the odometry over %.1f m", key.first,
-              key.second, c->xyz_error, c->ang_error_deg, c->distance_traveled);
+              "Loop %zu-%zu rejected: %.2f m (%.2f m vertical) / %.1f deg off the odometry over "
+              "%.1f m",
+              key.first, key.second, c->xyz_error, c->z_error, c->ang_error_deg,
+              c->distance_traveled);
             rejected++;
           }
           continue;

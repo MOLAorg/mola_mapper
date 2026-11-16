@@ -15,8 +15,8 @@
 
 $define:
   # Global registration for a drift-independent initial guess: bev (the
-  # gravity-aligned search of mola_sm_loop_closure, it needs LiDAR-inertial
-  # odometry), kiss (KISS-Matcher, if mola_sm_loop_closure was built with it) or
+  # gravity-aligned search of mola_sm_loop_closure, from the keyframe roll and
+  # pitch), kiss (KISS-Matcher, if mola_sm_loop_closure was built with it) or
   # none. USE_KISS_MATCHER is only read by older mola_sm_loop_closure versions.
   LC_GLOBAL_REGISTRATION: bev
   USE_KISS_MATCHER: true

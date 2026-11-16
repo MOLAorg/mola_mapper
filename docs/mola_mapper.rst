@@ -314,9 +314,10 @@ with an environment variable (shown in parentheses below).
    (``LC_GLOBAL_REGISTRATION``): ``bev`` by default, a gravity-aligned search
    that is robust to the accumulated drift and rejects ambiguous matches
    (repetitive structures); ``kiss`` (KISS-Matcher, if built with it) or
-   ``none`` (the current graph estimate). ``bev`` needs absolute roll and pitch
-   in the keyframe poses (LiDAR-inertial or gravity-aligned odometry): with
-   LiDAR-only odometry use ``kiss``, as the KITTI parameter file does.
+   ``none`` (the current graph estimate). ``bev`` uses the roll and pitch of
+   the keyframe poses: absolute with LiDAR-inertial odometry; with LiDAR-only
+   odometry on mostly level ground (e.g. KITTI) the estimated ones work too, or
+   both clouds can be taken as level (``LC_BEV_ASSUME_LEVEL=true``).
 
    Each detected loop between keyframes of the same front end chain is compared
    with the odometry between them: if they disagree by more than a floor plus a

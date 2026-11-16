@@ -104,6 +104,37 @@ void test_false_loops_rejected()
   }
 }
 
+void test_vertical_limit()
+{
+  // A building with 4 m floors: a keyframe per meter along a 100 m corridor, out
+  // and back, on each floor; odometry with 1 % of scale error and 0.2 % of
+  // vertical drift.
+  std::vector<CPose3D> odo;
+  for (int i = 0; i < 400; i++) {
+    const int j = i % 200;
+    const double z = (i < 200 ? 0.0 : 4.0) + 0.002 * i;
+    odo.emplace_back(1.01 * (j < 100 ? j : 200 - j), 0, z, 0, 0, 0);
+  }
+  // Floor 1 matched to the same spot one floor up (4 m apart), and a true loop:
+  const CPose3D sameSpot(0, 0, 0, 0, 0, 0);
+  const CPose3D oneUp(0, 0, 4.0, 0, 0, 0);
+  mola::mapper::LoopOdometryCheckParams p;
+  p.max_xyz_per_m = 0.03;
+  const auto off = check_loop_against_odometry(odo, 50, 250, sameSpot, p);
+  ASSERT_(off.accepted);  // 4.4 m in 3D is within 2 m + 3 % of ~205 m
+  ASSERT_NEAR_(off.z_error, 4.4, 1e-6);
+
+  p.max_z = 1.0;
+  p.max_z_per_m = 0.008;
+  const auto offZ = check_loop_against_odometry(odo, 50, 250, sameSpot, p);
+  std::cout << "stacked floors: " << offZ.z_error << " m vertical over " << offZ.distance_traveled
+            << " m\n";
+  ASSERT_(!offZ.accepted);
+  const auto trueZ = check_loop_against_odometry(odo, 50, 250, oneUp, p);
+  ASSERT_(trueZ.accepted);
+  ASSERT_LT_(trueZ.z_error, 0.5);
+}
+
 }  // namespace
 
 int main()
@@ -111,6 +142,7 @@ int main()
   try {
     test_true_loops_accepted();
     test_false_loops_rejected();
+    test_vertical_limit();
     std::cout << "All tests passed.\n";
     return 0;
   } catch (const std::exception & e) {

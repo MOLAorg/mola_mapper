@@ -106,7 +106,8 @@ and a `T(0)` azimuth sigma below `georef_max_sigma_yaw_deg`.
 - Loop closure thread: `mola_sm_loop_closure` `analyze()` (detection only) over the keyframe
   map, incremental scans plus a full one every `loop_closure_full_scan_every_n`; new edges
   merged in order, except those contradicting the odometry chain between their keyframes
-  (`check_loop_against_odometry()`: floor + fraction of the distance traveled; only within one
+  (`check_loop_against_odometry()`: floor + fraction of the distance traveled, optionally a
+  tighter vertical one against stacked floors; only within one
   source frame, so a front end that restarts must use a new `source_frame_id`), then those
   inconsistent with most of their neighbor loops (`LoopConsistencyGate`: cycles of two loops and
   the odometry between their ends; each group of neighbor loops is decided again from scratch

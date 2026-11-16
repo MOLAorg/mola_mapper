@@ -24,6 +24,7 @@
 #include <mrpt/poses/Lie/SO.h>
 
 #include <algorithm>
+#include <cmath>
 
 namespace mola::mapper
 {
@@ -33,6 +34,8 @@ void LoopOdometryCheckParams::loadFrom(const mrpt::containers::yaml & cfg)
   MCP_LOAD_OPT(cfg, max_xyz_per_m);
   MCP_LOAD_OPT(cfg, max_ang_deg);
   MCP_LOAD_OPT(cfg, max_ang_deg_per_m);
+  MCP_LOAD_OPT(cfg, max_z);
+  MCP_LOAD_OPT(cfg, max_z_per_m);
 }
 
 LoopOdometryCheck check_loop_against_odometry(
@@ -58,10 +61,16 @@ LoopOdometryCheck check_loop_against_odometry(
   const mrpt::poses::CPose3D err = odoRel - loopFirstToLast;
   out.xyz_error = err.translation().norm();
   out.ang_error_deg = mrpt::RAD2DEG(mrpt::poses::Lie::SO<3>::log(err.getRotationMatrix()).norm());
+  // Height of the last keyframe as predicted by the loop, against the odometry one:
+  out.z_error = std::abs((poseInSource[first] + loopFirstToLast).z() - poseInSource[last].z());
 
   const double maxXyz = params.max_xyz + params.max_xyz_per_m * out.distance_traveled;
   const double maxAng = params.max_ang_deg + params.max_ang_deg_per_m * out.distance_traveled;
   out.accepted = out.xyz_error <= maxXyz && out.ang_error_deg <= maxAng;
+  if (params.max_z > 0) {
+    const double maxZ = params.max_z + params.max_z_per_m * out.distance_traveled;
+    out.accepted = out.accepted && out.z_error <= maxZ;
+  }
   return out;
 }
 

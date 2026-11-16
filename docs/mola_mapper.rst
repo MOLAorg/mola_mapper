@@ -316,6 +316,11 @@ with an environment variable (shown in parentheses below).
    is a false match (e.g. repetitive geometry) and is rejected. Over a short
    distance the odometry drift is small, so this mostly removes short range false
    loops and loops matched facing the wrong way.
+   Optionally (``max_z`` > 0), a tighter limit applies to the vertical error alone
+   (z of the odometry frame), which rejects matches between stacked floors. Its
+   per meter allowance must stay below the floor height over the loop length, but
+   above the vertical drift of the odometry, so it depends on the scene and the
+   front end.
 
    Over a long loop the odometry drift allows almost anything, so loops are also
    checked against each other: two loops whose ends are near each other (along

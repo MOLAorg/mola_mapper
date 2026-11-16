@@ -40,8 +40,8 @@ struct LoopOdometryCheckParams
    *  frame, gravity aligned in LiDAR-inertial odometry), whose drift is usually
    *  much smaller than the horizontal one. It rejects matches between stacked
    *  floors with a similar layout. max_z <= 0 disables it. */
-  double max_z = 0;        ///< [m]
-  double max_z_per_m = 0;  ///< [m/m]
+  double max_z = 0;            ///< [m]
+  double max_z_per_m = 0.008;  ///< [m/m]
 
   void loadFrom(const mrpt::containers::yaml & cfg);
 };

@@ -5,5 +5,8 @@
 $define:
   MOLA_DESKEW_IGNORE_NO_TIMESTAMPS: true
   MAX_LC_DISTANCE: 30.0  # [m]
+  # LiDAR-only odometry: the bev global registration assumes absolute roll and
+  # pitch, not validated here yet.
+  LC_GLOBAL_REGISTRATION: kiss
 
 $import: loop-closure-f2f-mapper.yaml

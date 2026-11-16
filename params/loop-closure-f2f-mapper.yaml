@@ -5,7 +5,8 @@
 #  - the ICP core: point-to-point on the decimated clouds instead of GICP, since
 #    cov2cov scores genuine cross-pass loops too low to accept them;
 #  - a wider ICP basin and a global registration initial guess, so loop
-#    candidates several meters off (accumulated drift) can still converge;
+#    candidates several meters off (accumulated drift) can still converge
+#    (ambiguous matches, e.g. repetitive structures, reject the candidate);
 #  - candidate selection: only pairs far apart in time.
 #
 # Every value can be changed with its environment variable. `$define` rebinds the
@@ -13,8 +14,11 @@
 # below deep-merge over the imported file and sibling lists replace it.
 
 $define:
-  # Global registration (KISS-Matcher) for a drift-independent initial guess.
-  # Ignored if mola_sm_loop_closure was built without it.
+  # Global registration for a drift-independent initial guess: bev (the
+  # gravity-aligned search of mola_sm_loop_closure, it needs LiDAR-inertial
+  # odometry), kiss (KISS-Matcher, if mola_sm_loop_closure was built with it) or
+  # none. USE_KISS_MATCHER is only read by older mola_sm_loop_closure versions.
+  LC_GLOBAL_REGISTRATION: bev
   USE_KISS_MATCHER: true
   MIN_ICP_QUALITY: 0.55
 

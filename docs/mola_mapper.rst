@@ -310,6 +310,12 @@ with an environment variable (shown in parentheses below).
    run, up to ``loop_closure_finalize_rounds`` passes of full scan plus
    re-optimization run until no new loop appears.
 
+   Each candidate is registered by ICP from a global registration guess
+   (``LC_GLOBAL_REGISTRATION``): ``bev`` by default, a gravity-aligned search
+   that is robust to the accumulated drift and rejects ambiguous matches
+   (repetitive structures); ``kiss`` (KISS-Matcher, if built with it) or
+   ``none`` (the current graph estimate).
+
    Each detected loop between keyframes of the same front end chain is compared
    with the odometry between them: if they disagree by more than a floor plus a
    fraction of the distance traveled (``loop_closure_odometry_limits``), the loop

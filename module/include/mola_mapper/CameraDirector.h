@@ -23,6 +23,7 @@
 #include <mrpt/math/TPoint3D.h>
 
 #include <optional>
+#include <string>
 #include <utility>
 
 namespace mola::mapper
@@ -64,6 +65,22 @@ struct CameraDirectorParams
   /// tells its time, e.g. a dataset player). Not used by CameraDirector.
   double final_overview = 60.0;
 
+  /** Correction shots: when the map is corrected (e.g. a loop closure) by
+   *  more than `shot_min_correction` [m] (0: never), the camera flies to the
+   *  corrected region (`transition` s), shows it for `shot_hold` s (the map
+   *  glides into place meanwhile), then flies back to the schedule. */
+  double shot_min_correction = 0.5;
+  double shot_elevation = 60.0;      //!< [deg]
+  double shot_hold = 6.0;            //!< [s]
+  double shot_margin = 20.0;         //!< [m] around the corrected region
+  double shot_min_distance = 40.0;   //!< [m]
+  double shot_max_distance = 250.0;  //!< [m]
+  double shot_min_interval = 20.0;   //!< [s] between shot starts
+
+  /// If not empty, the camera blend weights are written here over time (CSV),
+  /// e.g. to speed up a video differently in each part.
+  std::string timeline_file;
+
   void loadFrom(const mrpt::containers::yaml & cfg);
 };
 
@@ -93,7 +110,16 @@ public:
     double elevation = 0;  //!< [rad]
     double distance = 0;   //!< [m]
     double closeup = 0;    //!< blend weight: 0 overview, 1 close-up
+    double shot = 0;       //!< blend weight of a correction shot
   };
+
+  /** Starts a correction shot of the given region (in the map) at time `t`.
+   *  \return The time when the camera is there, or none if ignored (too soon
+   *  after the previous one, or during the final overview). */
+  std::optional<double> start_shot(double t, const mrpt::math::TBoundingBox & region);
+
+  /// Weight of the current correction shot at time `t` (0: none).
+  [[nodiscard]] double shot_weight_at(double t) const;
 
   /** The camera at time `t` [s] since the start, or none if there is
    *  nothing to look at yet. */
@@ -119,6 +145,14 @@ private:
   std::optional<double> azimuth_diff_;
   // The close-up weight when the final overview started, and when:
   std::optional<std::pair<double, double>> final_start_;
+
+  struct Shot
+  {
+    double start = 0;
+    mrpt::math::TPoint3D center;
+    double distance = 0;
+  };
+  std::optional<Shot> shot_;
 };
 
 }  // namespace mola::mapper

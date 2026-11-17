@@ -134,7 +134,9 @@ and a `T(0)` azimuth sigma below `georef_max_sigma_yaw_deg`.
   observation objects, with a time budget), each in a scene node kept for the whole run (new
   nodes are published with `update_3d_object`, moved nodes and point sizes are changed on the GUI
   thread: fresh objects would make the visualizer upload all clouds again). Optional scripted camera (`visualization.camera`, `CameraDirector`: map overview / close-up
-  blend): its own thread (`gui_start_camera()`, stopped in `onQuit()` and the destructor) calls
+  blend, plus correction shots): the GUI animation thread (`gui_start_animation()`, also running the
+  map glides of `NodeAnimator` for corrections queued by `gui_queue_correction()`; stopped in
+  `onQuit()` and the destructor) calls
   `update_viewport_camera()`; it uses only the Gui and the visualizer: inputs from
   `gui_feed_camera()` (keyframe box, data end via `Dataset_UI`), and the vehicle pose from the
   localization updates of the front ends (`LocalizationSourceBase` subscription, passive) mapped

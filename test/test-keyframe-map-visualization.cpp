@@ -105,6 +105,42 @@ void test_spacing_and_poses()
   ASSERT_(*std::next(scene2->begin()) == glKf);
 }
 
+void test_glides()
+{
+  using mola::mapper::NodeAnimator;
+  auto node = mrpt::viz::CSetOfObjects::Create();
+  const CPose3D a(0, 0, 0, 0, 0, 0);
+  const CPose3D b(10, 0, 0, M_PI / 2, 0, 0);
+  NodeAnimator anim;
+  anim.add({{node, b, a}}, 1.0 /*start*/, 2.0 /*duration*/, 0.0 /*now*/);
+
+  // Not started yet: nothing to set.
+  ASSERT_(anim.step(0.5).empty());
+  // Half way (cosine easing: half the motion), translation and rotation:
+  auto p = anim.step(2.0);
+  ASSERT_EQUAL_(p.size(), 1U);
+  ASSERT_NEAR_(p[0].pose.x(), 5.0, 1e-6);
+  ASSERT_NEAR_(p[0].pose.yaw(), M_PI / 4, 1e-6);
+  // A new target meanwhile: on from where it is, without a jump.
+  const CPose3D c(10, 10, 0, M_PI / 2, 0, 0);
+  anim.add({{node, c, b}}, 2.0, 2.0, 2.0);
+  p = anim.step(2.0);
+  ASSERT_NEAR_(p[0].pose.x(), 5.0, 1e-6);
+  // Done: the final pose once, then nothing.
+  p = anim.step(10.0);
+  ASSERT_EQUAL_(p.size(), 1U);
+  ASSERT_NEAR_((p[0].pose.asVectorVal() - c.asVectorVal()).norm(), 0.0, 1e-9);
+  ASSERT_(anim.step(11.0).empty());
+  ASSERT_(anim.empty());
+
+  // A glide waiting to start keeps waiting if its node gets a new target:
+  anim.add({{node, b, a}}, 20.0, 2.0, 12.0);
+  anim.add({{node, c, b}}, 13.0, 2.0, 13.0);
+  ASSERT_(anim.step(19.0).empty());
+  p = anim.step(22.0);
+  ASSERT_NEAR_((p[0].pose.asVectorVal() - c.asVectorVal()).norm(), 0.0, 1e-9);
+}
+
 void test_range_filter()
 {
   KeyframeMapParams p;
@@ -153,6 +189,7 @@ int main()
 {
   try {
     test_spacing_and_poses();
+    test_glides();
     test_range_filter();
     test_colors();
     std::cout << "All tests passed.\n";

@@ -184,6 +184,9 @@ params:
     keyframe_map_color_min: ${MOLA_MAPPER_VIZ_KEYFRAME_MAP_COLOR_MIN|-2.0}  # [m]
     keyframe_map_color_max: ${MOLA_MAPPER_VIZ_KEYFRAME_MAP_COLOR_MAX|12.0}  # [m]
     keyframe_map_point_size: ${MOLA_MAPPER_VIZ_KEYFRAME_MAP_POINT_SIZE|1.0}  # [px]
+    # Map corrections (e.g. loop closures) glide into place over this time
+    # instead of jumping (0: they jump):
+    keyframe_map_glide: ${MOLA_MAPPER_VIZ_KEYFRAME_MAP_GLIDE|1.5}  # [s]
     # Scripted camera (e.g. for videos): a smooth blend of a map overview (top
     # view fitted to the keyframes) and close-ups behind the vehicle (its pose
     # from the state estimator), alternated by a schedule (wall clock seconds),
@@ -202,6 +205,18 @@ params:
       closeup_period: ${MOLA_MAPPER_VIZ_CAMERA_CLOSEUP_PERIOD|15.0}  # [s]
       transition: ${MOLA_MAPPER_VIZ_CAMERA_TRANSITION|4.0}  # [s]
       final_overview: ${MOLA_MAPPER_VIZ_CAMERA_FINAL_OVERVIEW|60.0}  # [s] of data
+      # Correction shots: on a map correction above shot_min_correction (0:
+      # never), fly to the corrected region, show it gliding into place for
+      # shot_hold s, then back:
+      shot_min_correction: ${MOLA_MAPPER_VIZ_CAMERA_SHOT_MIN_CORRECTION|0.5}  # [m]
+      shot_elevation: 60.0  # [deg]
+      shot_hold: ${MOLA_MAPPER_VIZ_CAMERA_SHOT_HOLD|6.0}  # [s]
+      shot_margin: 20.0  # [m]
+      shot_min_distance: 40.0  # [m]
+      shot_max_distance: 250.0  # [m]
+      shot_min_interval: ${MOLA_MAPPER_VIZ_CAMERA_SHOT_MIN_INTERVAL|20.0}  # [s]
+      # CSV of the camera blend weights over time, e.g. to edit videos:
+      timeline_file: "${MOLA_MAPPER_VIZ_CAMERA_TIMELINE|}"
       heading_time_constant: ${MOLA_MAPPER_VIZ_CAMERA_HEADING_TAU|3.0}  # [s]
       vehicle_time_constant: 0.5  # [s]
       map_time_constant: 2.0  # [s]

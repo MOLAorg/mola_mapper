@@ -22,10 +22,12 @@
 #include <mp2p_icp_filters/sm2mm.h>
 #include <mrpt/core/format.h>
 #include <mrpt/maps/CSimpleMap.h>
+#include <mrpt/math/slerp.h>
 #include <mrpt/poses/CPose3DPDFGaussian.h>
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 
 namespace mola::mapper
 {
@@ -207,7 +209,7 @@ std::vector<KeyframeMapVisualization::NodePose> KeyframeMapVisualization::pose_c
     }
     const auto & p = poses_in_map[c.index];
     if (p.asVectorVal() != c.drawn_pose.asVectorVal()) {
-      changes.push_back({c.node, p});
+      changes.push_back({c.node, p, c.drawn_pose});
       c.drawn_pose = p;
     }
   }
@@ -220,6 +222,50 @@ std::vector<mrpt::viz::CPointCloudColoured::Ptr> KeyframeMapVisualization::cloud
   out.reserve(clouds_.size());
   for (const auto & c : clouds_) {
     out.push_back(c.cloud);
+  }
+  return out;
+}
+
+mrpt::poses::CPose3D NodeAnimator::Glide::at(double t) const
+{
+  const double u = duration > 0 ? std::clamp((t - start) / duration, 0.0, 1.0) : 1.0;
+  const double eased = 0.5 * (1.0 - std::cos(M_PI * u));
+  mrpt::math::TPose3D p;
+  mrpt::math::slerp(from.asTPose(), to.asTPose(), eased, p);
+  return mrpt::poses::CPose3D(p);
+}
+
+void NodeAnimator::add(
+  const std::vector<KeyframeMapVisualization::NodePose> & changes, double start, double duration,
+  double now)
+{
+  for (const auto & c : changes) {
+    const auto it = std::find_if(
+      glides_.begin(), glides_.end(), [&](const Glide & g) { return g.node == c.node; });
+    if (it != glides_.end()) {
+      // Still gliding: on from where it is now. Not started yet (e.g. waiting
+      // for the camera): it keeps waiting.
+      *it = {c.node, it->at(now), c.pose, std::max(start, it->start), duration};
+    } else {
+      glides_.push_back({c.node, c.from, c.pose, start, duration});
+    }
+  }
+}
+
+std::vector<KeyframeMapVisualization::NodePose> NodeAnimator::step(double now)
+{
+  std::vector<KeyframeMapVisualization::NodePose> out;
+  for (auto it = glides_.begin(); it != glides_.end();) {
+    if (now < it->start) {
+      ++it;
+      continue;
+    }
+    out.push_back({it->node, it->at(now), it->from});
+    if (now >= it->start + it->duration) {
+      it = glides_.erase(it);
+    } else {
+      ++it;
+    }
   }
   return out;
 }

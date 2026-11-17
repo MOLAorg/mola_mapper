@@ -101,6 +101,7 @@ Mapper::Mapper()
 
 Mapper::~Mapper()
 {
+  gui_stop_camera();
   try {
     finalize();
   } catch (const std::exception & e) {
@@ -212,7 +213,11 @@ void Mapper::spinOnce()
   }
 }
 
-void Mapper::onQuit() { finalize(); }
+void Mapper::onQuit()
+{
+  gui_stop_camera();
+  finalize();
+}
 
 // ---------------------------------------------------------------------------
 // Sensor input

@@ -18,20 +18,37 @@
  */
 
 #include <mola_kernel/GuiWidgetDescription.h>
+#include <mola_kernel/interfaces/Dataset_UI.h>
+#include <mola_kernel/interfaces/LocalizationSourceBase.h>
 #include <mola_kernel/interfaces/VizInterface.h>
+#include <mola_mapper/CameraDirector.h>
+#include <mola_mapper/KeyframeMapVisualization.h>
 #include <mola_mapper/Mapper.h>
 #include <mrpt/core/format.h>
 #include <mrpt/core/lock_helper.h>
+#include <mrpt/viz/Scene.h>
+#include <mrpt/viz/Viewport.h>
 
 #include <array>
 #include <atomic>
 #include <chrono>
 #include <map>
+#include <memory>
 #include <optional>
 #include <string>
+#include <thread>
 
 namespace mola::mapper
 {
+namespace
+{
+// Time spent building keyframe clouds per GUI update [s]: a long backlog (e.g.
+// the map enabled late in a run) is built over several updates.
+constexpr double KEYFRAME_MAP_BUILD_BUDGET = 0.3;
+// Keyframes copied per GUI update for the map, at most:
+constexpr std::size_t KEYFRAME_MAP_MAX_BATCH = 100;
+}  // namespace
+
 struct Mapper::Gui
 {
   // Written by the GUI thread (widgets), read by gui_update():
@@ -44,6 +61,37 @@ struct Mapper::Gui
   mola::gui::LiveString::Ptr lbRejected = std::make_shared<mola::gui::LiveString>(" ");
   mola::gui::LiveString::Ptr lbFactors = std::make_shared<mola::gui::LiveString>(" ");
   mola::gui::LiveString::Ptr lbSolver = std::make_shared<mola::gui::LiveString>(" ");
+  mola::gui::LiveString::Ptr lbKeyframeMap = std::make_shared<mola::gui::LiveString>(" ");
+
+  // The global map of keyframe clouds, created when first shown:
+  std::unique_ptr<KeyframeMapVisualization> keyframe_map;
+  bool keyframe_map_drawn = false;
+
+  // Scripted camera: its own thread (smooth motion at its own rate), started
+  // when first enabled. Its inputs (camera_mtx): the map extent, newest
+  // keyframe and the end of the data (gui_update()), the scene frame of the
+  // front end and its pose in the map as drawn (T_map_f), and the latest
+  // vehicle pose advertised in each frame by the localization sources.
+  std::thread camera_thread;
+  std::atomic_bool camera_stop{false};
+  std::mutex camera_mtx;
+  CameraDirector::Inputs camera_inputs;
+  std::optional<std::pair<std::string, mrpt::poses::CPose3D>> front_end_frame;
+  std::map<std::string, mrpt::poses::CPose3D> vehicle_poses;
+  std::weak_ptr<mola::Dataset_UI> dataset;
+
+  Gui() = default;
+  Gui(const Gui &) = delete;
+  Gui & operator=(const Gui &) = delete;
+  Gui(Gui &&) = delete;
+  Gui & operator=(Gui &&) = delete;
+  ~Gui()
+  {
+    camera_stop = true;
+    if (camera_thread.joinable()) {
+      camera_thread.join();
+    }
+  }
 
   bool window_created = false;
   std::optional<std::chrono::steady_clock::time_point> last_update;
@@ -61,6 +109,7 @@ struct Mapper::Gui
 
 void Mapper::gui_initialize()
 {
+  gui_stop_camera();
   visualizer_.reset();
   gui_.reset();
   const auto mods = findService<mola::VizInterface>();
@@ -73,6 +122,25 @@ void Mapper::gui_initialize()
   }
   gui_ = std::make_shared<Gui>();
   gui_->params = params_.visualization;
+  // For the scripted camera: the current vehicle pose (passively, from the
+  // localization updates of the front ends) and the data progress.
+  for (const auto & m : findService<mola::LocalizationSourceBase>()) {
+    auto src = std::dynamic_pointer_cast<mola::LocalizationSourceBase>(m);
+    if (!src) {
+      continue;
+    }
+    src->subscribeToLocalizationUpdates(
+      [weakGui =
+         std::weak_ptr<Gui>(gui_)](const mola::LocalizationSourceBase::LocalizationUpdate & u) {
+        if (auto gp = weakGui.lock(); gp) {
+          auto lck = mrpt::lockHelper(gp->camera_mtx);
+          gp->vehicle_poses[u.reference_frame] = mrpt::poses::CPose3D(u.pose);
+        }
+      });
+  }
+  if (const auto ds = findService<mola::Dataset_UI>(); !ds.empty()) {
+    gui_->dataset = std::dynamic_pointer_cast<mola::Dataset_UI>(ds.front());
+  }
   MRPT_LOG_INFO("Attached to a visualizer: the keyframe graph is shown in the GUI");
 }
 
@@ -94,6 +162,7 @@ void Mapper::gui_build_window()
     tab.widgets.emplace_back(Label{g->lbRejected});
     tab.widgets.emplace_back(Label{g->lbFactors});
     tab.widgets.emplace_back(Label{g->lbSolver});
+    tab.widgets.emplace_back(Label{g->lbKeyframeMap});
     if (lc_engine_ && lc_thread_running_.load()) {
       tab.widgets.emplace_back(Separator{});
       tab.widgets.emplace_back(
@@ -158,6 +227,34 @@ void Mapper::gui_build_window()
     tab.widgets.emplace_back(CheckBox{
       "Align front end views with the map", p.align_front_end_frames,
       setter(&GraphVisualizationParams::align_front_end_frames)});
+
+    tab.widgets.emplace_back(Separator{});
+    tab.widgets.emplace_back(CheckBox{
+      "Show the map (keyframe clouds)", p.show_keyframe_map,
+      setter(&GraphVisualizationParams::show_keyframe_map)});
+    SliderFloat mapPointSize = odoWidth;
+    mapPointSize.label = "Map point size [px]";
+    mapPointSize.initial_value = p.keyframe_map.point_size;
+    mapPointSize.min_value = 1.0f;
+    mapPointSize.max_value = 8.0f;
+    mapPointSize.on_change = [g](float v) {
+      {
+        auto lck = mrpt::lockHelper(g->params_mtx);
+        g->params.keyframe_map.point_size = v;
+      }
+      g->params_changed = true;
+    };
+    tab.widgets.emplace_back(mapPointSize);
+
+    tab.widgets.emplace_back(Separator{});
+    tab.widgets.emplace_back(
+      CheckBox{"Scripted camera (map overview, close-ups)", p.camera.enabled, [g](bool v) {
+                 {
+                   auto lck = mrpt::lockHelper(g->params_mtx);
+                   g->params.camera.enabled = v;
+                 }
+                 g->params_changed = true;
+               }});
     desc.tabs.emplace_back(std::move(tab));
   }
 
@@ -175,6 +272,10 @@ void Mapper::gui_update()
     auto lck = mrpt::lockHelper(g.params_mtx);
     p = g.params;
   }
+  if (p.camera.enabled) {
+    gui_feed_camera(p);
+  }
+
   const auto now = std::chrono::steady_clock::now();
   const bool styleChanged = g.params_changed.exchange(false);
   if (
@@ -188,8 +289,15 @@ void Mapper::gui_update()
     g.window_created = true;
   }
 
+  const bool showMap = p.show_keyframe_map;
+  if (showMap && !g.keyframe_map) {
+    g.keyframe_map = std::make_unique<KeyframeMapVisualization>(p.keyframe_map);
+  }
+
   // Copy the graph only if it changed, then build the scene off the lock:
   GraphVisualizationInput in;
+  std::vector<mrpt::poses::CPose3D> poses;
+  std::vector<KeyframeMapVisualization::KeyframeData> newKeyframes;
   std::vector<FrontEndKeyframePose> frontEnds;
   bool redraw = false;
   std::size_t numKeyframes = 0;
@@ -226,6 +334,22 @@ void Mapper::gui_update()
     const Gui::RedrawKey key = {
       numKeyframes, solves_.load(), loops_revision_, rejectedByOdometry, rejectedByConsistency};
     redraw = styleChanged || key != g.last_drawn;
+    // Keyframes not yet considered for the map (shallow copies):
+    const bool mapPending = showMap && g.keyframe_map->num_considered() < numKeyframes;
+    if (mapPending) {
+      // A long backlog (e.g. the map enabled late) is built over several updates:
+      const std::size_t last =
+        std::min(numKeyframes, g.keyframe_map->num_considered() + KEYFRAME_MAP_MAX_BATCH);
+      for (std::size_t i = g.keyframe_map->num_considered(); i < last; i++) {
+        newKeyframes.push_back({i, keyframes_[i].observations});
+      }
+    }
+    if (redraw || mapPending) {
+      poses.reserve(numKeyframes);
+      for (const auto & kf : keyframes_) {
+        poses.push_back(kf.pose_in_map);
+      }
+    }
     if (redraw) {
       g.last_drawn = key;
       in.keyframes.reserve(numKeyframes);
@@ -247,12 +371,17 @@ void Mapper::gui_update()
   }
   g.last_update = now;
 
+  gui_draw_keyframe_map(p, redraw, newKeyframes, poses);
+
   if (redraw) {
     visualizer_->update_3d_object("mapper/graph", build_graph_visualization(in, p));
     // Not aligned: back to their own frames.
     for (const auto & [name, pose] : front_end_viz_frame_poses(frontEnds)) {
       const auto framePose = p.align_front_end_frames ? pose : mrpt::poses::CPose3D();
       visualizer_->update_3d_object_frame(name, framePose.asTPose());
+      // The camera follows the vehicle as drawn:
+      auto lck = mrpt::lockHelper(g.camera_mtx);
+      g.front_end_frame = {name, framePose};
     }
   }
 
@@ -268,6 +397,176 @@ void Mapper::gui_update()
   g.lbSolver->set(mrpt::format(
     "Solves: %zu, last %.0f ms; geo-referenced: %s", solves_.load(),
     1e3 * last_solve_seconds_.load(), georeferenced ? "yes" : "no"));
+  if (g.keyframe_map) {
+    g.lbKeyframeMap->set(mrpt::format(
+      "Map: %zu keyframe clouds, %.02f M points%s", g.keyframe_map->num_clouds(),
+      1e-6 * static_cast<double>(g.keyframe_map->num_points()),
+      g.keyframe_map->num_considered() < numKeyframes ? " (building)" : ""));
+  } else {
+    g.lbKeyframeMap->set("Map: not shown");
+  }
+}
+
+void Mapper::gui_feed_camera(const GraphVisualizationParams & p)
+{
+  // The scripted camera runs at its own rate: feed it the map extent, the
+  // newest keyframe (vehicle pose if the state estimator has none) and
+  // whether the data is about to end.
+  auto & g = *gui_;
+  CameraDirector::Inputs in;
+  {
+    auto lck = mrpt::lockHelper(state_mtx_);
+    if (!keyframes_.empty()) {
+      auto box = mrpt::math::TBoundingBox::PlusMinusInfinity();
+      for (const auto & kf : keyframes_) {
+        box.updateWithPoint(kf.pose_in_map.translation());
+      }
+      in.map = box;
+      in.vehicle = keyframes_.back().pose_in_map.translation();
+      in.vehicle_yaw = keyframes_.back().pose_in_map.yaw();
+    }
+  }
+#if defined(MOLA_KERNEL_DATASET_UI_HAS_TIME)
+  if (const auto ds = g.dataset.lock(); ds) {
+    const auto tNow = ds->datasetUI_time();
+    const auto tEnd = ds->datasetUI_total_time();
+    in.final = tNow && tEnd && *tEnd - *tNow < p.camera.final_overview;
+  }
+#endif
+  {
+    auto lck = mrpt::lockHelper(g.camera_mtx);
+    g.camera_inputs = in;
+  }
+  if (!g.camera_thread.joinable()) {
+    gui_start_camera(p.camera);
+  }
+}
+
+void Mapper::gui_draw_keyframe_map(
+  const GraphVisualizationParams & p, bool redraw,
+  const std::vector<KeyframeMapVisualization::KeyframeData> & newKeyframes,
+  const std::vector<mrpt::poses::CPose3D> & poses)
+{
+  auto & g = *gui_;
+  const bool showMap = p.show_keyframe_map;
+  // The map, off the lock: new clouds, then the scene if anything changed.
+  bool mapChanged = false;
+  if (showMap && !newKeyframes.empty()) {
+    mapChanged = g.keyframe_map->add_keyframes(newKeyframes, poses, KEYFRAME_MAP_BUILD_BUDGET) > 0;
+  }
+  if (g.keyframe_map) {
+    const float pointSize = p.keyframe_map.point_size;
+    if (pointSize != g.keyframe_map->point_size()) {
+      g.keyframe_map->set_point_size(pointSize);
+      // Clouds already in the scene: changed from the render thread.
+      visualizer_->execute_custom_code_on_background_scene(
+        [clouds = g.keyframe_map->clouds(), pointSize](mrpt::viz::Scene &) {
+          for (const auto & c : clouds) {
+            c->setPointSize(pointSize);
+          }
+        });
+    }
+  }
+  if (showMap && (mapChanged || !g.keyframe_map_drawn)) {
+    // The same nodes as before plus the new ones: the visualizer keeps the
+    // GPU buffers of those it already had.
+    visualizer_->update_3d_object("mapper/keyframe_map", g.keyframe_map->scene());
+    g.keyframe_map_drawn = true;
+  }
+  if (showMap && redraw) {
+    // Keyframes moved (e.g. a loop closure): move their nodes, in the render thread.
+    if (auto moved = g.keyframe_map->pose_changes(poses); !moved.empty()) {
+      visualizer_->execute_custom_code_on_background_scene(
+        [moved = std::move(moved)](mrpt::viz::Scene &) {
+          for (const auto & m : moved) {
+            m.node->setPose(m.pose);
+          }
+        });
+    }
+  } else if (!showMap && g.keyframe_map_drawn) {
+    visualizer_->update_3d_object("mapper/keyframe_map", mrpt::viz::CSetOfObjects::Create());
+    g.keyframe_map_drawn = false;
+  }
+}
+
+void Mapper::gui_start_camera(const CameraDirectorParams & cp)
+{
+  auto & g = *gui_;
+  MRPT_LOG_INFO_STREAM("Scripted camera at " << cp.rate << " Hz");
+  g.camera_stop = false;
+  // Only the Gui and the modules it holds are used from the thread: it is
+  // joined before they are destroyed (gui_stop_camera(), ~Gui()).
+  g.camera_thread = std::thread([gp = gui_.get(), viz = visualizer_, cp]() {
+    using clock = std::chrono::steady_clock;
+    CameraDirector director(cp);
+    const auto period = std::chrono::duration_cast<clock::duration>(
+      std::chrono::duration<double>(1.0 / std::max(cp.rate, 1.0)));
+    const auto t0 = clock::now();
+    auto next = t0;
+    double farClip = 1000.0;  // [m] MRPT default
+    while (!gp->camera_stop) {
+      next += period;
+      std::this_thread::sleep_until(next);
+      if (clock::now() > next + period) {
+        next = clock::now();  // fell behind: no burst of updates
+      }
+      bool enabled = false;
+      {
+        auto lck = mrpt::lockHelper(gp->params_mtx);
+        enabled = gp->params.camera.enabled;
+      }
+      if (!enabled) {
+        continue;
+      }
+      CameraDirector::Inputs in;
+      {
+        auto lck = mrpt::lockHelper(gp->camera_mtx);
+        in = gp->camera_inputs;
+        // The current vehicle pose, more frequent than the keyframes (none
+        // while revisiting mapped areas), mapped through T_map_f:
+        if (const auto & fe = gp->front_end_frame; fe) {
+          if (const auto it = gp->vehicle_poses.find(fe->first); it != gp->vehicle_poses.end()) {
+            const auto pose = fe->second + it->second;
+            in.vehicle = pose.translation();
+            in.vehicle_yaw = pose.yaw();
+          }
+        }
+      }
+      const auto c = director.step(std::chrono::duration<double>(clock::now() - t0).count(), in);
+      if (!c) {
+        continue;
+      }
+      // Large maps: push the far clip plane beyond the overview distance.
+      if (2 * c->distance > farClip) {
+        farClip = 4 * c->distance;
+        viz->execute_custom_code_on_background_scene([farClip](mrpt::viz::Scene & scene) {
+          if (auto vp = scene.getViewport("main"); vp) {
+            float clipMin = 0;
+            float clipMax = 0;
+            vp->getViewportClipDistances(clipMin, clipMax);
+            vp->setViewportClipDistances(clipMin, std::max(clipMax, static_cast<float>(farClip)));
+          }
+        });
+      }
+      const mrpt::math::TPoint3Df lookAt(c->look_at);
+#if defined(MOLA_KERNEL_VIZ_HAS_CAMERA_ORIENTATION)
+      viz->update_viewport_camera(lookAt, c->azimuth, c->elevation, c->distance);
+#else
+      // Older visualizers: look-at and azimuth only.
+      viz->update_viewport_look_at(lookAt);
+      viz->update_viewport_camera_azimuth(c->azimuth);
+#endif
+    }
+  });
+}
+
+void Mapper::gui_stop_camera()
+{
+  if (!gui_ || !gui_->camera_thread.joinable()) {
+    return;
+  }
+  gui_->camera_stop = true;
+  gui_->camera_thread.join();
 }
 
 }  // namespace mola::mapper

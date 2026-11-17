@@ -66,6 +66,18 @@ void GraphVisualizationParams::loadFrom(const mrpt::containers::yaml & cfg)
   MCP_LOAD_OPT(cfg, rejected_loop_edge_width);
   MCP_LOAD_OPT(cfg, update_period);
   MCP_LOAD_OPT(cfg, align_front_end_frames);
+  MCP_LOAD_OPT(cfg, show_keyframe_map);
+  auto & km = keyframe_map;
+  km.voxel = cfg.getOrDefault("keyframe_map_voxel", km.voxel);
+  km.min_range = cfg.getOrDefault("keyframe_map_min_range", km.min_range);
+  km.max_range = cfg.getOrDefault("keyframe_map_max_range", km.max_range);
+  km.min_spacing = cfg.getOrDefault("keyframe_map_min_spacing", km.min_spacing);
+  km.color_min = cfg.getOrDefault("keyframe_map_color_min", km.color_min);
+  km.color_max = cfg.getOrDefault("keyframe_map_color_max", km.color_max);
+  km.point_size = cfg.getOrDefault("keyframe_map_point_size", km.point_size);
+  if (cfg.has("camera")) {
+    camera.loadFrom(cfg["camera"]);
+  }
 }
 
 mrpt::viz::CSetOfObjects::Ptr build_graph_visualization(

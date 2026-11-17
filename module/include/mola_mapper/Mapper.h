@@ -419,6 +419,17 @@ private:
   /// Redraws the graph if it changed (spinOnce() thread).
   void gui_update();
   void gui_build_window();
+  /// Passes the scripted camera its inputs from the mapper state (and starts it).
+  void gui_feed_camera(const GraphVisualizationParams & p);
+  /// Builds the clouds of new keyframes and redraws the map if needed.
+  void gui_draw_keyframe_map(
+    const GraphVisualizationParams & p, bool redraw,
+    const std::vector<KeyframeMapVisualization::KeyframeData> & newKeyframes,
+    const std::vector<mrpt::poses::CPose3D> & poses);
+  /// Starts the scripted camera thread.
+  void gui_start_camera(const CameraDirectorParams & cp);
+  /// Stops the scripted camera thread, if running.
+  void gui_stop_camera();
   /** @} */
 
   void publish_georeference(const mola::Georeferencing & g);

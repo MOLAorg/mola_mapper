@@ -28,6 +28,7 @@ find_package(GTSAM REQUIRED)
 find_package(mola_gtsam_factors REQUIRED)
 find_package(mola_georeferencing REQUIRED)
 find_package(mola_sm_loop_closure REQUIRED)
+find_package(mp2p_icp_filters REQUIRED)
 
 # -----------------------
 # define lib:
@@ -36,7 +37,9 @@ set(LIB_SOURCES
   module/src/GyroIntegration.cpp
   module/src/WheelOdometry.cpp
   module/src/GlobalGraphIO.cpp
+  module/src/CameraDirector.cpp
   module/src/GraphVisualization.cpp
+  module/src/KeyframeMapVisualization.cpp
   module/src/LoopConsistency.cpp
   module/src/LoopOdometryCheck.cpp
   module/src/Mapper.cpp
@@ -48,10 +51,12 @@ set(LIB_SOURCES
   module/src/register.cpp
 )
 set(LIB_PUBLIC_HEADERS
+  module/include/mola_mapper/CameraDirector.h
   module/include/mola_mapper/GlobalGraph.h
   module/include/mola_mapper/GlobalGraphIO.h
   module/include/mola_mapper/GraphVisualization.h
   module/include/mola_mapper/GyroIntegration.h
+  module/include/mola_mapper/KeyframeMapVisualization.h
   module/include/mola_mapper/LoopConsistency.h
   module/include/mola_mapper/LoopOdometryCheck.h
   module/include/mola_mapper/Mapper.h
@@ -72,6 +77,7 @@ mola_add_library(
     mola::mola_gtsam_factors
     mola::mola_georeferencing
     mola::mola_sm_loop_closure
+    mola::mp2p_icp_filters
   CMAKE_DEPENDENCIES
     mola_kernel
     mola_yaml
@@ -79,6 +85,7 @@ mola_add_library(
     mola_gtsam_factors
     mola_georeferencing
     mola_sm_loop_closure
+    mp2p_icp_filters
 )
 
 target_include_directories(${PROJECT_NAME} PUBLIC

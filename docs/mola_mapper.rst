@@ -420,6 +420,22 @@ section of ``params/mapper.yaml``:
      rejected_loop_edge_width: 1.0  # [px]
      update_period: 1.0             # [s]
      align_front_end_frames: true   # (MOLA_MAPPER_VIZ_ALIGN_FRONT_ENDS)
+     show_keyframe_map: false       # (MOLA_MAPPER_VIZ_KEYFRAME_MAP)
+     keyframe_map_voxel: 0.20       # [m]  (MOLA_MAPPER_VIZ_KEYFRAME_MAP_VOXEL)
+     keyframe_map_min_range: 1.5    # [m]  (MOLA_MAPPER_VIZ_KEYFRAME_MAP_MIN_RANGE)
+     keyframe_map_max_range: 50.0   # [m]  (MOLA_MAPPER_VIZ_KEYFRAME_MAP_MAX_RANGE)
+     keyframe_map_min_spacing: 2.5  # [m]  (MOLA_MAPPER_VIZ_KEYFRAME_MAP_MIN_SPACING)
+     keyframe_map_color_min: -2.0   # [m]  (MOLA_MAPPER_VIZ_KEYFRAME_MAP_COLOR_MIN)
+     keyframe_map_color_max: 12.0   # [m]  (MOLA_MAPPER_VIZ_KEYFRAME_MAP_COLOR_MAX)
+     keyframe_map_point_size: 1.0   # [px] (MOLA_MAPPER_VIZ_KEYFRAME_MAP_POINT_SIZE)
+     camera:                        # scripted camera, see below
+       enabled: false               # (MOLA_MAPPER_VIZ_CAMERA)
+       overview_period: 40.0        # [s]  (MOLA_MAPPER_VIZ_CAMERA_OVERVIEW_PERIOD)
+       closeup_period: 15.0         # [s]  (MOLA_MAPPER_VIZ_CAMERA_CLOSEUP_PERIOD)
+       transition: 4.0              # [s]  (MOLA_MAPPER_VIZ_CAMERA_TRANSITION)
+       closeup_distance: 40.0       # [m]  (MOLA_MAPPER_VIZ_CAMERA_CLOSEUP_DISTANCE)
+       final_overview: 60.0         # [s] of data (MOLA_MAPPER_VIZ_CAMERA_FINAL_OVERVIEW)
+       # ... more in params/mapper.yaml
 
 ``align_front_end_frames`` moves the scene frame each front end draws in (for
 LIO, its ``publish_reference_frame``, whose keyframes come as
@@ -428,6 +444,32 @@ vehicle stay on top of the corrected graph after loop closures.
 Everything a front end draws in that frame moves rigidly with its newest
 correction, so after a loop closure LIO's older path and decaying clouds no
 longer sit on the graph; only the mapper graph shows the corrected past.
+
+``show_keyframe_map`` draws the map itself from the keyframes: the scan of each
+keyframe (de-skewed with its IMU velocity buffer, range-filtered, voxel
+decimated) is built once, in the keyframe frame, and drawn at the current
+optimized pose of its keyframe, so every loop closure visibly corrects the map.
+Keyframes closer than ``keyframe_map_min_spacing`` to one already in the map add
+no cloud. Each keyframe has its own scene node, kept for the whole run: loop
+closures only move nodes, without uploading the clouds again. Points are
+colored (turbo colormap, fixed range) by their height relative to the keyframe
+that observed them, which keeps colors meaningful on
+slopes and on stacked floors. Hide LIO's own local map meanwhile
+(``MOLA_GUI_SHOW_LOCAL_MAP=false``): it does not show the corrections.
+
+``camera`` scripts the GUI camera, e.g. for videos. From its own thread, at
+``rate`` Hz, it blends two views: an overview of the whole map (top view fitted
+to the keyframes plus ``overview_margin``, at a fixed ``overview_azimuth``,
+zooming out as the map grows; the far clip plane is pushed back as needed) and
+a close-up behind the vehicle (its latest pose advertised by the front end as a
+localization update, mapped through the optimized pose of the front end frame). They alternate by a schedule (``overview_period``,
+``closeup_period``, with smooth ``transition`` s; wall clock time), and only the
+overview is shown during the last ``final_overview`` seconds of data, if the
+data source tells its time (a dataset player). Every input is low-pass
+filtered, so loop closure corrections do not make the camera jump. Turn off the
+front end camera follow meanwhile (LIO: ``MOLA_GUI_CAMERA_FOLLOWS_VEHICLE=false``).
+Both the map and the camera can also be toggled in the View tab of the
+``mola_mapper`` window.
 
 |
 

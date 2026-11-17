@@ -18,6 +18,8 @@
  */
 #pragma once
 
+#include <mola_mapper/CameraDirector.h>
+#include <mola_mapper/KeyframeMapVisualization.h>
 #include <mrpt/containers/yaml.h>
 #include <mrpt/img/TColor.h>
 #include <mrpt/math/TPoint3D.h>
@@ -64,6 +66,15 @@ struct GraphVisualizationParams
   /// Move the frame each front end draws its scene in (`<frame>` of its
   /// `<frame>_kf` keyframes) with the optimized map, so it stays aligned.
   bool align_front_end_frames = true;
+
+  /** The global map: the cloud of each keyframe at its optimized pose
+   *  (KeyframeMapVisualization). Off by default: it keeps one cloud per
+   *  contributing keyframe in memory. */
+  bool show_keyframe_map = false;
+  KeyframeMapParams keyframe_map;
+
+  /// Scripted camera (CameraDirector), in the `camera` sub-section.
+  CameraDirectorParams camera;
 
   void loadFrom(const mrpt::containers::yaml & cfg);
 };

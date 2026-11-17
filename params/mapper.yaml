@@ -171,3 +171,39 @@ params:
     # Move the scene frame of each front end (LIO draws its local map and
     # vehicle in its publish frame) with the optimized map, so all stays aligned:
     align_front_end_frames: ${MOLA_MAPPER_VIZ_ALIGN_FRONT_ENDS|true}
+    # The map: the cloud of each keyframe (de-skewed, decimated) drawn at its
+    # optimized pose, so loop closures visibly correct it. Points are colored
+    # by their height relative to the keyframe (turbo colormap, fixed range).
+    # Off by default: it keeps one cloud per contributing keyframe in memory.
+    show_keyframe_map: ${MOLA_MAPPER_VIZ_KEYFRAME_MAP|false}
+    keyframe_map_voxel: ${MOLA_MAPPER_VIZ_KEYFRAME_MAP_VOXEL|0.20}  # [m]
+    keyframe_map_min_range: ${MOLA_MAPPER_VIZ_KEYFRAME_MAP_MIN_RANGE|1.5}  # [m]
+    keyframe_map_max_range: ${MOLA_MAPPER_VIZ_KEYFRAME_MAP_MAX_RANGE|50.0}  # [m]
+    # Keyframes closer than this to one already in the map add no cloud:
+    keyframe_map_min_spacing: ${MOLA_MAPPER_VIZ_KEYFRAME_MAP_MIN_SPACING|2.5}  # [m]
+    keyframe_map_color_min: ${MOLA_MAPPER_VIZ_KEYFRAME_MAP_COLOR_MIN|-2.0}  # [m]
+    keyframe_map_color_max: ${MOLA_MAPPER_VIZ_KEYFRAME_MAP_COLOR_MAX|12.0}  # [m]
+    keyframe_map_point_size: ${MOLA_MAPPER_VIZ_KEYFRAME_MAP_POINT_SIZE|1.0}  # [px]
+    # Scripted camera (e.g. for videos): a smooth blend of a map overview (top
+    # view fitted to the keyframes) and close-ups behind the vehicle (its pose
+    # from the state estimator), alternated by a schedule (wall clock seconds),
+    # and only the overview during the last `final_overview` seconds of data.
+    # LIO's camera follow should be off meanwhile (MOLA_GUI_CAMERA_FOLLOWS_VEHICLE).
+    camera:
+      enabled: ${MOLA_MAPPER_VIZ_CAMERA|false}
+      rate: ${MOLA_MAPPER_VIZ_CAMERA_RATE|30.0}  # [Hz]
+      overview_elevation: 90.0  # [deg]
+      overview_azimuth: ${MOLA_MAPPER_VIZ_CAMERA_OVERVIEW_AZIMUTH|-90.0}  # [deg] (-90: +y up)
+      overview_margin: 15.0  # [m]
+      overview_min_distance: 60.0  # [m]
+      closeup_elevation: ${MOLA_MAPPER_VIZ_CAMERA_CLOSEUP_ELEVATION|50.0}  # [deg]
+      closeup_distance: ${MOLA_MAPPER_VIZ_CAMERA_CLOSEUP_DISTANCE|40.0}  # [m]
+      overview_period: ${MOLA_MAPPER_VIZ_CAMERA_OVERVIEW_PERIOD|40.0}  # [s]
+      closeup_period: ${MOLA_MAPPER_VIZ_CAMERA_CLOSEUP_PERIOD|15.0}  # [s]
+      transition: ${MOLA_MAPPER_VIZ_CAMERA_TRANSITION|4.0}  # [s]
+      final_overview: ${MOLA_MAPPER_VIZ_CAMERA_FINAL_OVERVIEW|60.0}  # [s] of data
+      heading_time_constant: ${MOLA_MAPPER_VIZ_CAMERA_HEADING_TAU|3.0}  # [s]
+      vehicle_time_constant: 0.5  # [s]
+      map_time_constant: 2.0  # [s]
+      fov: 30.0  # [deg] vertical, of the GUI camera
+      aspect_ratio: 1.7778

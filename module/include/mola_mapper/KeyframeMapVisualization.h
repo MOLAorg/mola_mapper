@@ -1,0 +1,125 @@
+/*               _
+ _ __ ___   ___ | | __ _
+| '_ ` _ \ / _ \| |/ _` | Modular Optimization framework for
+| | | | | | (_) | | (_| | Localization and mApping (MOLA)
+|_| |_| |_|\___/|_|\__,_| https://github.com/MOLAorg/mola
+ Copyright (C) 2018-2026 Jose Luis Blanco, University of Almeria,
+                         and individual contributors.
+ SPDX-License-Identifier: GPL-3.0
+ See LICENSE for full license information.
+ Closed-source licenses available upon request, for this package
+ alone or in combination with the complete SLAM system.
+*/
+/**
+ * @file   KeyframeMapVisualization.h
+ * @brief  GUI map built from the keyframe clouds at their optimized poses.
+ * @author Jose Luis Blanco Claraco
+ * @date   2026
+ */
+#pragma once
+
+#include <mrpt/containers/yaml.h>
+#include <mrpt/img/TColor.h>
+#include <mrpt/obs/CSensoryFrame.h>
+#include <mrpt/poses/CPose3D.h>
+#include <mrpt/viz/CPointCloudColoured.h>
+#include <mrpt/viz/CSetOfObjects.h>
+
+#include <cstddef>
+#include <vector>
+
+namespace mola::mapper
+{
+/// How the keyframe map is built and drawn.
+struct KeyframeMapParams
+{
+  /// Voxel size [m] of each keyframe cloud.
+  double voxel = 0.20;
+  /// Points kept by their range [m] from the vehicle.
+  double min_range = 1.5;
+  double max_range = 50.0;
+  /** A keyframe closer than this [m] to another one already in the map adds
+   *  no cloud (keeps the point count bounded on revisits and slow motion). */
+  double min_spacing = 2.5;
+  /** Colormap limits [m] of the point height relative to the keyframe that
+   *  observed it (fixed, so colors do not change during a run). */
+  double color_min = -2.0;
+  double color_max = 12.0;
+  float point_size = 1.0f;
+};
+
+/// Turbo colormap, x in [0,1] (polynomial approximation).
+[[nodiscard]] mrpt::img::TColor turbo_color(double x);
+
+/** The global map shown by the GUI: one colored cloud per contributing
+ *  keyframe, built once from its observations (with an sm2mm pipeline: IMU
+ *  de-skew from the keyframe velocity buffer, range filter, voxel decimation)
+ *  in the keyframe frame, and drawn at the keyframe's current pose, so loop
+ *  closures visibly correct the map. Points are colored by their height
+ *  relative to the keyframe, in the map frame, which works on slopes and
+ *  stacked floors alike.
+ *
+ *  Not thread-safe: use it from one thread. Clouds handed to the scene are
+ *  never modified afterwards.
+ */
+class KeyframeMapVisualization
+{
+public:
+  explicit KeyframeMapVisualization(const KeyframeMapParams & p);
+
+  /// A keyframe to consider, by index in the mapper keyframe list.
+  struct KeyframeData
+  {
+    std::size_t index = 0;
+    /// Shallow copy of the keyframe observations.
+    mrpt::obs::CSensoryFrame observations;
+  };
+
+  /** Considers new keyframes, in increasing index order, starting at
+   *  num_considered(), and builds the clouds of those that contribute.
+   *  `poses_in_map` holds the current pose of every keyframe (at least up to
+   *  the last one given). Stops early once `max_seconds` elapse: the rest
+   *  are left for the next call (see num_considered()).
+   *  \return The number of new clouds. */
+  std::size_t add_keyframes(
+    const std::vector<KeyframeData> & kfs, const std::vector<mrpt::poses::CPose3D> & poses_in_map,
+    double max_seconds = 1e9);
+
+  /// Keyframes already considered (indices 0 .. num_considered()-1).
+  [[nodiscard]] std::size_t num_considered() const { return num_considered_; }
+  /// Keyframes with a cloud in the map.
+  [[nodiscard]] std::size_t num_clouds() const { return clouds_.size(); }
+  /// Total points in the map.
+  [[nodiscard]] std::size_t num_points() const { return num_points_; }
+
+  /** The scene: one CSetOfObjects per contributing keyframe, at its pose in
+   *  `poses_in_map`, holding its (shared, immutable) cloud. */
+  [[nodiscard]] mrpt::viz::CSetOfObjects::Ptr build_scene(
+    const std::vector<mrpt::poses::CPose3D> & poses_in_map) const;
+
+  /// Point size of new clouds (existing ones are not changed).
+  void set_point_size(float size) { params_.point_size = size; }
+  [[nodiscard]] float point_size() const { return params_.point_size; }
+
+  /// The clouds, e.g. to change their point size from the render thread.
+  [[nodiscard]] std::vector<mrpt::viz::CPointCloudColoured::Ptr> clouds() const;
+
+  /// The cloud of one keyframe, in its frame (nullptr if empty or invalid).
+  [[nodiscard]] mrpt::viz::CPointCloudColoured::Ptr build_cloud(
+    const mrpt::obs::CSensoryFrame & observations, const mrpt::poses::CPose3D & pose_in_map) const;
+
+private:
+  KeyframeMapParams params_;
+  mrpt::containers::yaml pipeline_;
+  std::size_t num_considered_ = 0;
+  std::size_t num_points_ = 0;
+
+  struct KeyframeCloud
+  {
+    std::size_t index = 0;
+    mrpt::viz::CPointCloudColoured::Ptr cloud;
+  };
+  std::vector<KeyframeCloud> clouds_;
+};
+
+}  // namespace mola::mapper

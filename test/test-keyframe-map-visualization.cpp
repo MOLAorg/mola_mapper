@@ -1,0 +1,155 @@
+/*               _
+ _ __ ___   ___ | | __ _
+| '_ ` _ \ / _ \| |/ _` | Modular Optimization framework for
+| | | | | | (_) | | (_| | Localization and mApping (MOLA)
+|_| |_| |_|\___/|_|\__,_| https://github.com/MOLAorg/mola
+ Copyright (C) 2018-2026 Jose Luis Blanco, University of Almeria,
+                         and individual contributors.
+ SPDX-License-Identifier: GPL-3.0
+ See LICENSE for full license information.
+ Closed-source licenses available upon request, for this package
+ alone or in combination with the complete SLAM system.
+*/
+/**
+ * @file   test-keyframe-map-visualization.cpp
+ * @brief  Unit test: the GUI map of keyframe clouds.
+ * @author Jose Luis Blanco Claraco
+ * @date   2026
+ */
+
+#include <mola_mapper/KeyframeMapVisualization.h>
+#include <mrpt/core/exceptions.h>
+#include <mrpt/maps/CSimplePointsMap.h>
+#include <mrpt/obs/CObservationPointCloud.h>
+
+#include <iostream>
+#include <vector>
+
+namespace
+{
+using mola::mapper::KeyframeMapParams;
+using mola::mapper::KeyframeMapVisualization;
+using mrpt::poses::CPose3D;
+
+/// A scan with one point at each given position (sensor at the vehicle origin).
+mrpt::obs::CSensoryFrame make_scan(const std::vector<mrpt::math::TPoint3D> & pts)
+{
+  auto pc = mrpt::maps::CSimplePointsMap::Create();
+  for (const auto & p : pts) {
+    pc->insertPoint(p);
+  }
+  auto obs = mrpt::obs::CObservationPointCloud::Create();
+  obs->sensorLabel = "lidar";
+  obs->pointcloud = pc;
+  mrpt::obs::CSensoryFrame sf;
+  sf.insert(obs);
+  return sf;
+}
+
+/// Keyframes 1 m apart along x, each one seeing a point 5 m ahead.
+std::vector<KeyframeMapVisualization::KeyframeData> make_keyframes(
+  std::size_t n, std::vector<CPose3D> & poses)
+{
+  std::vector<KeyframeMapVisualization::KeyframeData> kfs;
+  for (std::size_t i = 0; i < n; i++) {
+    poses.emplace_back(static_cast<double>(i), 0, 0, 0, 0, 0);
+    kfs.push_back({i, make_scan({{5.0, 0, 0}})});
+  }
+  return kfs;
+}
+
+void test_spacing_and_poses()
+{
+  KeyframeMapParams p;
+  p.min_spacing = 2.5;
+  KeyframeMapVisualization m(p);
+  std::vector<CPose3D> poses;
+  const auto kfs = make_keyframes(10, poses);
+
+  // No time: nothing is considered yet.
+  ASSERT_EQUAL_(m.add_keyframes(kfs, poses, -1.0), 0U);
+  ASSERT_EQUAL_(m.num_considered(), 0U);
+
+  // Keyframes 0, 3, 6, 9 contribute (2.5 m spacing, 1 m apart):
+  ASSERT_EQUAL_(m.add_keyframes(kfs, poses), 4U);
+  ASSERT_EQUAL_(m.num_considered(), 10U);
+  ASSERT_EQUAL_(m.num_clouds(), 4U);
+  ASSERT_EQUAL_(m.num_points(), 4U);
+  // Already considered keyframes are skipped:
+  ASSERT_EQUAL_(m.add_keyframes(kfs, poses), 0U);
+
+  // The scene follows the current poses, and the clouds stay in the keyframe frame:
+  poses[3] = CPose3D(3.0, 1.0, 0.5, 0.1, 0, 0);
+  const auto scene = m.build_scene(poses);
+  ASSERT_EQUAL_(scene->size(), 4U);
+  const auto glKf = std::dynamic_pointer_cast<mrpt::viz::CSetOfObjects>(*std::next(scene->begin()));
+  ASSERT_(glKf);
+  ASSERT_NEAR_((CPose3D(glKf->getPose()).asVectorVal() - poses[3].asVectorVal()).norm(), 0.0, 1e-6);
+  const auto cloud = std::dynamic_pointer_cast<mrpt::viz::CPointCloudColoured>(*glKf->begin());
+  ASSERT_(cloud);
+  ASSERT_EQUAL_(cloud->size(), 1U);
+  ASSERT_NEAR_(cloud->getPoint3Df(0).x, 5.0f, 1e-3f);
+  // The same (immutable) clouds in every scene:
+  const auto scene2 = m.build_scene(poses);
+  const auto glKf2 =
+    std::dynamic_pointer_cast<mrpt::viz::CSetOfObjects>(*std::next(scene2->begin()));
+  ASSERT_(*glKf2->begin() == cloud);
+}
+
+void test_range_filter()
+{
+  KeyframeMapParams p;
+  p.min_range = 1.5;
+  p.max_range = 50.0;
+  const KeyframeMapVisualization m(p);
+  const auto c = m.build_cloud(make_scan({{1.0, 0, 0}, {10.0, 0, 0}, {60.0, 0, 0}}), CPose3D());
+  ASSERT_(c);
+  ASSERT_EQUAL_(c->size(), 1U);
+  // Nothing in range: no cloud.
+  ASSERT_(!m.build_cloud(make_scan({{0.5, 0, 0}}), CPose3D()));
+}
+
+void test_colors()
+{
+  KeyframeMapParams p;
+  p.color_min = -2.0;
+  p.color_max = 12.0;
+  const KeyframeMapVisualization m(p);
+  const auto expected = mola::mapper::turbo_color((5.0 - p.color_min) / 14.0);
+
+  const auto check = [&](const mrpt::viz::CPointCloudColoured::Ptr & c) {
+    ASSERT_(c);
+    ASSERT_EQUAL_(c->size(), 1U);
+    uint8_t r = 0;
+    uint8_t g = 0;
+    uint8_t b = 0;
+    c->getPointColor_fast(0, r, g, b);
+    ASSERT_EQUAL_(r, expected.R);
+    ASSERT_EQUAL_(g, expected.G);
+    ASSERT_EQUAL_(b, expected.B);
+  };
+  // 5 m above a level keyframe, at any position in the map:
+  check(m.build_cloud(make_scan({{0, 0, 5.0}}), CPose3D(10, 20, 30, 0.5, 0, 0)));
+  // 5 m ahead of a keyframe pitched up 90 deg is also 5 m above it:
+  check(m.build_cloud(make_scan({{5.0, 0, 0}}), CPose3D::FromYawPitchRoll(0, -M_PI / 2, 0)));
+
+  // The colormap ends:
+  ASSERT_(!(mola::mapper::turbo_color(0.0) == mola::mapper::turbo_color(1.0)));
+  ASSERT_(mola::mapper::turbo_color(-1.0) == mola::mapper::turbo_color(0.0));
+}
+
+}  // namespace
+
+int main()
+{
+  try {
+    test_spacing_and_poses();
+    test_range_filter();
+    test_colors();
+    std::cout << "All tests passed.\n";
+    return 0;
+  } catch (const std::exception & e) {
+    std::cerr << mrpt::exception_to_str(e) << "\n";
+    return 1;
+  }
+}

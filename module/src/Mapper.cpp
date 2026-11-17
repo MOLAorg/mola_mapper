@@ -101,6 +101,7 @@ Mapper::Mapper()
 
 Mapper::~Mapper()
 {
+  gui_stop_camera();
   try {
     finalize();
   } catch (const std::exception & e) {
@@ -212,7 +213,11 @@ void Mapper::spinOnce()
   }
 }
 
-void Mapper::onQuit() { finalize(); }
+void Mapper::onQuit()
+{
+  gui_stop_camera();
+  finalize();
+}
 
 // ---------------------------------------------------------------------------
 // Sensor input
@@ -222,6 +227,7 @@ void Mapper::onNewObservation(const CObservation::ConstPtr & o)
   if (!o) {
     return;
   }
+  gui_on_new_data(o->timestamp);
   const auto gps = std::dynamic_pointer_cast<const mrpt::obs::CObservationGPS>(o);
   const bool isGnss = use_gnss_input_ && gps && gps->has_GGA_datum() &&
                       std::regex_match(gps->sensorLabel, gnss_labels_re_);

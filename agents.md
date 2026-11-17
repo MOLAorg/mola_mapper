@@ -36,6 +36,8 @@ module/include/mola_mapper/
   GyroIntegration.h integrate_gyro(): rotation between keyframes from gyro readings
   WheelOdometry.h   wheel_odometry_increment(): wheel odometry between keyframes (interpolated)
   GraphVisualization.h  build_graph_visualization(): the GUI scene of the keyframe graph
+  KeyframeMapVisualization.h  GUI map: one colored cloud per keyframe (sm2mm), at its current pose
+  CameraDirector.h  scripted GUI camera (map overviews, close-ups behind the vehicle)
   Parameters.h      Parameters (module) and GlobalGraphParams (graph)
   MapperInputLog.h  record (record_input, background writer) / read the mapper input
   MapperReplay.h    replay_mapper_input(): feeds a thread-less Mapper, scans and solves
@@ -126,7 +128,15 @@ and a `T(0)` azimuth sigma below `georef_max_sigma_yaw_deg`.
   `visualization.update_period`. It also moves the movable viz frame `<f>` of each front end
   whose keyframes come as `<f>_kf` (LIO draws in `publish_reference_frame`) to the optimized
   `T_map_<f>`, so LIO's local map and vehicle stay aligned with the corrected graph.
-  Its redraw key: keyframes, solves, loop revision and rejected counts. Known cost: one
+  Its redraw key: keyframes, solves, loop revision and rejected counts.
+  Optional map (`show_keyframe_map`): clouds built once per contributing keyframe (shallow copy
+  of its observations under the lock, built off it, with a time budget per update), redrawn as
+  fresh wrappers at the current poses around the shared, never modified clouds (point size changes
+  run on the GUI thread). Optional scripted camera (`visualization.camera`, `CameraDirector`: map overview / close-up
+  blend): its own thread (`gui_start_camera()`, stopped in `onQuit()` and the destructor) calls
+  `update_viewport_camera()`; it uses only the Gui and the modules it holds: inputs from
+  `gui_feed_camera()` (keyframe box, data end via `Dataset_UI`), the vehicle pose from the state
+  estimator at the latest data stamp (`gui_on_new_data()`) in the front end frame (`T_map_f`). Known cost: one
   `CSphere` per keyframe (fine up to a few thousand; very long sessions may need fewer).
 - Limitations: one front end chain (keyframes of interleaved sources only get weak edges);
   all keyframe observations stay in RAM; every solve is a full batch.
@@ -143,4 +153,5 @@ and a `T(0)` azimuth sigma below `georef_max_sigma_yaw_deg`.
 `test/`: test-global-graph (loop closure, GNSS georef and its observability, gyro vs turn
 heading errors), test-gyro-integration, test-mapper-ingestion (GNSS/gravity/gyro attachment,
 outputs), test-loop-odometry-check, test-loop-consistency, test-lc-wait-idle,
-test-graph-visualization (GUI scene, no visualizer needed).
+test-graph-visualization (GUI scene, no visualizer needed), test-keyframe-map-visualization,
+test-camera-director.

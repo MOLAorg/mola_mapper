@@ -32,25 +32,32 @@ namespace mola::mapper
 namespace
 {
 // sm2mm pipeline of one keyframe, at the identity pose (the cloud stays in the
-// keyframe frame): de-skewed (IMU velocity buffer of the keyframe), points in
-// a range of the vehicle, decimated, in one layer "points".
+// keyframe frame): de-skewed to the middle of the sweep, as the front end
+// stamps it, with the IMU velocity buffer stored in the keyframe (no `twist`:
+// the keyframe has none, and it would replace the buffer velocities), points
+// in a range of the vehicle, decimated, in one layer "points".
 constexpr const char * PIPELINE = R"yaml(
 generators:
   - class_name: mp2p_icp_filters::Generator
     params:
       target_layer: "raw"
       throw_on_unhandled_observation_class: false
-      process_class_names_regex: "(mrpt::obs::CObservationPointCloud|mrpt::obs::CObservationVelodyneScan)"
+      process_class_names_regex: "mrpt::obs::(CObservationPointCloud|CObservationVelodyneScan|CObservationRotatingScan|CObservation2DRangeScan|CObservation3DRangeScan)"
       process_sensor_labels_regex: ".*"
 filters:
+  - class_name: mp2p_icp_filters::FilterAdjustTimestamps
+    params:
+      pointcloud_layer: "raw"
+      silently_ignore_no_timestamps: true
+      method: "TimestampAdjustMethod::MiddleIsZero"
   - class_name: mp2p_icp_filters::FilterDeskew
     params:
       input_pointcloud_layer: "raw"
       output_pointcloud_layer: "deskewed"
       method: "MotionCompensationMethod::IMU"
+      ignore_accelerometer: true
       silently_ignore_no_timestamps: true
       output_layer_class: "mrpt::maps::CSimplePointsMap"
-      twist: [vx, vy, vz, wx, wy, wz]
   - class_name: mp2p_icp_filters::FilterByRange
     params:
       input_pointcloud_layer: "deskewed"
@@ -97,10 +104,16 @@ KeyframeMapVisualization::KeyframeMapVisualization(const KeyframeMapParams & p)
 mrpt::viz::CPointCloudColoured::Ptr KeyframeMapVisualization::build_cloud(
   const mrpt::obs::CSensoryFrame & observations, const mrpt::poses::CPose3D & pose_in_map) const
 {
+  // Copies of the observations (shallow for the point data): sm2mm loads and
+  // unloads them, and the originals are shared with other threads.
+  auto sf = std::make_shared<mrpt::obs::CSensoryFrame>();
+  for (const auto & o : observations) {
+    if (o) {
+      sf->insert(std::dynamic_pointer_cast<mrpt::obs::CObservation>(o->duplicateGetSmartPtr()));
+    }
+  }
   mrpt::maps::CSimpleMap sm;
-  sm.insert(
-    mrpt::poses::CPose3DPDFGaussian::Create(mrpt::poses::CPose3D()),
-    std::make_shared<mrpt::obs::CSensoryFrame>(observations));
+  sm.insert(mrpt::poses::CPose3DPDFGaussian::Create(mrpt::poses::CPose3D()), sf);
 
   mp2p_icp_filters::sm2mm_options_t opts;
   opts.verbosity = mrpt::system::LVL_ERROR;
@@ -165,26 +178,40 @@ std::size_t KeyframeMapVisualization::add_keyframes(
       continue;
     }
     num_points_ += cloud->size();
-    clouds_.push_back({kf.index, std::move(cloud)});
+    // Its node in the scene, kept for the whole run (see scene()):
+    auto glKf = mrpt::viz::CSetOfObjects::Create();
+    glKf->setPose(pose);
+    glKf->insert(cloud);
+    clouds_.push_back({kf.index, std::move(cloud), std::move(glKf), pose});
     added++;
   }
   return added;
 }
 
-mrpt::viz::CSetOfObjects::Ptr KeyframeMapVisualization::build_scene(
-  const std::vector<mrpt::poses::CPose3D> & poses_in_map) const
+mrpt::viz::CSetOfObjects::Ptr KeyframeMapVisualization::scene() const
 {
   auto scene = mrpt::viz::CSetOfObjects::Create();
   for (const auto & c : clouds_) {
+    scene->insert(c.node);
+  }
+  return scene;
+}
+
+std::vector<KeyframeMapVisualization::NodePose> KeyframeMapVisualization::pose_changes(
+  const std::vector<mrpt::poses::CPose3D> & poses_in_map)
+{
+  std::vector<NodePose> changes;
+  for (auto & c : clouds_) {
     if (c.index >= poses_in_map.size()) {
       continue;
     }
-    auto glKf = mrpt::viz::CSetOfObjects::Create();
-    glKf->setPose(poses_in_map[c.index]);
-    glKf->insert(c.cloud);
-    scene->insert(glKf);
+    const auto & p = poses_in_map[c.index];
+    if (p.asVectorVal() != c.drawn_pose.asVectorVal()) {
+      changes.push_back({c.node, p});
+      c.drawn_pose = p;
+    }
   }
-  return scene;
+  return changes;
 }
 
 std::vector<mrpt::viz::CPointCloudColoured::Ptr> KeyframeMapVisualization::clouds() const

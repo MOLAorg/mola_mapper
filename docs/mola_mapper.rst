@@ -451,17 +451,19 @@ keyframe (de-skewed with its IMU velocity buffer, range-filtered, voxel
 decimated) is built once, in the keyframe frame, and drawn at the current
 optimized pose of its keyframe, so every loop closure visibly corrects the map.
 Keyframes closer than ``keyframe_map_min_spacing`` to one already in the map add
-no cloud. Points are colored (turbo colormap, fixed range) by their height
-relative to the keyframe that observed them, which keeps colors meaningful on
+no cloud. Each keyframe has its own scene node, kept for the whole run: loop
+closures only move nodes, without uploading the clouds again. Points are
+colored (turbo colormap, fixed range) by their height relative to the keyframe
+that observed them, which keeps colors meaningful on
 slopes and on stacked floors. Hide LIO's own local map meanwhile
 (``MOLA_GUI_SHOW_LOCAL_MAP=false``): it does not show the corrections.
 
 ``camera`` scripts the GUI camera, e.g. for videos. From its own thread, at
 ``rate`` Hz, it blends two views: an overview of the whole map (top view fitted
 to the keyframes plus ``overview_margin``, at a fixed ``overview_azimuth``,
-zooming out as the map grows) and a close-up behind the vehicle (its current
-pose from the state estimator, mapped through the optimized pose of the front
-end frame). They alternate by a schedule (``overview_period``,
+zooming out as the map grows; the far clip plane is pushed back as needed) and
+a close-up behind the vehicle (its latest pose advertised by the front end as a
+localization update, mapped through the optimized pose of the front end frame). They alternate by a schedule (``overview_period``,
 ``closeup_period``, with smooth ``transition`` s; wall clock time), and only the
 overview is shown during the last ``final_overview`` seconds of data, if the
 data source tells its time (a dataset player). Every input is low-pass

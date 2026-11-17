@@ -419,8 +419,6 @@ private:
   /// Redraws the graph if it changed (spinOnce() thread).
   void gui_update();
   void gui_build_window();
-  /// Latest data stamp, for the scripted camera (no-op without a GUI).
-  void gui_on_new_data(const mrpt::Clock::time_point & stamp);
   /// Passes the scripted camera its inputs from the mapper state (and starts it).
   void gui_feed_camera(const GraphVisualizationParams & p);
   /// Builds the clouds of new keyframes and redraws the map if needed.

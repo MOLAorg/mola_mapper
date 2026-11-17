@@ -114,6 +114,9 @@ private:
   std::optional<mrpt::math::TPoint3D> vehicle_;
   std::optional<mrpt::math::TPoint3D> map_center_;
   std::optional<double> map_log_distance_;
+  // Close-up minus overview azimuth, kept continuous during a blend (re-wrapping
+  // it would flip its sign, and the camera, when both are nearly opposite):
+  std::optional<double> azimuth_diff_;
   // The close-up weight when the final overview started, and when:
   std::optional<std::pair<double, double>> final_start_;
 };

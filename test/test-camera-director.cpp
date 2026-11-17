@@ -146,6 +146,28 @@ void test_heading_wraps()
   ASSERT_NEAR_(mrpt::RAD2DEG(c.value().azimuth), 10.0, 0.01);
 }
 
+void test_opposite_azimuths()
+{
+  // Overview azimuth -90 deg; the vehicle heads ~-90 deg, so the close-up
+  // azimuth (behind it) is ~+90 deg: their difference wobbles around +-180 deg.
+  auto p = make_params();
+  p.heading_time_constant = 0.01;
+  CameraDirector d(p);
+  CameraDirector::Inputs in;
+  in.map = TBoundingBox({-100, -100, 0}, {100, 100, 0});
+  in.vehicle = TPoint3D(0, 0, 0);
+  double prev = 0;
+  for (int i = 0; i <= 1200; i++) {
+    const double t = 0.1 * i;
+    in.vehicle_yaw = -M_PI / 2 + 0.05 * std::sin(0.7 * t);
+    const auto c = d.step(t, in).value();
+    if (i > 0) {
+      ASSERT_LT_(std::abs(mrpt::math::wrapToPi(c.azimuth - prev)), 0.2);
+    }
+    prev = c.azimuth;
+  }
+}
+
 void test_yaml()
 {
   CameraDirectorParams p;
@@ -168,6 +190,7 @@ int main()
     test_overview_distance();
     test_blend();
     test_heading_wraps();
+    test_opposite_azimuths();
     test_yaml();
     std::cout << "All tests passed.\n";
     return 0;

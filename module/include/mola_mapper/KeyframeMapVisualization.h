@@ -59,8 +59,10 @@ struct KeyframeMapParams
  *  relative to the keyframe, in the map frame, which works on slopes and
  *  stacked floors alike.
  *
- *  Not thread-safe: use it from one thread. Clouds handed to the scene are
- *  never modified afterwards.
+ *  Not thread-safe: use it from one thread. The scene nodes (one per cloud)
+ *  are kept for the whole run, so the visualizer keeps their GPU buffers;
+ *  once handed to the scene, they and their clouds must only be changed from
+ *  the render thread (pose_changes(), point size).
  */
 class KeyframeMapVisualization
 {
@@ -92,10 +94,22 @@ public:
   /// Total points in the map.
   [[nodiscard]] std::size_t num_points() const { return num_points_; }
 
-  /** The scene: one CSetOfObjects per contributing keyframe, at its pose in
-   *  `poses_in_map`, holding its (shared, immutable) cloud. */
-  [[nodiscard]] mrpt::viz::CSetOfObjects::Ptr build_scene(
-    const std::vector<mrpt::poses::CPose3D> & poses_in_map) const;
+  /** The scene: a new container with the node of each contributing keyframe
+   *  (a CSetOfObjects holding its cloud, at its pose). The same nodes every
+   *  time: publish it again only when clouds were added. */
+  [[nodiscard]] mrpt::viz::CSetOfObjects::Ptr scene() const;
+
+  /// A node and its new pose.
+  struct NodePose
+  {
+    mrpt::viz::CSetOfObjects::Ptr node;
+    mrpt::poses::CPose3D pose;
+  };
+  /** The nodes whose keyframe moved since last drawn (e.g. after a loop
+   *  closure), with their new poses in `poses_in_map`, to apply from the
+   *  render thread. They are taken as drawn from now on. */
+  [[nodiscard]] std::vector<NodePose> pose_changes(
+    const std::vector<mrpt::poses::CPose3D> & poses_in_map);
 
   /// Point size of new clouds (existing ones are not changed).
   void set_point_size(float size) { params_.point_size = size; }
@@ -118,6 +132,8 @@ private:
   {
     std::size_t index = 0;
     mrpt::viz::CPointCloudColoured::Ptr cloud;
+    mrpt::viz::CSetOfObjects::Ptr node;
+    mrpt::poses::CPose3D drawn_pose;
   };
   std::vector<KeyframeCloud> clouds_;
 };

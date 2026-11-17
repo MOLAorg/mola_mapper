@@ -130,13 +130,15 @@ and a `T(0)` azimuth sigma below `georef_max_sigma_yaw_deg`.
   `T_map_<f>`, so LIO's local map and vehicle stay aligned with the corrected graph.
   Its redraw key: keyframes, solves, loop revision and rejected counts.
   Optional map (`show_keyframe_map`): clouds built once per contributing keyframe (shallow copy
-  of its observations under the lock, built off it, with a time budget per update), redrawn as
-  fresh wrappers at the current poses around the shared, never modified clouds (point size changes
-  run on the GUI thread). Optional scripted camera (`visualization.camera`, `CameraDirector`: map overview / close-up
+  of its observations under the lock, at most 100 per update, built off it on duplicated
+  observation objects, with a time budget), each in a scene node kept for the whole run (new
+  nodes are published with `update_3d_object`, moved nodes and point sizes are changed on the GUI
+  thread: fresh objects would make the visualizer upload all clouds again). Optional scripted camera (`visualization.camera`, `CameraDirector`: map overview / close-up
   blend): its own thread (`gui_start_camera()`, stopped in `onQuit()` and the destructor) calls
-  `update_viewport_camera()`; it uses only the Gui and the modules it holds: inputs from
-  `gui_feed_camera()` (keyframe box, data end via `Dataset_UI`), the vehicle pose from the state
-  estimator at the latest data stamp (`gui_on_new_data()`) in the front end frame (`T_map_f`). Known cost: one
+  `update_viewport_camera()`; it uses only the Gui and the visualizer: inputs from
+  `gui_feed_camera()` (keyframe box, data end via `Dataset_UI`), and the vehicle pose from the
+  localization updates of the front ends (`LocalizationSourceBase` subscription, passive) mapped
+  through the drawn `T_map_f`. Known cost: one
   `CSphere` per keyframe (fine up to a few thousand; very long sessions may need fewer).
 - Limitations: one front end chain (keyframes of interleaved sources only get weak edges);
   all keyframe observations stay in RAM; every solve is a full batch.

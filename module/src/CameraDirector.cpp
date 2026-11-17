@@ -147,10 +147,18 @@ std::optional<CameraDirector::Camera> CameraDirector::step(double t, const Input
   const auto cuCenter = vehicle_.value_or(ovCenter);
   const double cuLogDist = std::log(std::max(params_.closeup_distance, 1e-3));
 
+  // Continuous azimuth difference: free to re-wrap only while not blending.
+  const double diff = mrpt::math::wrapToPi(cuAzimuth - ovAzimuth);
+  if (!azimuth_diff_ || w <= 0.0 || w >= 1.0) {
+    azimuth_diff_ = diff;
+  } else {
+    *azimuth_diff_ += mrpt::math::wrapToPi(diff - *azimuth_diff_);
+  }
+
   Camera c;
   c.closeup = w;
   c.look_at = ovCenter + (cuCenter - ovCenter) * w;
-  c.azimuth = mrpt::math::wrapToPi(ovAzimuth + w * mrpt::math::wrapToPi(cuAzimuth - ovAzimuth));
+  c.azimuth = mrpt::math::wrapToPi(ovAzimuth + w * *azimuth_diff_);
   c.elevation = mrpt::DEG2RAD(
     params_.overview_elevation + w * (params_.closeup_elevation - params_.overview_elevation));
   c.distance = std::exp(ovLogDist + w * (cuLogDist - ovLogDist));

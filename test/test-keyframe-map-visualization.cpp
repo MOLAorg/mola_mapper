@@ -78,9 +78,8 @@ void test_spacing_and_poses()
   // Already considered keyframes are skipped:
   ASSERT_EQUAL_(m.add_keyframes(kfs, poses), 0U);
 
-  // The scene follows the current poses, and the clouds stay in the keyframe frame:
-  poses[3] = CPose3D(3.0, 1.0, 0.5, 0.1, 0, 0);
-  const auto scene = m.build_scene(poses);
+  // One node per cloud, at its keyframe pose, with the cloud in the keyframe frame:
+  const auto scene = m.scene();
   ASSERT_EQUAL_(scene->size(), 4U);
   const auto glKf = std::dynamic_pointer_cast<mrpt::viz::CSetOfObjects>(*std::next(scene->begin()));
   ASSERT_(glKf);
@@ -89,11 +88,21 @@ void test_spacing_and_poses()
   ASSERT_(cloud);
   ASSERT_EQUAL_(cloud->size(), 1U);
   ASSERT_NEAR_(cloud->getPoint3Df(0).x, 5.0f, 1e-3f);
-  // The same (immutable) clouds in every scene:
-  const auto scene2 = m.build_scene(poses);
-  const auto glKf2 =
-    std::dynamic_pointer_cast<mrpt::viz::CSetOfObjects>(*std::next(scene2->begin()));
-  ASSERT_(*glKf2->begin() == cloud);
+
+  // Nothing moved yet:
+  ASSERT_(m.pose_changes(poses).empty());
+  // A keyframe moves: only its node, once.
+  poses[3] = CPose3D(3.0, 1.0, 0.5, 0.1, 0, 0);
+  poses[4] = CPose3D(4.0, 2.0, 0.0, 0, 0, 0);  // not in the map
+  const auto moved = m.pose_changes(poses);
+  ASSERT_EQUAL_(moved.size(), 1U);
+  ASSERT_(moved.front().node == glKf);
+  ASSERT_NEAR_((moved.front().pose.asVectorVal() - poses[3].asVectorVal()).norm(), 0.0, 1e-9);
+  ASSERT_(m.pose_changes(poses).empty());
+
+  // The same nodes in every scene (the visualizer keeps their GPU buffers):
+  const auto scene2 = m.scene();
+  ASSERT_(*std::next(scene2->begin()) == glKf);
 }
 
 void test_range_filter()

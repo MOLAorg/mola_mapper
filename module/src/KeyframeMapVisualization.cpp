@@ -226,9 +226,25 @@ std::vector<mrpt::viz::CPointCloudColoured::Ptr> KeyframeMapVisualization::cloud
   return out;
 }
 
+namespace
+{
+/// Translation [m] and rotation [rad] between two poses.
+std::pair<double, double> pose_distance(
+  const mrpt::poses::CPose3D & a, const mrpt::poses::CPose3D & b)
+{
+  const auto d = b - a;
+  const auto R = d.getRotationMatrix();
+  const double c = std::clamp(0.5 * (R(0, 0) + R(1, 1) + R(2, 2) - 1.0), -1.0, 1.0);
+  return {d.translation().norm(), std::acos(c)};
+}
+}  // namespace
+
 mrpt::poses::CPose3D NodeAnimator::Glide::at(double t) const
 {
   const double u = duration > 0 ? std::clamp((t - start) / duration, 0.0, 1.0) : 1.0;
+  if (u >= 1.0) {
+    return to;
+  }
   const double eased = 0.5 * (1.0 - std::cos(M_PI * u));
   mrpt::math::TPose3D p;
   mrpt::math::slerp(from.asTPose(), to.asTPose(), eased, p);
@@ -240,14 +256,24 @@ void NodeAnimator::add(
   double now)
 {
   for (const auto & c : changes) {
-    const auto it = std::find_if(
-      glides_.begin(), glides_.end(), [&](const Glide & g) { return g.node == c.node; });
-    if (it != glides_.end()) {
-      // Still gliding: on from where it is now. Not started yet (e.g. waiting
-      // for the camera): it keeps waiting.
-      *it = {c.node, it->at(now), c.pose, std::max(start, it->start), duration};
+    if (const auto it = glides_.find(c.node.get()); it != glides_.end()) {
+      auto & g = it->second;
+      // A small retarget (e.g. the next solve): the same glide, a new end.
+      const auto [dt, dr] = pose_distance(g.to, c.pose);
+      const auto [lt, lr] = pose_distance(g.from, g.to);
+      if (
+        dt <= std::max(MIN_GLIDE_SHIFT, 0.1 * lt) && dr <= std::max(MIN_GLIDE_ROTATION, 0.1 * lr)) {
+        g.to = c.pose;
+      } else {
+        g = {c.node, g.at(now), c.pose, std::max(start, g.start), duration};
+      }
+      continue;
+    }
+    const auto [dt, dr] = pose_distance(c.from, c.pose);
+    if (dt < MIN_GLIDE_SHIFT && dr < MIN_GLIDE_ROTATION) {
+      glides_[c.node.get()] = {c.node, c.pose, c.pose, now, 0.0};  // at once
     } else {
-      glides_.push_back({c.node, c.from, c.pose, start, duration});
+      glides_[c.node.get()] = {c.node, c.from, c.pose, start, duration};
     }
   }
 }
@@ -256,18 +282,51 @@ std::vector<KeyframeMapVisualization::NodePose> NodeAnimator::step(double now)
 {
   std::vector<KeyframeMapVisualization::NodePose> out;
   for (auto it = glides_.begin(); it != glides_.end();) {
-    if (now < it->start) {
+    const auto & g = it->second;
+    if (now < g.start) {
       ++it;
       continue;
     }
-    out.push_back({it->node, it->at(now), it->from});
-    if (now >= it->start + it->duration) {
+    const auto p = g.at(now);
+    out.push_back({g.node, p, p});
+    if (now >= g.start + g.duration) {
       it = glides_.erase(it);
     } else {
       ++it;
     }
   }
   return out;
+}
+
+std::optional<mrpt::math::TBoundingBox> correction_region(
+  const std::vector<KeyframeMapVisualization::NodePose> & changes, double min_shift, double radius,
+  double * max_shift)
+{
+  std::vector<double> shifts;
+  shifts.reserve(changes.size());
+  std::size_t k = 0;
+  for (std::size_t i = 0; i < changes.size(); i++) {
+    shifts.push_back((changes[i].pose.translation() - changes[i].from.translation()).norm());
+    if (shifts[i] > shifts[k]) {
+      k = i;
+    }
+  }
+  const double maxShift = shifts.empty() ? 0.0 : shifts[k];
+  if (max_shift != nullptr) {
+    *max_shift = maxShift;
+  }
+  if (shifts.empty() || maxShift < min_shift) {
+    return std::nullopt;
+  }
+  const auto center = changes[k].pose.translation();
+  auto box = mrpt::math::TBoundingBox::PlusMinusInfinity();
+  for (std::size_t i = 0; i < changes.size(); i++) {
+    if (shifts[i] >= 0.5 * maxShift && (changes[i].pose.translation() - center).norm() <= radius) {
+      box.updateWithPoint(changes[i].pose.translation());
+      box.updateWithPoint(changes[i].from.translation());
+    }
+  }
+  return box;
 }
 
 }  // namespace mola::mapper

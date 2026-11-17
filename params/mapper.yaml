@@ -215,7 +215,7 @@ params:
       shot_min_distance: 40.0  # [m]
       shot_max_distance: 250.0  # [m]
       shot_min_interval: ${MOLA_MAPPER_VIZ_CAMERA_SHOT_MIN_INTERVAL|20.0}  # [s]
-      # CSV of the camera blend weights over time, e.g. to edit videos:
+      # Text file of the camera blend weights over time, e.g. to edit videos:
       timeline_file: "${MOLA_MAPPER_VIZ_CAMERA_TIMELINE|}"
       heading_time_constant: ${MOLA_MAPPER_VIZ_CAMERA_HEADING_TAU|3.0}  # [s]
       vehicle_time_constant: 0.5  # [s]

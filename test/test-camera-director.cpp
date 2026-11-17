@@ -212,10 +212,46 @@ void test_shots()
   ASSERT_LT_(c.distance, 0.2 * CameraDirector::overview_distance(p, *in.map, 0.0));
   // A later one is accepted:
   ASSERT_(d.start_shot(31.0, region));
+
+  // Never while one is on screen, even with a short minimum interval:
+  auto p2 = p;
+  p2.shot_min_interval = 1.0;
+  p2.shot_hold = 10.0;
+  CameraDirector d2(p2);
+  ASSERT_(d2.step(0.0, in));
+  ASSERT_(d2.start_shot(0.0, region));
+  ASSERT_(!d2.start_shot(5.0, region));
+  ASSERT_(d2.start_shot(15.0, region));  // after 2 + 10 + 2 s
   // None once the final overview started:
   in.final = true;
   ASSERT_(d.step(60.0, in));
   ASSERT_(!d.start_shot(90.0, region));
+}
+
+void test_shot_keeps_azimuth()
+{
+  // A shot held across a schedule transition (overview -> close-up): the
+  // azimuth stays where it was when the shot started.
+  auto p = make_params();  // overview 40 s, transition 4 s
+  p.shot_hold = 20.0;
+  p.heading_time_constant = 0.01;
+  CameraDirector d(p);
+  CameraDirector::Inputs in;
+  in.map = TBoundingBox({-100, -100, 0}, {100, 100, 0});
+  in.vehicle = TPoint3D(0, 0, 0);
+  in.vehicle_yaw = 0.0;  // close-up azimuth: 180 deg; overview: -90 deg
+  for (int i = 0; i <= 300; i++) {
+    (void)d.step(0.1 * i, in);
+  }
+  ASSERT_(d.start_shot(30.0, TBoundingBox({10, 10, 0}, {20, 20, 0})));
+  const double az0 = d.step(30.1, in).value().azimuth;
+  ASSERT_NEAR_(az0, -M_PI / 2, 1e-6);
+  for (int i = 302; i <= 520; i++) {
+    const auto c = d.step(0.1 * i, in).value();
+    if (c.shot >= 1.0) {
+      ASSERT_NEAR_(c.azimuth, az0, 1e-9);
+    }
+  }
 }
 
 void test_yaml()
@@ -242,6 +278,7 @@ int main()
     test_heading_wraps();
     test_opposite_azimuths();
     test_shots();
+    test_shot_keeps_azimuth();
     test_yaml();
     std::cout << "All tests passed.\n";
     return 0;

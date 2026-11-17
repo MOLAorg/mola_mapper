@@ -141,6 +141,68 @@ void test_glides()
   ASSERT_NEAR_((p[0].pose.asVectorVal() - c.asVectorVal()).norm(), 0.0, 1e-9);
 }
 
+void test_glides_many_and_small()
+{
+  using mola::mapper::NodeAnimator;
+  NodeAnimator anim;
+  // Many nodes finishing in the same tick:
+  std::vector<mola::mapper::KeyframeMapVisualization::NodePose> changes;
+  for (int i = 0; i < 5000; i++) {
+    changes.push_back(
+      {mrpt::viz::CSetOfObjects::Create(), CPose3D(i, 1, 0, 0, 0, 0), CPose3D(i, 0, 0, 0, 0, 0)});
+  }
+  anim.add(changes, 0.0, 1.0, 0.0);
+  ASSERT_EQUAL_(anim.size(), 5000U);
+  ASSERT_EQUAL_(anim.step(0.5).size(), 5000U);
+  ASSERT_EQUAL_(anim.step(1.0).size(), 5000U);
+  ASSERT_(anim.empty());
+
+  // Tiny changes (every solve) are applied at once:
+  auto node = mrpt::viz::CSetOfObjects::Create();
+  anim.add({{node, CPose3D(0.005, 0, 0, 0, 0, 0), CPose3D()}}, 5.0, 2.0, 1.0);
+  auto p = anim.step(1.0);
+  ASSERT_EQUAL_(p.size(), 1U);
+  ASSERT_NEAR_(p[0].pose.x(), 0.005, 1e-9);
+  ASSERT_(anim.empty());
+
+  // A small retarget while gliding keeps the glide (no restart of the easing):
+  anim.add({{node, CPose3D(10, 0, 0, 0, 0, 0), CPose3D()}}, 0.0, 2.0, 0.0);
+  ASSERT_NEAR_(anim.step(1.0)[0].pose.x(), 5.0, 1e-6);
+  anim.add({{node, CPose3D(10.2, 0, 0, 0, 0, 0), CPose3D(10, 0, 0, 0, 0, 0)}}, 1.0, 2.0, 1.0);
+  ASSERT_NEAR_(anim.step(1.0)[0].pose.x(), 5.1, 1e-6);  // half of the new motion, same timing
+  ASSERT_NEAR_(anim.step(2.0)[0].pose.x(), 10.2, 1e-9);
+  ASSERT_(anim.empty());
+
+  // Large rotations: the short way around (170 deg -> -170 deg via 180):
+  anim.add(
+    {{node, CPose3D(0, 0, 0, mrpt::DEG2RAD(-170.0), 0, 0),
+      CPose3D(0, 0, 0, mrpt::DEG2RAD(170.0), 0, 0)}},
+    0.0, 2.0, 0.0);
+  ASSERT_NEAR_(std::abs(anim.step(1.0)[0].pose.yaw()), M_PI, 1e-6);
+}
+
+void test_correction_region()
+{
+  using mola::mapper::correction_region;
+  std::vector<mola::mapper::KeyframeMapVisualization::NodePose> changes;
+  const auto add = [&](double x, double y, double shift) {
+    changes.push_back(
+      {mrpt::viz::CSetOfObjects::Create(), CPose3D(x + shift, y, 0, 0, 0, 0),
+       CPose3D(x, y, 0, 0, 0, 0)});
+  };
+  add(0, 0, 2.0);    // the largest
+  add(10, 0, 1.5);   // near, large enough
+  add(20, 0, 0.5);   // near, too small
+  add(500, 0, 1.8);  // large, but far away
+  double maxShift = 0;
+  const auto box = correction_region(changes, 0.5, 80.0, &maxShift);
+  ASSERT_(box);
+  ASSERT_NEAR_(maxShift, 2.0, 1e-9);
+  ASSERT_NEAR_(box->min.x, 0.0, 1e-9);  // old position included
+  ASSERT_NEAR_(box->max.x, 11.5, 1e-9);
+  ASSERT_(!correction_region(changes, 3.0, 80.0));
+}
+
 void test_range_filter()
 {
   KeyframeMapParams p;
@@ -190,6 +252,8 @@ int main()
   try {
     test_spacing_and_poses();
     test_glides();
+    test_glides_many_and_small();
+    test_correction_region();
     test_range_filter();
     test_colors();
     std::cout << "All tests passed.\n";

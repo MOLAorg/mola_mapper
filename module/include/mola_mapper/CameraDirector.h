@@ -77,7 +77,7 @@ struct CameraDirectorParams
   double shot_max_distance = 250.0;  //!< [m]
   double shot_min_interval = 20.0;   //!< [s] between shot starts
 
-  /// If not empty, the camera blend weights are written here over time (CSV),
+  /// If not empty, the camera blend weights are written here over time (text),
   /// e.g. to speed up a video differently in each part.
   std::string timeline_file;
 
@@ -151,8 +151,13 @@ private:
     double start = 0;
     mrpt::math::TPoint3D center;
     double distance = 0;
+    double azimuth = 0;  //!< the camera azimuth when it started, kept
   };
   std::optional<Shot> shot_;
+  // Shot minus schedule azimuth, kept continuous while blending:
+  std::optional<double> shot_azimuth_diff_;
+  // The last camera azimuth given:
+  std::optional<double> last_azimuth_;
 };
 
 }  // namespace mola::mapper

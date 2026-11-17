@@ -101,16 +101,21 @@ double CameraDirector::overview_distance(
 std::optional<double> CameraDirector::start_shot(double t, const mrpt::math::TBoundingBox & region)
 {
   // None during the final overview (the whole map must be seen at the end),
-  // nor too soon after the previous one:
-  if (final_start_ || (shot_ && t - shot_->start < params_.shot_min_interval)) {
+  // while one is on screen, nor too soon after the previous one:
+  if (
+    final_start_ || shot_weight_at(t) > 0 ||
+    (shot_ && t - shot_->start < params_.shot_min_interval)) {
     return std::nullopt;
   }
-  // Fitted as an overview of the region, with its own margin and limits:
+  // The camera keeps its current azimuth during the shot; the region is
+  // fitted as an overview from it, with its own margin and limits:
+  const double azimuth = last_azimuth_.value_or(mrpt::DEG2RAD(params_.overview_azimuth));
   auto fit = params_;
   fit.overview_margin = params_.shot_margin;
   fit.overview_min_distance = params_.shot_min_distance;
-  const double d = overview_distance(fit, region, heading_az_.value_or(0.0));
-  shot_ = Shot{t, (region.min + region.max) * 0.5, std::min(d, params_.shot_max_distance)};
+  const double d = overview_distance(fit, region, azimuth);
+  shot_ = Shot{t, (region.min + region.max) * 0.5, std::min(d, params_.shot_max_distance), azimuth};
+  shot_azimuth_diff_.reset();
   return t + params_.transition;
 }
 
@@ -206,15 +211,26 @@ std::optional<CameraDirector::Camera> CameraDirector::step(double t, const Input
     params_.overview_elevation + w * (params_.closeup_elevation - params_.overview_elevation));
   c.distance = std::exp(ovLogDist + w * (cuLogDist - ovLogDist));
 
-  // A correction shot, over the rest (same azimuth: no spinning around):
+  // A correction shot, over the rest, at the azimuth the camera had when it
+  // started (blended continuously: no spinning around, no flips):
   if (const double s = shot_weight_at(t); s > 0 && shot_) {
     c.shot = s;
+    const double shotDiff = mrpt::math::wrapToPi(shot_->azimuth - c.azimuth);
+    if (!shot_azimuth_diff_ || s >= 1.0) {
+      shot_azimuth_diff_ = shotDiff;
+    } else {
+      *shot_azimuth_diff_ += mrpt::math::wrapToPi(shotDiff - *shot_azimuth_diff_);
+    }
+    c.azimuth = mrpt::math::wrapToPi(c.azimuth + s * *shot_azimuth_diff_);
     c.look_at = c.look_at + (shot_->center - c.look_at) * s;
     c.elevation += s * (mrpt::DEG2RAD(params_.shot_elevation) - c.elevation);
     c.distance = std::exp(
       std::log(c.distance) +
       s * (std::log(std::max(shot_->distance, 1e-3)) - std::log(c.distance)));
+  } else {
+    shot_azimuth_diff_.reset();
   }
+  last_azimuth_ = c.azimuth;
   return c;
 }
 

@@ -475,11 +475,15 @@ overview is shown during the last ``final_overview`` seconds of data, if the
 data source tells its time (a dataset player). Every input is low-pass
 filtered, so loop closure corrections do not make the camera jump. A map
 correction larger than ``shot_min_correction`` meters gets a *correction shot*:
-the camera flies to the corrected region, the map glides into place once it is
-there, and after ``shot_hold`` seconds it flies back to the schedule. With
-``timeline_file``, the blend weights of the camera (close-up, shot) are written
-over time with the wall clock, e.g. to speed up a recorded video differently in
-each part. Turn off the
+the camera flies to the corrected region (around the keyframe that moved
+most), keeping its azimuth, the map glides into place once it is there, and
+after ``shot_hold`` seconds it flies back to the schedule (one shot at a time,
+none during the final overview). Shots need the map shown with
+``keyframe_map_glide`` > 0. The keyframe graph and the front end view are
+corrected at once; only the map clouds glide. With ``timeline_file``, the blend
+weights of the camera (close-up, shot) are written over time with the wall
+clock (a space separated text file; shots as comment lines), e.g. to speed up a
+recorded video differently in each part. Turn off the
 front end camera follow meanwhile (LIO: ``MOLA_GUI_CAMERA_FOLLOWS_VEHICLE=false``).
 Both the map and the camera can also be toggled in the View tab of the
 ``mola_mapper`` window.

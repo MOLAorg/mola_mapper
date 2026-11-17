@@ -48,6 +48,7 @@
   <exec_depend>mola_viz</exec_depend>
   <exec_depend>mola_lidar_odometry</exec_depend>
   <exec_depend>mola_state_estimation_smoother</exec_depend>
+  <exec_depend>mola_input_rosbag1</exec_depend>
   <exec_depend>mola_input_rosbag2</exec_depend>
 
   <!-- Test datasets to run on them: -->

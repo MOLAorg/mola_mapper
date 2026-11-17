@@ -1,0 +1,168 @@
+# =============================================================================
+# A complete LiDAR SLAM system from ROS 1 bags:
+#  - mola::LidarOdometry (LIO): the front end. It queries the state estimator
+#    for its motion prior, and pushes its keyframes to the mapper.
+#  - mola::state_estimation_smoother::StateEstimationSmoother: the state
+#    estimator LIO queries (its only mola::NavStateFilter).
+#  - mola::mapper::Mapper: the global back end: keyframe map with GNSS and
+#    gravity, loop closures, global pose graph, geo-reference and outputs; it can
+#    feed its corrections back to the state estimator.
+#
+# Usage: for a dataset with a profile in mola_lidar_odometry, its launcher sets
+# everything, e.g. `mola-mapper-gui-vbr /path/to/sequence/`. By hand:
+#   export MOLA_INPUT_ROSBAG1=/path/to/bag   # up to four more: MOLA_INPUT_ROSBAG1_2..5
+#   export MOLA_LIDAR_TOPIC=/ouster/points   MOLA_IMU_TOPIC=/imu
+#   export MOLA_GNSS_TOPIC=/gps/fix          # optional
+#   export MOLA_CAMERA_TOPIC=/camera/image   # optional, label "camera" (also _1, _2)
+#   mola-cli $(ros2 pkg prefix mola_mapper)/share/mola_mapper/mola-cli-launchs/lio_smoother_mapper_from_rosbag1.yaml
+# The input part (topics, fixed sensor poses, joint bags) is the one of
+# mola_lidar_odometry's lidar_odometry_from_rosbag1.yaml, so the same variables
+# apply.
+#
+# Main switches (environment variables):
+#   MOLA_WITH_MAPPER=false        LIO + state estimator only
+#   MOLA_MAPPER_LOOP_CLOSURE      loop closure detection (default: true)
+#   MOLA_MAPPER_OUTPUT_TUM, _GEOREF, _SIMPLEMAP, _LOOPS, _SE_TUM, _SE_GEOREF
+#   See params/mapper.yaml for the rest.
+# =============================================================================
+
+modules:
+  - name: viz
+    type: ${MOLA_GUI_MODULE|mola::MolaVizImGui}
+    enabled: ${MOLA_WITH_GUI|true}
+    verbosity_level: "${MOLA_VERBOSITY_MOLA_VIZ|INFO}"
+    params:
+      imgui_app_name: lio_smoother_mapper
+
+  - name: state_estimation
+    type: mola::state_estimation_smoother::StateEstimationSmoother
+    verbosity_level: "${MOLA_VERBOSITY_MOLA_STATE_ESTIMATOR|INFO}"
+    raw_data_source: "dataset_input"
+    params: "${MOLA_STATE_ESTIMATOR_YAML|$(ros2 pkg prefix mola_state_estimation_smoother)/share/mola_state_estimation_smoother/params/state-estimation-smoother.yaml}"
+
+  - name: mapper
+    type: mola::mapper::Mapper
+    enabled: ${MOLA_WITH_MAPPER|true}
+    execution_rate: 2 # Hz (GUI updates)
+    verbosity_level: "${MOLA_VERBOSITY_MAPPER|INFO}"
+    raw_data_source: "dataset_input"
+    params: "${MOLA_MAPPER_YAML|../params/mapper.yaml}"
+
+  - name: lidar_odom
+    type: mola::LidarOdometry
+    verbosity_level: "${MOLA_VERBOSITY_MOLA_LO|INFO}"
+    raw_data_source: "dataset_input"
+    params: "${MOLA_ODOMETRY_PIPELINE_YAML|$(ros2 pkg prefix mola_lidar_odometry)/share/mola_lidar_odometry/pipelines/lidar3d-gicp.yaml}"
+
+  - type: mola::Rosbag1Dataset
+    name: dataset_input
+    verbosity_level: "${MOLA_VERBOSITY_ROSBAG1|INFO}"
+    export_to_rawlog: ${MOLA_ROS1BAG_EXPORT_TO_RAWLOG_FILE|''}
+
+    # In Rosbag1Dataset, this execution rate (Hz) determines the
+    # maximum rate of publishing topics from the bag file.
+    # If a message in the bag has an actually rate higher than this, their
+    # messages will be still sent out with the correct timestamps, but physically
+    # in bursts.
+    execution_rate: 50 # Hz
+    #verbosity_level: INFO
+    quit_mola_app_on_dataset_end: ${MOLA_QUIT_ON_DATASET_END|false}
+
+    # Optional windows with the raw sensor streams (needs the GUI):
+    gui_preview_sensors:
+      - raw_sensor_label: "${MOLA_LIDAR_NAME|lidar}"
+        decimation: 1
+        enabled: ${MOLA_GUI_PREVIEW_SENSORS|false}
+        win_pos: 5 5 400 400
+      - raw_sensor_label: "${MOLA_CAMERA_SENSOR_NAME|camera}"
+        decimation: 1
+        enabled: ${MOLA_GUI_PREVIEW_SENSORS|false}
+        win_pos: 5 370 600 200
+
+    params:
+      # We use an environment variable to force the user to specify a bag file.
+      # Optionally, up to four additional bags can be replayed jointly with
+      # the first one, as a single merged stream: some datasets split /tf,
+      # the IMU, a camera or the odometry into their own bag files. Empty
+      # slots are ignored.
+      rosbag_filename:
+        - ${MOLA_INPUT_ROSBAG1}
+        - ${MOLA_INPUT_ROSBAG1_2|}
+        - ${MOLA_INPUT_ROSBAG1_3|}
+        - ${MOLA_INPUT_ROSBAG1_4|}
+        - ${MOLA_INPUT_ROSBAG1_5|}
+      time_warp_scale: ${MOLA_TIME_WARP|1.0}
+      start_paused: ${MOLA_DATASET_START_PAUSED|false}
+
+      base_link_frame_id: "${MOLA_TF_BASE_LINK|base_link}"
+      # Optional ground-truth trajectory (TUM format), drawn by the GUI:
+      ground_truth_tum_file: "${MOLA_GROUND_TRUTH_TUM_FILE|}"
+
+      # Note: /tf and /tf_static topic names are fixed in Rosbag1Dataset.
+      # All /tf_static transforms are pre-scanned at startup so sensor poses
+      # are available immediately, regardless of message ordering in the bag.
+
+      # 'sensors' contains maps from output "sensorLabel"s, to the
+      # configuration of that data source (mainly, 'type', 'topic'):
+      # If no 'sensors' entry is given, all bag topics will be exposed
+      # to the MOLA subsystem. Note that if you want to override sensor poses
+      # (or if you do not have /tf), it is mandatory to define 'sensors' and
+      # define 'fixed_sensor_pose' for each sensor here:
+      sensors:
+        - topic: ${MOLA_LIDAR_TOPIC|'/ouster/points'}
+          type: CObservationPointCloud
+          sensorLabel: "${MOLA_LIDAR_NAME|lidar}"
+          # If present, this will override whatever /tf tells about the sensor pose:
+          fixed_sensor_pose: "${LIDAR_POSE_X|0} ${LIDAR_POSE_Y|0} ${LIDAR_POSE_Z|0} ${LIDAR_POSE_YAW|0} ${LIDAR_POSE_PITCH|0} ${LIDAR_POSE_ROLL|0}" # 'x y z yaw_deg pitch_deg roll_deg'
+          use_fixed_sensor_pose: ${MOLA_USE_FIXED_LIDAR_POSE|false}
+          # Constant correction [s] added to the LiDAR stamps, e.g. for a driver
+          # that stamps each cloud at the end of its sweep:
+          time_offset: ${MOLA_LIDAR_TIME_OFFSET|0.0}
+
+        # For GPS messages of type 'sensor_msgs/NavSatFix'
+        - topic: ${MOLA_GNSS_TOPIC|'/gps'}
+          sensorLabel: "gps"
+          #type: CObservationGPS  # This will be determined automatically by Rosbag1Dataset
+          is_optional: true
+          # If present, this will override whatever /tf tells about the sensor pose:
+          fixed_sensor_pose: "${GNSS_POSE_X|0} ${GNSS_POSE_Y|0} ${GNSS_POSE_Z|0} ${GNSS_POSE_YAW|0} ${GNSS_POSE_PITCH|0} ${GNSS_POSE_ROLL|0}" # 'x y z yaw_deg pitch_deg roll_deg'
+          use_fixed_sensor_pose: ${MOLA_USE_FIXED_GNSS_POSE|false}
+
+        - topic: ${MOLA_IMU_TOPIC|'/imu'}
+          sensorLabel: "imu"
+          type: CObservationIMU
+          # If present, this will override whatever /tf tells about the sensor pose:
+          fixed_sensor_pose: "${IMU_POSE_X|0} ${IMU_POSE_Y|0} ${IMU_POSE_Z|0} ${IMU_POSE_YAW|0} ${IMU_POSE_PITCH|0} ${IMU_POSE_ROLL|0}" # 'x y z yaw_deg pitch_deg roll_deg'
+          use_fixed_sensor_pose: ${MOLA_USE_FIXED_IMU_POSE|false}
+
+        - topic: ${MOLA_CAMERA_TOPIC|''}
+          is_optional: true
+          sensorLabel: ${MOLA_CAMERA_SENSOR_NAME|camera}
+          type: CObservationImage
+          # If present, this will override whatever /tf tells about the sensor pose:
+          fixed_sensor_pose: "${CAMERA_POSE_X|0} ${CAMERA_POSE_Y|0} ${CAMERA_POSE_Z|0} ${CAMERA_POSE_YAW|0} ${CAMERA_POSE_PITCH|0} ${CAMERA_POSE_ROLL|0}" # 'x y z yaw_deg pitch_deg roll_deg'
+          use_fixed_sensor_pose: ${MOLA_USE_FIXED_CAMERA_POSE|false}
+        # More cameras, e.g. stored in simplemap keyframes with
+        # MOLA_SIMPLEMAP_ATTACH_LABEL='camera.*':
+        - topic: ${MOLA_CAMERA_TOPIC_1|''}
+          is_optional: true
+          sensorLabel: ${MOLA_CAMERA_SENSOR_NAME_1|camera_1}
+          type: CObservationImage
+          fixed_sensor_pose: "${CAMERA_1_POSE_X|0} ${CAMERA_1_POSE_Y|0} ${CAMERA_1_POSE_Z|0} ${CAMERA_1_POSE_YAW|0} ${CAMERA_1_POSE_PITCH|0} ${CAMERA_1_POSE_ROLL|0}" # 'x y z yaw_deg pitch_deg roll_deg'
+          use_fixed_sensor_pose: ${MOLA_USE_FIXED_CAMERA_1_POSE|false}
+        - topic: ${MOLA_CAMERA_TOPIC_2|''}
+          is_optional: true
+          sensorLabel: ${MOLA_CAMERA_SENSOR_NAME_2|camera_2}
+          type: CObservationImage
+          fixed_sensor_pose: "${CAMERA_2_POSE_X|0} ${CAMERA_2_POSE_Y|0} ${CAMERA_2_POSE_Z|0} ${CAMERA_2_POSE_YAW|0} ${CAMERA_2_POSE_PITCH|0} ${CAMERA_2_POSE_ROLL|0}" # 'x y z yaw_deg pitch_deg roll_deg'
+          use_fixed_sensor_pose: ${MOLA_USE_FIXED_CAMERA_2_POSE|false}
+
+        # Wheel/robot odometry (disabled by default). CObservationOdometry is
+        # planar: (x, y, yaw) plus a 2D twist. For a 3D odometry source
+        # (legged robot, VIO, aerial platform) set
+        # MOLA_ODOMETRY_OBS_CLASS=CObservationRobotPose to keep z, roll,
+        # pitch and the source's 6x6 covariance, matching the offline CLI's
+        # dataset_from_rosbag1()/dataset_from_rosbag2().
+        - topic: ${MOLA_ODOMETRY_TOPIC|''}
+          sensorLabel: ${MOLA_ODOM_SENSOR_LABEL|odom_wheels}
+          type: ${MOLA_ODOMETRY_OBS_CLASS|CObservationOdometry}

@@ -59,6 +59,7 @@ void GraphVisualizationParams::loadFrom(const mrpt::containers::yaml & cfg)
 {
   MCP_LOAD_OPT(cfg, keyframe_sphere_radius);
   MCP_LOAD_OPT(cfg, odometry_edge_width);
+  MCP_LOAD_OPT(cfg, odometry_edge_max_length);
   MCP_LOAD_OPT(cfg, loop_edge_width);
   MCP_LOAD_OPT(cfg, loop_edge_lift);
   MCP_LOAD_OPT(cfg, show_rejected_loops);
@@ -85,9 +86,15 @@ mrpt::viz::CSetOfObjects::Ptr build_graph_visualization(
   if (p.odometry_edge_width > 0) {
     GraphVisualizationInput::Pairs chainEdges;
     for (std::size_t i = 1; i < kfs.size(); i++) {
-      if (i < in.chain.size() && in.chain[i] == in.chain[i - 1]) {
-        chainEdges.emplace_back(i - 1, i);
+      if (i >= in.chain.size() || in.chain[i] != in.chain[i - 1]) {
+        continue;
       }
+      if (
+        p.odometry_edge_max_length > 0 &&
+        (kfs[i] - kfs[i - 1]).norm() > p.odometry_edge_max_length) {
+        continue;
+      }
+      chainEdges.emplace_back(i - 1, i);
     }
     scene->insert(make_lines(kfs, chainEdges, p.odometry_edge_width, p.odometry_edge_color));
   }

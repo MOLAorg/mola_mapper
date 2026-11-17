@@ -108,6 +108,19 @@ void test_defaults()
   ASSERT_NEAR_(z1, 0.0, 1e-6);
 }
 
+void test_odometry_edge_max_length()
+{
+  auto in = make_input();
+  // A 20 m jump between keyframes 4 and 5 (a revisit with no keyframes):
+  for (std::size_t i = 5; i < 10; i++) {
+    in.keyframes[i].x += 20.0;
+  }
+  GraphVisualizationParams p;
+  ASSERT_EQUAL_(count(*build_graph_visualization(in, p)).lines[0]->size(), 12U);
+  p.odometry_edge_max_length = 0;
+  ASSERT_EQUAL_(count(*build_graph_visualization(in, p)).lines[0]->size(), 13U);
+}
+
 void test_options()
 {
   GraphVisualizationParams p;
@@ -177,6 +190,7 @@ int main()
   try {
     test_defaults();
     test_options();
+    test_odometry_edge_max_length();
     test_params_from_yaml();
     test_front_end_frames();
     std::cout << "All tests passed.\n";

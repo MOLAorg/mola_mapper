@@ -1,0 +1,67 @@
+#!/bin/bash
+# LIO + state estimator (smoother) + mola_mapper, live, on a dataset with a
+# profile in mola_lidar_odometry (the ones its mola-lo-gui-<name> launchers use).
+#
+# Usage: mola-mapper-gui-dataset <profile> <dataset arguments...>
+#        (or the per-dataset launchers: mola-mapper-gui-<profile> <dataset arguments...>)
+#
+# The profile describes the dataset (files, topics, sensor poses, pipeline); this
+# script runs it through the mola_mapper launch file for the same input type
+# (lio_smoother_mapper_from_<input>.yaml). Any MOLA_* variable set by the caller
+# wins, e.g. MOLA_WITH_GUI=false MOLA_QUIT_ON_DATASET_END=true for a headless run,
+# MOLA_MAPPER_LOOP_CLOSURE=false, or MOLA_MAPPER_OUTPUT_TUM=out.tum.
+set -euo pipefail
+
+if [ "$#" -lt 1 ]; then
+  echo "Usage: $(basename "$0") <profile> <dataset arguments...>" >&2
+  exit 1
+fi
+profile=$1
+shift
+
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)
+mapper_launchs="$script_dir/../share/mola_mapper/mola-cli-launchs"
+
+# mola_lidar_odometry's dataset profiles, from the ament prefixes:
+lo_lib=""
+IFS=: read -r -a prefixes <<< "${AMENT_PREFIX_PATH:-}"
+for p in "${prefixes[@]}"; do
+  if [ -f "$p/share/mola_lidar_odometry/scripts-lib/dataset-profile.sh" ]; then
+    lo_lib="$p/share/mola_lidar_odometry/scripts-lib/dataset-profile.sh"
+    break
+  fi
+done
+if [ -z "$lo_lib" ]; then
+  echo "Error: mola_lidar_odometry's dataset profiles were not found (is its workspace sourced?)." >&2
+  exit 1
+fi
+# shellcheck source=/dev/null
+source "$lo_lib"
+
+# The mapper launch files run the smoother (the mapper feeds its corrections
+# back to it). Chosen before the profile, so its smoother defaults apply:
+smoother=mola::state_estimation_smoother::StateEstimationSmoother
+: "${MOLA_STATE_ESTIMATOR:=$smoother}"
+export MOLA_STATE_ESTIMATOR
+
+MOLA_LO_MODE=gui
+mola_lo_load_profile "$profile" "$@" || exit $?
+mola_lo_use_smoother || exit $?
+if [ "$MOLA_STATE_ESTIMATOR" != "$smoother" ]; then
+  echo "Error: the mola_mapper launch files need the smoother as state estimator, not '$MOLA_STATE_ESTIMATOR'." >&2
+  exit 1
+fi
+
+# The profile names a LIO launch file, lidar_odometry_from_<input>.yaml: run the
+# mapper one for the same input.
+input=${MOLA_LO_LAUNCH_FILE#lidar_odometry_from_}
+launch="$mapper_launchs/lio_smoother_mapper_from_$input"
+if [ ! -f "$launch" ]; then
+  echo "Error: no mola_mapper launch file for the input of profile '$profile' ($launch)." >&2
+  echo "Available: $(cd "$mapper_launchs" && ls lio_smoother_mapper_from_*.yaml | tr '\n' ' ')" >&2
+  exit 1
+fi
+
+MOLA_ODOMETRY_PIPELINE_YAML=$(mola_lo_pipeline_yaml)
+export MOLA_ODOMETRY_PIPELINE_YAML
+exec mola-cli "$launch" "${MOLA_LO_EXTRA_ARGS[@]}"

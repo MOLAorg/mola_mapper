@@ -115,6 +115,19 @@ install(
     share/${PROJECT_NAME}
 )
 
+# Live mapper launchers for the datasets profiled in mola_lidar_odometry
+# (mola-mapper-gui-<profile>), for the profiles whose input has a launch file here:
+set(MOLA_MAPPER_DATASET_PROFILES
+  conslam fomo geode grandtour hilti2022 kitti newer-college ntu-viral rosbag1 rosbag2 vbr
+)
+install(PROGRAMS scripts/mola-mapper-gui-dataset DESTINATION bin)
+foreach(PROFILE ${MOLA_MAPPER_DATASET_PROFILES})
+  configure_file(
+    scripts/mola-mapper-gui-profile.in ${CMAKE_CURRENT_BINARY_DIR}/mola-mapper-gui-${PROFILE} @ONLY
+  )
+  install(PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/mola-mapper-gui-${PROFILE} DESTINATION bin)
+endforeach()
+
 # -----------------------------------------------------------------------------
 #  ROS2
 # -----------------------------------------------------------------------------

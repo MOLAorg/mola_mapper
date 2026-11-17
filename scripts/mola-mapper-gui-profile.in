@@ -1,0 +1,4 @@
+#!/bin/bash
+# LIO + state estimator + mola_mapper, live, on the @PROFILE@ dataset (its
+# mola_lidar_odometry profile). See mola-mapper-gui-dataset.
+exec "$(dirname -- "${BASH_SOURCE[0]}")/mola-mapper-gui-dataset" @PROFILE@ "$@"

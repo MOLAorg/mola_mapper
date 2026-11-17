@@ -316,8 +316,7 @@ with an environment variable (shown in parentheses below).
    (repetitive structures); ``kiss`` (KISS-Matcher, if built with it) or
    ``none`` (the current graph estimate). ``bev`` uses the roll and pitch of
    the keyframe poses: absolute with LiDAR-inertial odometry; with LiDAR-only
-   odometry on mostly level ground (e.g. KITTI) the estimated ones work too, or
-   both clouds can be taken as level (``LC_BEV_ASSUME_LEVEL=true``).
+   odometry (e.g. KITTI) the estimated ones work too.
 
    Each detected loop between keyframes of the same front end chain is compared
    with the odometry between them: if they disagree by more than a floor plus a

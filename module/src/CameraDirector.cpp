@@ -107,9 +107,9 @@ std::optional<CameraDirector::Camera> CameraDirector::step(double t, const Input
     }
   }
   if (in.vehicle) {
-    vehicle_ = vehicle_ ? *vehicle_ + (*in.vehicle - *vehicle_) *
-                                        gain(dt, params_.vehicle_time_constant)
-                        : *in.vehicle;
+    vehicle_ = vehicle_
+                 ? *vehicle_ + (*in.vehicle - *vehicle_) * gain(dt, params_.vehicle_time_constant)
+                 : *in.vehicle;
   }
 
   // Overview: the whole map.

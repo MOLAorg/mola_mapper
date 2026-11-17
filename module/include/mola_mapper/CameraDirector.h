@@ -75,7 +75,7 @@ struct CameraDirectorParams
  *  jumps (e.g. on loop closure corrections or angle wrap-arounds). */
 class CameraDirector
 {
- public:
+public:
   explicit CameraDirector(const CameraDirectorParams & p) : params_(p) {}
 
   struct Inputs
@@ -106,7 +106,7 @@ class CameraDirector
   [[nodiscard]] static double overview_distance(
     const CameraDirectorParams & p, const mrpt::math::TBoundingBox & box, double azimuth);
 
- private:
+private:
   CameraDirectorParams params_;
   double last_t_ = 0;
   // Filtered inputs:

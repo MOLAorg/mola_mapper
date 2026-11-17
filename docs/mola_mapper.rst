@@ -395,7 +395,10 @@ With a visualizer module in the launch (``MOLA_WITH_GUI=true``), the mapper draw
 its keyframe graph in ``{map}``, refreshed when it changes:
 
 * keyframes as small spheres (orange);
-* edges between consecutive keyframes of each front end (blue lines);
+* edges between consecutive keyframes of each front end (blue lines), except
+  between keyframes farther apart than ``odometry_edge_max_length`` (no
+  keyframes are created while revisiting mapped areas, and such edges would
+  cross the map);
 * accepted loop closures (green, thicker lines), as bridges over their two
   keyframes, which overlap once the loop is closed;
 * optionally, rejected loop candidates (red: by the consistency check, gray: by
@@ -411,6 +414,7 @@ section of ``params/mapper.yaml``:
    visualization:
      keyframe_sphere_radius: 0.10   # [m] (0: hidden)    (MOLA_MAPPER_VIZ_KF_RADIUS)
      odometry_edge_width: 2.0       # [px] (0: hidden)   (MOLA_MAPPER_VIZ_ODOM_EDGE_WIDTH)
+     odometry_edge_max_length: 15.0 # [m] (0: no limit)  (MOLA_MAPPER_VIZ_ODOM_EDGE_MAX_LENGTH)
      loop_edge_width: 4.0           # [px] (0: hidden)   (MOLA_MAPPER_VIZ_LOOP_EDGE_WIDTH)
      loop_edge_lift: 1.0            # [m] bridge height  (MOLA_MAPPER_VIZ_LOOP_EDGE_LIFT)
      show_rejected_loops: false     # (MOLA_MAPPER_VIZ_SHOW_REJECTED_LOOPS)

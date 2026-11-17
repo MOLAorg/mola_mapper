@@ -131,6 +131,14 @@ void Mapper::gui_build_window()
     odoWidth.on_change = setter(&GraphVisualizationParams::odometry_edge_width);
     tab.widgets.emplace_back(odoWidth);
 
+    SliderFloat odoMaxLength = radius;
+    odoMaxLength.label = "Odometry edges, max length [m]";
+    odoMaxLength.initial_value = p.odometry_edge_max_length;
+    odoMaxLength.max_value = 100.0f;
+    odoMaxLength.format_string = "%.0f";
+    odoMaxLength.on_change = setter(&GraphVisualizationParams::odometry_edge_max_length);
+    tab.widgets.emplace_back(odoMaxLength);
+
     SliderFloat loopWidth = odoWidth;
     loopWidth.label = "Loop closures [px]";
     loopWidth.initial_value = p.loop_edge_width;

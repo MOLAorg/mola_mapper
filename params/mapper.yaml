@@ -158,6 +158,9 @@ params:
   visualization:
     keyframe_sphere_radius: ${MOLA_MAPPER_VIZ_KF_RADIUS|0.10}  # [m] (0: hidden)
     odometry_edge_width: ${MOLA_MAPPER_VIZ_ODOM_EDGE_WIDTH|2.0}  # [px] (0: hidden)
+    # Consecutive keyframes farther apart are not joined (revisits create no
+    # keyframes; 0: no limit):
+    odometry_edge_max_length: ${MOLA_MAPPER_VIZ_ODOM_EDGE_MAX_LENGTH|15.0}  # [m]
     loop_edge_width: ${MOLA_MAPPER_VIZ_LOOP_EDGE_WIDTH|4.0}  # [px] (0: hidden)
     # Loops drawn as a bridge this high over their keyframes (once closed, they
     # overlap; 0: straight lines):

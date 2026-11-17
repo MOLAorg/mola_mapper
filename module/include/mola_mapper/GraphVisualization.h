@@ -40,6 +40,10 @@ struct GraphVisualizationParams
   float keyframe_sphere_radius = 0.10f;
   /// Edges between consecutive keyframes, line width [px] (0: not shown).
   float odometry_edge_width = 2.0f;
+  /** Consecutive keyframes farther apart than this [m] are not joined (0: no
+   *  limit): no keyframes are created while revisiting mapped areas, and such
+   *  long edges would cross the map. */
+  float odometry_edge_max_length = 15.0f;
   /// Accepted loop closures, line width [px] (0: not shown).
   float loop_edge_width = 4.0f;
   /** Loop edges drawn as a bridge this high [m] over their keyframes (0: a

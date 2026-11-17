@@ -426,10 +426,13 @@ private:
     const GraphVisualizationParams & p, bool redraw,
     const std::vector<KeyframeMapVisualization::KeyframeData> & newKeyframes,
     const std::vector<mrpt::poses::CPose3D> & poses);
-  /// Starts the scripted camera thread.
-  void gui_start_camera(const CameraDirectorParams & cp);
-  /// Stops the scripted camera thread, if running.
-  void gui_stop_camera();
+  /// Passes map corrections to the animation thread (glides, camera shots).
+  void gui_queue_correction(
+    const GraphVisualizationParams & p, std::vector<KeyframeMapVisualization::NodePose> && moved);
+  /// Starts the GUI animation thread (scripted camera, map glides).
+  void gui_start_animation(const GraphVisualizationParams & p);
+  /// Stops the GUI animation thread, if running.
+  void gui_stop_animation();
   /** @} */
 
   void publish_georeference(const mola::Georeferencing & g);

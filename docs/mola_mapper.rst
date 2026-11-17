@@ -428,6 +428,7 @@ section of ``params/mapper.yaml``:
      keyframe_map_color_min: -2.0   # [m]  (MOLA_MAPPER_VIZ_KEYFRAME_MAP_COLOR_MIN)
      keyframe_map_color_max: 12.0   # [m]  (MOLA_MAPPER_VIZ_KEYFRAME_MAP_COLOR_MAX)
      keyframe_map_point_size: 1.0   # [px] (MOLA_MAPPER_VIZ_KEYFRAME_MAP_POINT_SIZE)
+     keyframe_map_glide: 1.5        # [s]  (MOLA_MAPPER_VIZ_KEYFRAME_MAP_GLIDE)
      camera:                        # scripted camera, see below
        enabled: false               # (MOLA_MAPPER_VIZ_CAMERA)
        overview_period: 40.0        # [s]  (MOLA_MAPPER_VIZ_CAMERA_OVERVIEW_PERIOD)
@@ -435,6 +436,9 @@ section of ``params/mapper.yaml``:
        transition: 4.0              # [s]  (MOLA_MAPPER_VIZ_CAMERA_TRANSITION)
        closeup_distance: 40.0       # [m]  (MOLA_MAPPER_VIZ_CAMERA_CLOSEUP_DISTANCE)
        final_overview: 60.0         # [s] of data (MOLA_MAPPER_VIZ_CAMERA_FINAL_OVERVIEW)
+       shot_min_correction: 0.5     # [m]  (MOLA_MAPPER_VIZ_CAMERA_SHOT_MIN_CORRECTION)
+       shot_hold: 6.0               # [s]  (MOLA_MAPPER_VIZ_CAMERA_SHOT_HOLD)
+       timeline_file: ""            # (MOLA_MAPPER_VIZ_CAMERA_TIMELINE)
        # ... more in params/mapper.yaml
 
 ``align_front_end_frames`` moves the scene frame each front end draws in (for
@@ -451,7 +455,9 @@ decimated) is built once, in the keyframe frame, and drawn at the current
 optimized pose of its keyframe, so every loop closure visibly corrects the map.
 Keyframes closer than ``keyframe_map_min_spacing`` to one already in the map add
 no cloud. Each keyframe has its own scene node, kept for the whole run: loop
-closures only move nodes, without uploading the clouds again. Points are
+closures only move nodes, without uploading the clouds again, and they glide
+into place over ``keyframe_map_glide`` seconds (0: they jump), so a correction
+reads as a motion. Points are
 colored (turbo colormap, fixed range) by their height relative to the keyframe
 that observed them, which keeps colors meaningful on
 slopes and on stacked floors. Hide LIO's own local map meanwhile
@@ -466,7 +472,17 @@ localization update, mapped through the optimized pose of the front end frame). 
 ``closeup_period``, with smooth ``transition`` s; wall clock time), and only the
 overview is shown during the last ``final_overview`` seconds of data, if the
 data source tells its time (a dataset player). Every input is low-pass
-filtered, so loop closure corrections do not make the camera jump. Turn off the
+filtered, so loop closure corrections do not make the camera jump. A map
+correction larger than ``shot_min_correction`` meters gets a *correction shot*:
+the camera flies to the corrected region (around the keyframe that moved
+most), keeping its azimuth, the map glides into place once it is there, and
+after ``shot_hold`` seconds it flies back to the schedule (one shot at a time,
+none during the final overview). Shots need the map shown with
+``keyframe_map_glide`` > 0. The keyframe graph and the front end view are
+corrected at once; only the map clouds glide. With ``timeline_file``, the blend
+weights of the camera (close-up, shot) are written over time with the wall
+clock (a space separated text file; shots as comment lines), e.g. to speed up a
+recorded video differently in each part. Turn off the
 front end camera follow meanwhile (LIO: ``MOLA_GUI_CAMERA_FOLLOWS_VEHICLE=false``).
 Both the map and the camera can also be toggled in the View tab of the
 ``mola_mapper`` window.

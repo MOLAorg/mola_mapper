@@ -75,6 +75,7 @@ void GraphVisualizationParams::loadFrom(const mrpt::containers::yaml & cfg)
   km.color_min = cfg.getOrDefault("keyframe_map_color_min", km.color_min);
   km.color_max = cfg.getOrDefault("keyframe_map_color_max", km.color_max);
   km.point_size = cfg.getOrDefault("keyframe_map_point_size", km.point_size);
+  km.glide = cfg.getOrDefault("keyframe_map_glide", km.glide);
   if (cfg.has("camera")) {
     camera.loadFrom(cfg["camera"]);
   }

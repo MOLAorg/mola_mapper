@@ -32,6 +32,9 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <fstream>
+#include <future>
+#include <iostream>
 #include <map>
 #include <memory>
 #include <optional>
@@ -47,6 +50,9 @@ namespace
 constexpr double KEYFRAME_MAP_BUILD_BUDGET = 0.3;
 // Keyframes copied per GUI update for the map, at most:
 constexpr std::size_t KEYFRAME_MAP_MAX_BATCH = 100;
+// A correction shot shows the region within this distance [m] of the node
+// that moved most:
+constexpr double CORRECTION_SHOT_RADIUS = 80.0;
 }  // namespace
 
 struct Mapper::Gui
@@ -67,18 +73,29 @@ struct Mapper::Gui
   std::unique_ptr<KeyframeMapVisualization> keyframe_map;
   bool keyframe_map_drawn = false;
 
-  // Scripted camera: its own thread (smooth motion at its own rate), started
-  // when first enabled. Its inputs (camera_mtx): the map extent, newest
+  // GUI animation thread (scripted camera, map glides; smooth motion at its
+  // own rate), started when either is first enabled. Its inputs (camera_mtx): the map extent, newest
   // keyframe and the end of the data (gui_update()), the scene frame of the
   // front end and its pose in the map as drawn (T_map_f), and the latest
   // vehicle pose advertised in each frame by the localization sources.
-  std::thread camera_thread;
-  std::atomic_bool camera_stop{false};
+  std::thread animation_thread;
+  std::atomic_bool animation_stop{false};
   std::mutex camera_mtx;
   CameraDirector::Inputs camera_inputs;
   std::optional<std::pair<std::string, mrpt::poses::CPose3D>> front_end_frame;
   std::map<std::string, mrpt::poses::CPose3D> vehicle_poses;
   std::weak_ptr<mola::Dataset_UI> dataset;
+
+  // Map corrections to glide into place (and maybe to show in a camera
+  // shot), from gui_draw_keyframe_map() to the animation thread (camera_mtx):
+  struct Correction
+  {
+    std::vector<KeyframeMapVisualization::NodePose> changes;
+    std::optional<mrpt::math::TBoundingBox> shot_region;
+    double max_shift = 0;
+    double glide = 0;  //!< [s]
+  };
+  std::vector<Correction> pending_corrections;
 
   Gui() = default;
   Gui(const Gui &) = delete;
@@ -87,9 +104,9 @@ struct Mapper::Gui
   Gui & operator=(Gui &&) = delete;
   ~Gui()
   {
-    camera_stop = true;
-    if (camera_thread.joinable()) {
-      camera_thread.join();
+    animation_stop = true;
+    if (animation_thread.joinable()) {
+      animation_thread.join();
     }
   }
 
@@ -109,7 +126,7 @@ struct Mapper::Gui
 
 void Mapper::gui_initialize()
 {
-  gui_stop_camera();
+  gui_stop_animation();
   visualizer_.reset();
   gui_.reset();
   const auto mods = findService<mola::VizInterface>();
@@ -275,6 +292,12 @@ void Mapper::gui_update()
   if (p.camera.enabled) {
     gui_feed_camera(p);
   }
+  // The animation thread runs the scripted camera and the map glides:
+  if (
+    (p.camera.enabled || (p.show_keyframe_map && p.keyframe_map.glide > 0)) &&
+    !g.animation_thread.joinable()) {
+    gui_start_animation(p);
+  }
 
   const auto now = std::chrono::steady_clock::now();
   const bool styleChanged = g.params_changed.exchange(false);
@@ -437,9 +460,6 @@ void Mapper::gui_feed_camera(const GraphVisualizationParams & p)
     auto lck = mrpt::lockHelper(g.camera_mtx);
     g.camera_inputs = in;
   }
-  if (!g.camera_thread.joinable()) {
-    gui_start_camera(p.camera);
-  }
 }
 
 void Mapper::gui_draw_keyframe_map(
@@ -474,8 +494,12 @@ void Mapper::gui_draw_keyframe_map(
     g.keyframe_map_drawn = true;
   }
   if (showMap && redraw) {
-    // Keyframes moved (e.g. a loop closure): move their nodes, in the render thread.
-    if (auto moved = g.keyframe_map->pose_changes(poses); !moved.empty()) {
+    // Keyframes moved (e.g. a loop closure): move their nodes, in the render
+    // thread, at once or gliding (animation thread).
+    auto moved = g.keyframe_map->pose_changes(poses);
+    if (!moved.empty() && p.keyframe_map.glide > 0) {
+      gui_queue_correction(p, std::move(moved));
+    } else if (!moved.empty()) {
       visualizer_->execute_custom_code_on_background_scene(
         [moved = std::move(moved)](mrpt::viz::Scene &) {
           for (const auto & m : moved) {
@@ -489,84 +513,165 @@ void Mapper::gui_draw_keyframe_map(
   }
 }
 
-void Mapper::gui_start_camera(const CameraDirectorParams & cp)
+void Mapper::gui_queue_correction(
+  const GraphVisualizationParams & p, std::vector<KeyframeMapVisualization::NodePose> && moved)
+{
+  // Where the map moved most: a camera shot of large corrections.
+  Gui::Correction c;
+  c.glide = p.keyframe_map.glide;
+  if (p.camera.enabled && p.camera.shot_min_correction > 0) {
+    c.shot_region =
+      correction_region(moved, p.camera.shot_min_correction, CORRECTION_SHOT_RADIUS, &c.max_shift);
+    if (c.shot_region) {
+      MRPT_LOG_DEBUG_STREAM("Map correction of up to " << c.max_shift << " m: shot candidate");
+    }
+  }
+  c.changes = std::move(moved);
+  auto lck = mrpt::lockHelper(gui_->camera_mtx);
+  gui_->pending_corrections.push_back(std::move(c));
+}
+
+void Mapper::gui_start_animation(const GraphVisualizationParams & p)
 {
   auto & g = *gui_;
-  MRPT_LOG_INFO_STREAM("Scripted camera at " << cp.rate << " Hz");
-  g.camera_stop = false;
-  // Only the Gui and the modules it holds are used from the thread: it is
-  // joined before they are destroyed (gui_stop_camera(), ~Gui()).
-  g.camera_thread = std::thread([gp = gui_.get(), viz = visualizer_, cp]() {
+  const auto & cp = p.camera;
+  MRPT_LOG_INFO_STREAM(
+    "GUI animation thread at " << cp.rate << " Hz (scripted camera: " << (cp.enabled ? "on" : "off")
+                               << ", map glides: " << p.keyframe_map.glide << " s)");
+  g.animation_stop = false;
+  // Only the Gui and the visualizer are used from the thread: it is joined
+  // before they are destroyed (gui_stop_animation(), ~Gui()).
+  g.animation_thread = std::thread([gp = gui_.get(), viz = visualizer_, cp]() {
     using clock = std::chrono::steady_clock;
     CameraDirector director(cp);
+    NodeAnimator animator;
     const auto period = std::chrono::duration_cast<clock::duration>(
       std::chrono::duration<double>(1.0 / std::max(cp.rate, 1.0)));
     const auto t0 = clock::now();
     auto next = t0;
     double farClip = 1000.0;  // [m] MRPT default
-    while (!gp->camera_stop) {
-      next += period;
-      std::this_thread::sleep_until(next);
-      if (clock::now() > next + period) {
-        next = clock::now();  // fell behind: no burst of updates
+    std::ofstream timeline;
+    if (!cp.timeline_file.empty()) {
+      timeline.open(cp.timeline_file);
+      if (!timeline.is_open()) {
+        std::cerr << "[mola_mapper] Cannot write the camera timeline: " << cp.timeline_file << "\n";
       }
-      bool enabled = false;
-      {
-        auto lck = mrpt::lockHelper(gp->params_mtx);
-        enabled = gp->params.camera.enabled;
-      }
-      if (!enabled) {
-        continue;
-      }
-      CameraDirector::Inputs in;
-      {
-        auto lck = mrpt::lockHelper(gp->camera_mtx);
-        in = gp->camera_inputs;
-        // The current vehicle pose, more frequent than the keyframes (none
-        // while revisiting mapped areas), mapped through T_map_f:
-        if (const auto & fe = gp->front_end_frame; fe) {
-          if (const auto it = gp->vehicle_poses.find(fe->first); it != gp->vehicle_poses.end()) {
-            const auto pose = fe->second + it->second;
-            in.vehicle = pose.translation();
-            in.vehicle_yaw = pose.yaw();
+      timeline << "# unix_time[s] closeup_weight shot_weight (space separated)\n"
+               << "# events as comments: '# shot <unix_time> <max_correction[m]>'\n";
+    }
+    // Pose updates for the GUI thread: one at a time (they are a function of
+    // time, so skipping a tick while the GUI is busy loses nothing).
+    std::future<bool> posesTask;
+    double lastTimelineRow = -1;
+    const auto unixNow = []() {
+      return std::chrono::duration<double>(std::chrono::system_clock::now().time_since_epoch())
+        .count();
+    };
+
+    while (!gp->animation_stop) {
+      try {
+        next += period;
+        std::this_thread::sleep_until(next);
+        if (clock::now() > next + period) {
+          next = clock::now();  // fell behind: no burst of updates
+        }
+        const double t = std::chrono::duration<double>(clock::now() - t0).count();
+        bool cameraOn = false;
+        {
+          auto lck = mrpt::lockHelper(gp->params_mtx);
+          cameraOn = gp->params.camera.enabled;
+        }
+
+        // Map corrections: glide now, or once a camera shot is there.
+        std::vector<Gui::Correction> corrections;
+        CameraDirector::Inputs in;
+        {
+          auto lck = mrpt::lockHelper(gp->camera_mtx);
+          corrections = std::move(gp->pending_corrections);
+          gp->pending_corrections.clear();
+          in = gp->camera_inputs;
+          // The current vehicle pose, more frequent than the keyframes (none
+          // while revisiting mapped areas), mapped through T_map_f:
+          if (const auto & fe = gp->front_end_frame; fe) {
+            if (const auto it = gp->vehicle_poses.find(fe->first); it != gp->vehicle_poses.end()) {
+              const auto pose = fe->second + it->second;
+              in.vehicle = pose.translation();
+              in.vehicle_yaw = pose.yaw();
+            }
           }
         }
-      }
-      const auto c = director.step(std::chrono::duration<double>(clock::now() - t0).count(), in);
-      if (!c) {
-        continue;
-      }
-      // Large maps: push the far clip plane beyond the overview distance.
-      if (2 * c->distance > farClip) {
-        farClip = 4 * c->distance;
-        viz->execute_custom_code_on_background_scene([farClip](mrpt::viz::Scene & scene) {
-          if (auto vp = scene.getViewport("main"); vp) {
-            float clipMin = 0;
-            float clipMax = 0;
-            vp->getViewportClipDistances(clipMin, clipMax);
-            vp->setViewportClipDistances(clipMin, std::max(clipMax, static_cast<float>(farClip)));
+        for (const auto & c : corrections) {
+          double start = t;
+          if (cameraOn && c.shot_region) {
+            if (const auto arrival = director.start_shot(t, *c.shot_region); arrival) {
+              start = *arrival;
+              if (timeline.is_open()) {
+                timeline << mrpt::format("# shot %.3f %.3f\n", unixNow(), c.max_shift);
+              }
+            }
           }
-        });
-      }
-      const mrpt::math::TPoint3Df lookAt(c->look_at);
+          animator.add(c.changes, start, c.glide, t);
+        }
+        const bool guiReady = !posesTask.valid() || posesTask.wait_for(std::chrono::seconds(0)) ==
+                                                      std::future_status::ready;
+        if (guiReady && !animator.empty()) {
+          if (auto poses = animator.step(t); !poses.empty()) {
+            posesTask = viz->execute_custom_code_on_background_scene(
+              [poses = std::move(poses)](mrpt::viz::Scene &) {
+                for (const auto & m : poses) {
+                  m.node->setPose(m.pose);
+                }
+              });
+          }
+        }
+
+        if (!cameraOn) {
+          continue;
+        }
+        const auto c = director.step(t, in);
+        if (!c) {
+          continue;
+        }
+        if (timeline.is_open() && t - lastTimelineRow >= 0.5) {
+          lastTimelineRow = t;
+          timeline << mrpt::format("%.3f %.3f %.3f\n", unixNow(), c->closeup, c->shot);
+          timeline.flush();
+        }
+        // Large maps: push the far clip plane beyond the overview distance.
+        if (2 * c->distance > farClip) {
+          farClip = 4 * c->distance;
+          viz->execute_custom_code_on_background_scene([farClip](mrpt::viz::Scene & scene) {
+            if (auto vp = scene.getViewport("main"); vp) {
+              float clipMin = 0;
+              float clipMax = 0;
+              vp->getViewportClipDistances(clipMin, clipMax);
+              vp->setViewportClipDistances(clipMin, std::max(clipMax, static_cast<float>(farClip)));
+            }
+          });
+        }
+        const mrpt::math::TPoint3Df lookAt(c->look_at);
 #if defined(MOLA_KERNEL_VIZ_HAS_CAMERA_ORIENTATION)
-      viz->update_viewport_camera(lookAt, c->azimuth, c->elevation, c->distance);
+        viz->update_viewport_camera(lookAt, c->azimuth, c->elevation, c->distance);
 #else
-      // Older visualizers: look-at and azimuth only.
-      viz->update_viewport_look_at(lookAt);
-      viz->update_viewport_camera_azimuth(c->azimuth);
+        // Older visualizers: look-at and azimuth only.
+        viz->update_viewport_look_at(lookAt);
+        viz->update_viewport_camera_azimuth(c->azimuth);
 #endif
+      } catch (const std::exception & e) {
+        // A GUI failure must never stop the mapping:
+        std::cerr << "[mola_mapper] GUI animation error: " << e.what() << "\n";
+      }
     }
   });
 }
 
-void Mapper::gui_stop_camera()
+void Mapper::gui_stop_animation()
 {
-  if (!gui_ || !gui_->camera_thread.joinable()) {
+  if (!gui_ || !gui_->animation_thread.joinable()) {
     return;
   }
-  gui_->camera_stop = true;
-  gui_->camera_thread.join();
+  gui_->animation_stop = true;
+  gui_->animation_thread.join();
 }
 
 }  // namespace mola::mapper

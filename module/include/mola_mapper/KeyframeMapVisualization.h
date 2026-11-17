@@ -20,12 +20,15 @@
 
 #include <mrpt/containers/yaml.h>
 #include <mrpt/img/TColor.h>
+#include <mrpt/math/TBoundingBox.h>
 #include <mrpt/obs/CSensoryFrame.h>
 #include <mrpt/poses/CPose3D.h>
 #include <mrpt/viz/CPointCloudColoured.h>
 #include <mrpt/viz/CSetOfObjects.h>
 
 #include <cstddef>
+#include <optional>
+#include <unordered_map>
 #include <vector>
 
 namespace mola::mapper
@@ -46,6 +49,8 @@ struct KeyframeMapParams
   double color_min = -2.0;
   double color_max = 12.0;
   float point_size = 1.0f;
+  /// Map corrections glide into place over this time [s] (0: they jump).
+  double glide = 1.5;
 };
 
 /// Turbo colormap, x in [0,1] (polynomial approximation).
@@ -99,11 +104,12 @@ public:
    *  time: publish it again only when clouds were added. */
   [[nodiscard]] mrpt::viz::CSetOfObjects::Ptr scene() const;
 
-  /// A node and its new pose.
+  /// A node, its new pose and the one it was drawn at.
   struct NodePose
   {
     mrpt::viz::CSetOfObjects::Ptr node;
     mrpt::poses::CPose3D pose;
+    mrpt::poses::CPose3D from;
   };
   /** The nodes whose keyframe moved since last drawn (e.g. after a loop
    *  closure), with their new poses in `poses_in_map`, to apply from the
@@ -137,5 +143,52 @@ private:
   };
   std::vector<KeyframeCloud> clouds_;
 };
+
+/** Glides scene nodes from their old to their new poses (translation and
+ *  rotation interpolated, cosine easing), so map corrections read as a motion
+ *  instead of a jump. Changes below MIN_GLIDE_SHIFT / MIN_GLIDE_ROTATION (as
+ *  every solve brings) are applied at once. A node gliding gets a small new
+ *  target without restarting its glide; a large one starts a new glide from
+ *  where it is (one not started yet, e.g. waiting for the camera, keeps
+ *  waiting). Times in seconds of any clock. Not thread-safe. */
+class NodeAnimator
+{
+public:
+  static constexpr double MIN_GLIDE_SHIFT = 0.01;     //!< [m]
+  static constexpr double MIN_GLIDE_ROTATION = 1e-3;  //!< [rad]
+
+  /** Starts gliding `changes` over `duration` seconds, from time `start`
+   *  (nodes keep their pose until then). */
+  void add(
+    const std::vector<KeyframeMapVisualization::NodePose> & changes, double start, double duration,
+    double now);
+
+  /// The poses to set at time `now` (finished glides are given their final
+  /// pose once, then dropped).
+  [[nodiscard]] std::vector<KeyframeMapVisualization::NodePose> step(double now);
+
+  [[nodiscard]] bool empty() const { return glides_.empty(); }
+  [[nodiscard]] std::size_t size() const { return glides_.size(); }
+
+private:
+  struct Glide
+  {
+    mrpt::viz::CSetOfObjects::Ptr node;
+    mrpt::poses::CPose3D from;
+    mrpt::poses::CPose3D to;
+    double start = 0;
+    double duration = 0;
+
+    [[nodiscard]] mrpt::poses::CPose3D at(double t) const;
+  };
+  std::unordered_map<const mrpt::viz::CSetOfObjects *, Glide> glides_;
+};
+
+/** The region to show of a map correction: around the node that moved most,
+ *  the nodes within `radius` [m] of it that moved at least half as much, at
+ *  their old and new positions. None if no node moved `min_shift` [m]. */
+[[nodiscard]] std::optional<mrpt::math::TBoundingBox> correction_region(
+  const std::vector<KeyframeMapVisualization::NodePose> & changes, double min_shift, double radius,
+  double * max_shift = nullptr);
 
 }  // namespace mola::mapper

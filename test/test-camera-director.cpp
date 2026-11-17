@@ -168,6 +168,92 @@ void test_opposite_azimuths()
   }
 }
 
+void test_shots()
+{
+  auto p = make_params();
+  p.transition = 2.0;
+  p.shot_hold = 5.0;
+  p.shot_min_interval = 20.0;
+  p.shot_elevation = 60.0;
+  p.shot_min_distance = 40.0;
+  CameraDirector d(p);
+  CameraDirector::Inputs in;
+  in.map = TBoundingBox({-500, -500, 0}, {500, 500, 0});
+  ASSERT_(d.step(0.0, in));
+
+  // A small corrected region, far from the map center:
+  const TBoundingBox region({300, 300, 0}, {310, 305, 0});
+  const auto arrival = d.start_shot(10.0, region);
+  ASSERT_(arrival);
+  ASSERT_NEAR_(*arrival, 12.0, 1e-9);
+  // Too soon for another one:
+  ASSERT_(!d.start_shot(15.0, region));
+
+  // Smooth in, held, smooth out, then gone:
+  double prevW = 0;
+  for (int i = 100; i <= 200; i++) {
+    const double w = d.shot_weight_at(0.1 * i);
+    ASSERT_LT_(std::abs(w - prevW), 0.1);
+    prevW = w;
+  }
+  ASSERT_NEAR_(d.shot_weight_at(12.0), 1.0, 1e-9);
+  ASSERT_NEAR_(d.shot_weight_at(16.9), 1.0, 1e-9);
+  ASSERT_NEAR_(d.shot_weight_at(20.0), 0.0, 1e-9);
+
+  // While held: on the region, closer than the overview, at the shot elevation.
+  const auto c = d.step(14.0, in).value();
+  ASSERT_NEAR_(c.shot, 1.0, 1e-9);
+  ASSERT_NEAR_(c.look_at.x, 305.0, 1e-6);
+  ASSERT_NEAR_(c.look_at.y, 302.5, 1e-6);
+  ASSERT_NEAR_(c.elevation, mrpt::DEG2RAD(60.0), 1e-9);
+  // Fitted to the region plus its margin, within the limits, closer than the overview:
+  ASSERT_GE_(c.distance, p.shot_min_distance);
+  ASSERT_LE_(c.distance, p.shot_max_distance);
+  ASSERT_LT_(c.distance, 0.2 * CameraDirector::overview_distance(p, *in.map, 0.0));
+  // A later one is accepted:
+  ASSERT_(d.start_shot(31.0, region));
+
+  // Never while one is on screen, even with a short minimum interval:
+  auto p2 = p;
+  p2.shot_min_interval = 1.0;
+  p2.shot_hold = 10.0;
+  CameraDirector d2(p2);
+  ASSERT_(d2.step(0.0, in));
+  ASSERT_(d2.start_shot(0.0, region));
+  ASSERT_(!d2.start_shot(5.0, region));
+  ASSERT_(d2.start_shot(15.0, region));  // after 2 + 10 + 2 s
+  // None once the final overview started:
+  in.final = true;
+  ASSERT_(d.step(60.0, in));
+  ASSERT_(!d.start_shot(90.0, region));
+}
+
+void test_shot_keeps_azimuth()
+{
+  // A shot held across a schedule transition (overview -> close-up): the
+  // azimuth stays where it was when the shot started.
+  auto p = make_params();  // overview 40 s, transition 4 s
+  p.shot_hold = 20.0;
+  p.heading_time_constant = 0.01;
+  CameraDirector d(p);
+  CameraDirector::Inputs in;
+  in.map = TBoundingBox({-100, -100, 0}, {100, 100, 0});
+  in.vehicle = TPoint3D(0, 0, 0);
+  in.vehicle_yaw = 0.0;  // close-up azimuth: 180 deg; overview: -90 deg
+  for (int i = 0; i <= 300; i++) {
+    (void)d.step(0.1 * i, in);
+  }
+  ASSERT_(d.start_shot(30.0, TBoundingBox({10, 10, 0}, {20, 20, 0})));
+  const double az0 = d.step(30.1, in).value().azimuth;
+  ASSERT_NEAR_(az0, -M_PI / 2, 1e-6);
+  for (int i = 302; i <= 520; i++) {
+    const auto c = d.step(0.1 * i, in).value();
+    if (c.shot >= 1.0) {
+      ASSERT_NEAR_(c.azimuth, az0, 1e-9);
+    }
+  }
+}
+
 void test_yaml()
 {
   CameraDirectorParams p;
@@ -191,6 +277,8 @@ int main()
     test_blend();
     test_heading_wraps();
     test_opposite_azimuths();
+    test_shots();
+    test_shot_keeps_azimuth();
     test_yaml();
     std::cout << "All tests passed.\n";
     return 0;

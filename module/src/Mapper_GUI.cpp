@@ -352,6 +352,8 @@ void Mapper::gui_update()
   }
   g.last_update = now;
 
+  gui_draw_keyframe_map(p, redraw, newKeyframes, poses);
+
   if (redraw) {
     visualizer_->update_3d_object("mapper/graph", build_graph_visualization(in, p));
     // Not aligned: back to their own frames.

@@ -32,8 +32,10 @@ params:
   gyro_max_gap: 0.1  # [s]
 
   # Wheel odometry (CObservationOdometry) whose increments between consecutive
-  # keyframes become factors (regex of sensor labels; empty: none):
-  wheel_odom_sensor_labels_re: "${MOLA_MAPPER_WHEEL_ODOM_LABELS|}"
+  # keyframes become factors (regex of sensor labels; empty: none). The default
+  # is the label the launch files give to their wheel odometry topic; without
+  # such readings, no wheel odometry factor is added:
+  wheel_odom_sensor_labels_re: "${MOLA_MAPPER_WHEEL_ODOM_LABELS|odom_wheels}"
   wheel_odom_max_gap: 0.5  # [s]
 
   # Camera images stored in the keyframes (regex; empty: none): each one goes to

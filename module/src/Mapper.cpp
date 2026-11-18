@@ -695,18 +695,19 @@ std::optional<SharedKeyframeMap::KeyFrameID> Mapper::insert_keyframe_impl(
     if (!gravityAttached && imuBehind) {
       pending_gravity_.push_back(id);
     }
-    // In order: a keyframe waits if older ones do.
-    if (use_wheel_odom_input_ && (!pending_wheel_odom_.empty() || !attach_wheel_odom_locked(id))) {
+    // In order: a keyframe waits if older ones do. Until a first reading arrives,
+    // there is nothing to wait for: the vehicle may have no wheel odometry at all.
+    if (
+      use_wheel_odom_input_ && !wheel_odom_samples_.empty() &&
+      (!pending_wheel_odom_.empty() || !attach_wheel_odom_locked(id))) {
       pending_wheel_odom_.push_back(id);
       constexpr std::size_t MANY_PENDING = 20;
       if (pending_wheel_odom_.size() > MANY_PENDING) {
-        const std::string why = wheel_odom_samples_.empty()
-                                  ? "none received yet with a label matching '" +
-                                      params_.wheel_odom_sensor_labels_re + "'"
-                                  : "the newest one is older than the keyframes";
         MRPT_LOG_THROTTLE_WARN_FMT(
-          30.0, "%zu keyframes waiting for wheel odometry readings: %s", pending_wheel_odom_.size(),
-          why.c_str());
+          30.0,
+          "%zu keyframes waiting for wheel odometry readings: the newest one is older than the "
+          "keyframes",
+          pending_wheel_odom_.size());
       }
     }
 

@@ -193,8 +193,9 @@ with an environment variable (shown in parentheses below).
       gyro_scale_sigma: 0.005            # (MOLA_MAPPER_GYRO_SCALE_SIGMA)
       gyro_max_gap: 0.1                  # [s] longer gaps between readings: no factor
 
-      # Wheel odometry (CObservationOdometry) increments between keyframes (empty: none)
-      wheel_odom_sensor_labels_re: "${MOLA_MAPPER_WHEEL_ODOM_LABELS|}"
+      # Wheel odometry (CObservationOdometry) increments between keyframes (empty: none).
+      # The default is the label of the wheel odometry topic of the launch files:
+      wheel_odom_sensor_labels_re: "${MOLA_MAPPER_WHEEL_ODOM_LABELS|odom_wheels}"
       wheel_odom_max_gap: 0.5            # [s] longer gaps between readings: no factor
 
       # Camera images (CObservationImage) stored in the keyframes (empty: none)
@@ -563,7 +564,7 @@ are fed back to LIO, which rebuilds its local map after each loop closure.
    export MOLA_LIDAR_TOPIC=/ouster/points
    export MOLA_IMU_TOPIC=/ouster/imu
    export MOLA_GNSS_TOPIC=/gps                # optional, sensor_msgs/NavSatFix
-   export MOLA_ODOM_TOPIC=/odom               # optional, wheel odometry
+   export MOLA_ODOM_TOPIC=/odom               # optional, wheel odometry (used by the mapper too)
    export MOLA_MAPPER_OUTPUT_TUM=mapper.tum   # outputs are written on exit
    mola-cli $(ros2 pkg prefix mola_mapper)/share/mola_mapper/mola-cli-launchs/lio_smoother_mapper_ros2.yaml
 

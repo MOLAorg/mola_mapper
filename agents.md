@@ -97,8 +97,8 @@ scripts/mola-mapper-gui-dataset   <profile> <args>: mola_lidar_odometry dataset 
   bias error is modeled as independent per factor, though it is common to all of them.
 - Wheel odometry (`wheel_odom_sensor_labels_re`, `CObservationOdometry`, first matching label):
   increment between consecutive keyframes, interpolated at both stamps (gaps over
-  `wheel_odom_max_gap`: none); keyframes the readings do not reach yet wait, in order
-  (`pending_wheel_odom_`). Recorded; saved as `<prefix>.wheel_odom.txt` with the graph input.
+  `wheel_odom_max_gap`: none); once a first reading has arrived, keyframes the readings do not
+  reach yet wait, in order (`pending_wheel_odom_`). Default label `odom_wheels` (launch files). Recorded; saved as `<prefix>.wheel_odom.txt` with the graph input.
 - The bias sources are queried before taking `state_mtx_`.
 
 ## Global graph (GlobalGraph.cpp)

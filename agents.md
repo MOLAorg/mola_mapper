@@ -70,6 +70,7 @@ mola-cli-launchs/lio_smoother_mapper_from_rosbag2.yaml  rosbag2 -> LIO + smoothe
 mola-cli-launchs/lio_smoother_mapper_from_kitti.yaml    KITTI odometry (params/mapper-kitti.yaml)
 mola-cli-launchs/lio_smoother_mapper_from_rosbag1.yaml  rosbag1 -> same (input block = LIO's rosbag1 launch)
 mola-cli-launchs/lio_smoother_mapper_from_oxford_spires.yaml  Oxford Spires (multipart bags, fixed sensor poses)
+mola-cli-launchs/lio_smoother_mapper_ros2.yaml     live ROS 2 topics via BridgeROS2 (publishes pose, /tf)
 scripts/mola-mapper-gui-dataset   <profile> <args>: mola_lidar_odometry dataset profile -> the
                                   launch above for its input (lidar_odometry_from_X -> ..._from_X);
                                   installed per profile as mola-mapper-gui-<profile> (CMake list)

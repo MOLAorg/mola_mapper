@@ -2,4 +2,3 @@
 
 .. include:: ../../../mola_mapper/docs/mola_mapper.rst
 
-.. include:: ../../../mola_mapper/docs/mola_mapper_ros2_node.rst

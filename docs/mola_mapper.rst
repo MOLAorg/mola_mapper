@@ -56,8 +56,8 @@ Running on a dataset
 
 ``mola-cli-launchs/`` has complete systems (LIO, smoother, mapper and the GUI)
 for each input: ``lio_smoother_mapper_from_rosbag1.yaml``,
-``lio_smoother_mapper_from_rosbag2.yaml`` and
-``lio_smoother_mapper_from_kitti.yaml``.
+``lio_smoother_mapper_from_rosbag2.yaml``, ``lio_smoother_mapper_from_kitti.yaml`` and
+``lio_smoother_mapper_from_oxford_spires.yaml``.
 
 For the datasets with a profile in ``mola_lidar_odometry`` (the ones of its
 ``mola-lo-gui-<name>`` launchers), ``mola-mapper-gui-<name>`` runs the same
@@ -72,8 +72,8 @@ pipeline:
    TIERS_SENSOR=ouster-os0 mola-mapper-gui-dataset tiers /path/to/sequence.bag
 
 Launchers exist for ``conslam``, ``fomo``, ``geode``, ``grandtour``,
-``hilti2022``, ``kitti``, ``newer-college``, ``ntu-viral``, ``rosbag1``,
-``rosbag2`` and ``vbr``. They always run the smoother as the state estimator.
+``hilti2022``, ``kitti``, ``newer-college``, ``ntu-viral``, ``oxford-spires``,
+``rosbag1``, ``rosbag2`` and ``vbr``. They always run the smoother as the state estimator.
 Variables set by the caller win, e.g. ``MOLA_WITH_GUI=false
 MOLA_QUIT_ON_DATASET_END=true`` for a headless run, ``MOLA_MAPPER_OUTPUT_TUM``
 for the outputs, ``MOLA_GUI_PREVIEW_SENSORS=true`` for the raw sensor windows

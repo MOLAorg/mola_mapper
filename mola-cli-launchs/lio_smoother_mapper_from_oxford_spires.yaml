@@ -1,0 +1,93 @@
+# =============================================================================
+# A complete LiDAR SLAM system on an Oxford Spires sequence
+# (https://dynamic.robots.ox.ac.uk/datasets/oxford-spires): LIO, the smoother
+# state estimator and the mapper, as in lio_smoother_mapper_from_rosbag2.yaml,
+# with the dataset input of mola_lidar_odometry's
+# lidar_odometry_from_oxford_spires.yaml:
+#  - a sequence may be split in several ros2bag parts (OXFORD_SPIRES_BAG_0..5);
+#  - the bags have no /tf, so the sensor poses (in the dataset base frame) are
+#    fixed here.
+#
+# Usage (sets the bag parts, topics and pipeline from the dataset profile):
+#   mola-mapper-gui-oxford-spires /path/to/data/sequences/<sequence-name>/
+#
+# No GNSS in this dataset: the profile pins the first pose
+# (MOLA_LINK_FIRST_POSE_SIGMA). See params/mapper.yaml for the mapper settings.
+# =============================================================================
+
+modules:
+  - name: viz
+    type: ${MOLA_GUI_MODULE|mola::MolaVizImGui}
+    enabled: ${MOLA_WITH_GUI|true}
+    verbosity_level: "${MOLA_VERBOSITY_MOLA_VIZ|INFO}"
+    params:
+      imgui_app_name: lio_smoother_mapper_oxford_spires
+
+  - name: state_estimation
+    type: mola::state_estimation_smoother::StateEstimationSmoother
+    verbosity_level: "${MOLA_VERBOSITY_MOLA_STATE_ESTIMATOR|INFO}"
+    raw_data_source: "dataset_input"
+    params: "${MOLA_STATE_ESTIMATOR_YAML|$(ros2 pkg prefix mola_state_estimation_smoother)/share/mola_state_estimation_smoother/params/state-estimation-smoother.yaml}"
+
+  - name: mapper
+    type: mola::mapper::Mapper
+    enabled: ${MOLA_WITH_MAPPER|true}
+    execution_rate: 2 # Hz (GUI updates)
+    verbosity_level: "${MOLA_VERBOSITY_MAPPER|INFO}"
+    raw_data_source: "dataset_input"
+    params: "${MOLA_MAPPER_YAML|../params/mapper.yaml}"
+
+  - name: lidar_odom
+    type: mola::LidarOdometry
+    verbosity_level: "${MOLA_VERBOSITY_MOLA_LO|INFO}"
+    raw_data_source: "dataset_input"
+    params: "${MOLA_ODOMETRY_PIPELINE_YAML|$(ros2 pkg prefix mola_lidar_odometry)/share/mola_lidar_odometry/pipelines/lidar3d-gicp.yaml}"
+
+  - type: mola::Rosbag2Dataset
+    name: dataset_input
+    verbosity_level: "${MOLA_VERBOSITY_ROSBAG2|INFO}"
+    execution_rate: 50 # Hz
+    quit_mola_app_on_dataset_end: ${MOLA_QUIT_ON_DATASET_END|false}
+    gui_preview_sensors:
+      - raw_sensor_label: "${MOLA_LIDAR_NAME|lidar}"
+        decimation: 1
+        enabled: ${MOLA_GUI_PREVIEW_SENSORS|false}
+        win_pos: 5 5 400 400
+      - raw_sensor_label: "${MOLA_CAMERA_SENSOR_NAME|camera}"
+        decimation: 1
+        enabled: ${MOLA_GUI_PREVIEW_SENSORS|false}
+        win_pos: 5 420 400 300
+    params:
+      # One entry per ros2bag part of the sequence (set by the dataset
+      # profile); empty slots are skipped:
+      rosbag_filename:
+        - ${OXFORD_SPIRES_BAG_0}
+        - ${OXFORD_SPIRES_BAG_1|}
+        - ${OXFORD_SPIRES_BAG_2|}
+        - ${OXFORD_SPIRES_BAG_3|}
+        - ${OXFORD_SPIRES_BAG_4|}
+        - ${OXFORD_SPIRES_BAG_5|}
+      base_link_frame_id: "${MOLA_TF_BASE_LINK|base_link}"
+      time_warp_scale: ${MOLA_TIME_WARP|1.0}
+      start_paused: ${MOLA_DATASET_START_PAUSED|false}
+      max_duration_sec: ${MOLA_MAX_DURATION_SEC|0}
+      sensors:
+        - topic: "${MOLA_LIDAR_TOPIC|/hesai/pandar}"
+          type: CObservationPointCloud
+          sensorLabel: "${MOLA_LIDAR_NAME|lidar}"
+          # T_base_lidar (dataset sensor.yaml):
+          fixed_sensor_pose: "0 0 0.124 180 0 0"
+          use_fixed_sensor_pose: true
+        - topic: "${MOLA_IMU_TOPIC|/alphasense_driver_ros/imu}"
+          type: CObservationIMU
+          sensorLabel: imu
+          # T_base_imu:
+          fixed_sensor_pose: "-0.018771 0.008218 0.053526 89.3737 -0.1665 -0.1287"
+          use_fixed_sensor_pose: true
+        - topic: "${MOLA_CAMERA_TOPIC|/alphasense_driver_ros/cam0/debayered/image/compressed}"
+          type: CObservationImage
+          sensorLabel: "${MOLA_CAMERA_SENSOR_NAME|camera}"
+          is_optional: true
+          # T_base_cam (forward camera):
+          fixed_sensor_pose: "-0.002228 -0.050377 0.050622 179.8908 0.0896 -89.9231"
+          use_fixed_sensor_pose: true

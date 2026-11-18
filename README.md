@@ -82,7 +82,7 @@ TIERS_SENSOR=ouster-os0 mola-mapper-gui-dataset tiers /path/to/sequence.bag
 ```
 
 Launchers exist for `conslam`, `fomo`, `geode`, `grandtour`, `hilti2022`, `kitti`,
-`newer-college`, `ntu-viral`, `rosbag1`, `rosbag2` and `vbr`. Variables set by the
+`newer-college`, `ntu-viral`, `oxford-spires`, `rosbag1`, `rosbag2` and `vbr`. Variables set by the
 caller win, e.g. `MOLA_WITH_GUI=false MOLA_QUIT_ON_DATASET_END=true` for a headless run.
 
 ## 🧩 Module topology

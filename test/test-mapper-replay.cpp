@@ -25,6 +25,7 @@
 #include <mrpt/core/exceptions.h>
 #include <mrpt/io/CFileGZInputStream.h>
 #include <mrpt/io/CFileGZOutputStream.h>
+#include <mrpt/io/vector_loadsave.h>
 #include <mrpt/maps/CSimpleMap.h>
 #include <mrpt/obs/CObservationGPS.h>
 #include <mrpt/obs/CObservationIMU.h>
@@ -33,6 +34,7 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <fstream>
 #include <iostream>
 #include <string>
 #include <variant>
@@ -40,6 +42,22 @@
 
 namespace
 {
+/// The production loop closure pipeline, with its `ros2 pkg prefix` lookup of the
+/// mola_sm_loop_closure pipelines replaced by their install directory, so the test
+/// does not need the `ros2` command line tool.
+std::string lc_pipeline_file()
+{
+  std::string txt = mrpt::io::file_get_contents(MOLA_MAPPER_LC_PIPELINE);
+  const std::string from =
+    "$(ros2 pkg prefix mola_sm_loop_closure)/share/mola_sm_loop_closure/pipelines";
+  const auto pos = txt.find(from);
+  ASSERT_(pos != std::string::npos);
+  txt.replace(pos, from.size(), MOLA_SM_LC_PIPELINES_DIR);
+  const std::string out = mrpt::system::getTempFileName() + "_lc_pipeline.yaml";
+  std::ofstream(out) << txt;
+  return out;
+}
+
 using mrpt::poses::CPose3D;
 
 std::string params_yaml(const std::string & recordFile, bool threads, double gyroBiasSigma)
@@ -63,7 +81,7 @@ params:
   record_input: ")###" +
          recordFile + R"###("
   loop_closure_pipeline_file: ")###" +
-         MOLA_MAPPER_LC_PIPELINE + "\"\n";
+         lc_pipeline_file() + "\"\n";
 }
 
 std::shared_ptr<mola::mapper::Mapper> make_mapper(

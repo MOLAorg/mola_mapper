@@ -51,6 +51,10 @@ mola_add_test(
 # Loop closures on a simulated run (mola_test_datasets), as local map corrections:
 find_package(mola_test_datasets QUIET)
 if(mola_test_datasets_FOUND)
+  # Install directory of the mola_sm_loop_closure pipelines, so these tests do not
+  # need the `ros2` command line tool (not available in some CI environments):
+  get_filename_component(MOLA_SM_LC_PREFIX "${mola_sm_loop_closure_DIR}/../../.." ABSOLUTE)
+  set(MOLA_SM_LC_PIPELINES_DIR "${MOLA_SM_LC_PREFIX}/share/mola_sm_loop_closure/pipelines")
   mola_add_test(
     TARGET  test-local-map-corrections
     SOURCES test-local-map-corrections.cpp
@@ -64,10 +68,12 @@ if(mola_test_datasets_FOUND)
       mola::mola_mapper
   )
   target_compile_definitions(test-mapper-replay PRIVATE
+    MOLA_SM_LC_PIPELINES_DIR="${MOLA_SM_LC_PIPELINES_DIR}"
     MOLA_TEST_WAREHOUSE_SIMPLEMAP="${mola_test_datasets_DIR}/../datasets/simplemaps/mvsim-warehouse01.simplemap"
     MOLA_MAPPER_LC_PIPELINE="${PROJECT_SOURCE_DIR}/params/loop-closure-f2f-mapper.yaml"
   )
   target_compile_definitions(test-local-map-corrections PRIVATE
+    MOLA_SM_LC_PIPELINES_DIR="${MOLA_SM_LC_PIPELINES_DIR}"
     MOLA_TEST_WAREHOUSE_SIMPLEMAP="${mola_test_datasets_DIR}/../datasets/simplemaps/mvsim-warehouse01.simplemap"
     MOLA_MAPPER_LC_PIPELINE="${PROJECT_SOURCE_DIR}/params/loop-closure-f2f-mapper.yaml"
   )

@@ -78,6 +78,11 @@ filters:
 )yaml";
 }  // namespace
 
+// Polynomial approximation of the Turbo colormap. The coefficients come from
+// Google's turbo_colormap.glsl:
+//   Copyright 2019 Google LLC.
+//   SPDX-License-Identifier: Apache-2.0
+//   Colormap design: Anton Mikhailov. Polynomial approximation: Ruofei Du.
 mrpt::img::TColor turbo_color(double x)
 {
   x = std::clamp(x, 0.0, 1.0);

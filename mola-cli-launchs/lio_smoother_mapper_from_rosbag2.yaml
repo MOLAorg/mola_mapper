@@ -5,8 +5,8 @@
 #  - mola::state_estimation_smoother::StateEstimationSmoother: the state
 #    estimator LIO queries (its only mola::NavStateFilter).
 #  - mola::mapper::Mapper: the global back end: keyframe map with GNSS and
-#    gravity, loop closures, global pose graph, geo-reference and outputs; it can
-#    feed its corrections back to the state estimator.
+#    gravity, loop closures, global pose graph, geo-reference and outputs; its
+#    corrections are fed back to LIO, which rebuilds its local map.
 #
 # Usage:
 #   export MOLA_INPUT_ROSBAG2=/path/to/bag

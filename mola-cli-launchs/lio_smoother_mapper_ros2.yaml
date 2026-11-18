@@ -1,0 +1,111 @@
+# =============================================================================
+# A complete LiDAR SLAM system on live ROS 2 topics:
+#  - mola::BridgeROS2: subscribes to the sensor topics, and publishes the fused
+#    pose, /tf, the local map and the geo-reference back to ROS 2.
+#  - mola::LidarOdometry (LIO): the front end. It queries the state estimator
+#    for its motion prior, and pushes its keyframes to the mapper.
+#  - mola::state_estimation_smoother::StateEstimationSmoother: the state
+#    estimator LIO queries (its only mola::NavStateFilter). Its pose is the one
+#    published on /tf (map -> base_link).
+#  - mola::mapper::Mapper: the global back end: keyframe map with GNSS and
+#    gravity, loop closures, global pose graph, geo-reference and outputs; its
+#    corrections are fed back to LIO, which rebuilds its local map.
+#
+# Usage:
+#   export MOLA_LIDAR_TOPIC=/ouster/points   MOLA_IMU_TOPIC=/ouster/imu
+#   export MOLA_GNSS_TOPIC=/gps              # optional
+#   export MOLA_ODOM_TOPIC=/odom             # optional, wheel odometry
+#   mola-cli $(ros2 pkg prefix mola_mapper)/share/mola_mapper/mola-cli-launchs/lio_smoother_mapper_ros2.yaml
+#
+# Sensor poses are read from /tf (base_link -> sensor frames). To replay a bag
+# instead of live sensors, play it with --clock and add
+#   ROS_ARGS='["--ros-args", "-p", "use_sim_time:=true"]'
+#
+# Main switches (environment variables):
+#   MOLA_WITH_MAPPER=false        LIO + state estimator only
+#   MOLA_WITH_GUI=false           headless
+#   MOLA_MAPPER_LOOP_CLOSURE      loop closure detection (default: true)
+#   MOLA_MAPPER_OUTPUT_TUM, _GEOREF, _SIMPLEMAP, _LOOPS, _SE_TUM, _SE_GEOREF
+#   See params/mapper.yaml for the rest. The outputs are written on exit.
+# =============================================================================
+
+modules:
+  - name: viz
+    type: ${MOLA_GUI_MODULE|mola::MolaVizImGui}
+    enabled: ${MOLA_WITH_GUI|true}
+    verbosity_level: "${MOLA_VERBOSITY_MOLA_VIZ|INFO}"
+    params:
+      imgui_app_name: lio_smoother_mapper
+
+  - name: state_estimation
+    type: mola::state_estimation_smoother::StateEstimationSmoother
+    verbosity_level: "${MOLA_VERBOSITY_MOLA_STATE_ESTIMATOR|INFO}"
+    raw_data_source: "ros2_bridge"
+    params: "${MOLA_STATE_ESTIMATOR_YAML|$(ros2 pkg prefix mola_state_estimation_smoother)/share/mola_state_estimation_smoother/params/state-estimation-smoother.yaml}"
+
+  - name: mapper
+    type: mola::mapper::Mapper
+    enabled: ${MOLA_WITH_MAPPER|true}
+    execution_rate: 2 # Hz (GUI updates)
+    verbosity_level: "${MOLA_VERBOSITY_MAPPER|INFO}"
+    raw_data_source: "ros2_bridge"
+    params: "${MOLA_MAPPER_YAML|../params/mapper.yaml}"
+
+  - name: lidar_odom
+    type: mola::LidarOdometry
+    verbosity_level: "${MOLA_VERBOSITY_MOLA_LO|INFO}"
+    raw_data_source: "ros2_bridge"
+    params: "${MOLA_ODOMETRY_PIPELINE_YAML|$(ros2 pkg prefix mola_lidar_odometry)/share/mola_lidar_odometry/pipelines/lidar3d-gicp.yaml}"
+
+  - type: mola::BridgeROS2
+    name: ros2_bridge
+    verbosity_level: "${MOLA_VERBOSITY_BRIDGE_ROS2|INFO}"
+    execution_rate: 20 # Hz
+    gui_preview_sensors:
+      - raw_sensor_label: lidar
+        decimation: 1
+        enabled: ${MOLA_WITH_GUI|true}
+        win_pos: 5 5 400 400
+    params:
+      base_link_frame: "${MOLA_TF_BASE_LINK|base_link}"
+      base_footprint_frame: "${MOLA_TF_FOOTPRINT_LINK|base_footprint}"
+      odom_frame: "${MOLA_TF_ESTIMATED_ODOMETRY|odom}"
+      reference_frame: "${MOLA_TF_MAP|map}"
+      # map -> base_link by default. Set it to true only if a driver publishes
+      # odom -> base_link and the smoother publishes map -> odom
+      # (MOLA_PUBLISH_MAP_TO_ODOM_TF=true, MOLA_LOCALIZATION_PUBLISH_TF_SOURCE=state_estimation/map_odom):
+      publish_localization_following_rep105: ${MOLA_LOCALIZ_USE_REP105|false}
+      odometry_as_robot_pose_observation: ${MOLA_ODOM_AS_ROBOT_POSE_OBS|false}
+      publish_odometry_msgs_from_slam: true
+      publish_odometry_msgs_from_slam_source: "${MOLA_LOCALIZATION_PUBLISH_ODOM_MSGS_SOURCE|state_estimation}"
+      publish_tf_from_slam: true
+      publish_tf_from_slam_source: "${MOLA_LOCALIZATION_PUBLISH_TF_SOURCE|state_estimation}"
+      publish_tf_from_robot_pose_observations: false
+      relocalize_from_topic: "/initialpose"
+      publish_in_sim_time: ${MOLA_ROS2_PUBLISH_IN_SIM_TIME|true}
+      transform_tolerance: ${MOLA_ROS2_TRANSFORM_TOLERANCE|0.1}
+      transform_publish_period: ${MOLA_ROS2_TRANSFORM_PUBLISH_PERIOD|0.05}
+      period_publish_new_map: ${MOLA_ROS2_PUBLISH_MAPS_PERIOD|1.0} # [s]
+      ros_args: '${ROS_ARGS|"[]"}'
+      subscribe:
+        - topic: ${MOLA_LIDAR_TOPIC|/ouster/points}
+          msg_type: PointCloud2
+          output_sensor_label: lidar
+          qos:
+            reliability: ${MOLA_LIDAR_QOS_RELIABILITY|best_effort}
+            depth: ${MOLA_LIDAR_QOS_DEPTH|50}
+        - topic: ${MOLA_IMU_TOPIC|/imu}
+          msg_type: Imu
+          output_sensor_label: imu
+          qos:
+            reliability: ${MOLA_IMU_QOS_RELIABILITY|best_effort}
+            depth: ${MOLA_IMU_QOS_DEPTH|50}
+        - topic: ${MOLA_ATTITUDE_IMU_TOPIC|}
+          msg_type: Imu
+          output_sensor_label: ${MOLA_ATTITUDE_IMU_NAME|imu_attitude}
+        - topic: ${MOLA_GNSS_TOPIC|}
+          msg_type: NavSatFix
+          output_sensor_label: gps
+        - topic: ${MOLA_ODOM_TOPIC|}
+          msg_type: Odometry
+          output_sensor_label: odom_wheels

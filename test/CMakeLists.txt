@@ -52,9 +52,21 @@ mola_add_test(
 find_package(mola_test_datasets QUIET)
 if(mola_test_datasets_FOUND)
   # Install directory of the mola_sm_loop_closure pipelines, so these tests do not
-  # need the `ros2` command line tool (not available in some CI environments):
-  get_filename_component(MOLA_SM_LC_PREFIX "${mola_sm_loop_closure_DIR}/../../.." ABSOLUTE)
-  set(MOLA_SM_LC_PIPELINES_DIR "${MOLA_SM_LC_PREFIX}/share/mola_sm_loop_closure/pipelines")
+  # need the `ros2` command line tool (not available in some CI environments).
+  # The package CMake config may be in <prefix>/lib/<pkg>/cmake, <prefix>/lib/cmake/<pkg>
+  # or <prefix>/share/<pkg>/cmake: look for share/ in the parent directories.
+  set(MOLA_SM_LC_PIPELINES_DIR "")
+  set(_lc_dir "${mola_sm_loop_closure_DIR}")
+  foreach(_i RANGE 5)
+    get_filename_component(_lc_dir "${_lc_dir}/.." ABSOLUTE)
+    if(EXISTS "${_lc_dir}/share/mola_sm_loop_closure/pipelines")
+      set(MOLA_SM_LC_PIPELINES_DIR "${_lc_dir}/share/mola_sm_loop_closure/pipelines")
+      break()
+    endif()
+  endforeach()
+  if(NOT MOLA_SM_LC_PIPELINES_DIR)
+    message(WARNING "mola_sm_loop_closure pipelines not found from ${mola_sm_loop_closure_DIR}")
+  endif()
   mola_add_test(
     TARGET  test-local-map-corrections
     SOURCES test-local-map-corrections.cpp

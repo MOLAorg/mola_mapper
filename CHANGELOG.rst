@@ -2,8 +2,8 @@
 Changelog for package mola_mapper
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Forthcoming
------------
+0.1.0 (2026-11-20)
+------------------
 * First release: mola_mapper as a global back end next to LIO and the state estimator: keyframe sink and batch global pose graph (odometry chain, loop closures, GNSS, gravity, gyroscope and wheel odometry factors).
 * Loop closure detection with mola_sm_loop_closure (BEV global registration by default), odometry and pairwise consistency checks.
 * Acts as a mola::LocalMapCorrectionSource, so front ends get corrected keyframe poses after loop closures.

@@ -21,7 +21,7 @@
   <depend>gtsam</depend>
   <depend>mola_gtsam_factors</depend>
   <depend>mola_georeferencing</depend>
-  <depend>mola_sm_loop_closure</depend>
+  <depend version_gte="1.5.0">mola_sm_loop_closure</depend> <!-- bev global registration -->
   <depend>mp2p_icp</depend>
   <depend>mrpt_maps</depend>
   <depend>mrpt_poses</depend>

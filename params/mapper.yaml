@@ -17,15 +17,24 @@ params:
   gnss_sensor_labels_re: "${MOLA_MAPPER_GNSS_LABELS|gps}"
   gnss_max_time_offset: ${MOLA_MAPPER_GNSS_MAX_TIME_OFFSET|0.5}  # [s]
 
-  # IMU whose averaged accelerometer levels the map (regex; empty: none):
-  imu_sensor_labels_re: "${MOLA_MAPPER_GRAVITY_IMU_LABELS|}"
+  # Whether to use the IMU below (gravity and gyroscope factors); false leaves
+  # it to the front end only, e.g. for de-skew:
+  use_imu: ${MOLA_MAPPER_USE_IMU|true}
+
+  # IMU whose averaged accelerometer levels the map (regex; empty: none). The
+  # default is the label the launch files give to their IMU topic; without such
+  # readings, no gravity factor is added:
+  imu_sensor_labels_re: "${MOLA_MAPPER_GRAVITY_IMU_LABELS|imu}"
   imu_gravity_window: ${MOLA_MAPPER_GRAVITY_WINDOW|1.0}  # [s] before each keyframe
   imu_gravity_min_samples: 10
 
   # IMU whose gyroscope gives the rotation between consecutive keyframes (regex;
   # empty: none). Bias from a mola::ImuBiasSource (e.g. the state estimator with
-  # MOLA_NAVSTATE_IMU_BIAS_TRACKING=true), else taken as zero with gyro_bias_sigma:
-  gyro_sensor_labels_re: "${MOLA_MAPPER_GYRO_LABELS|}"
+  # MOLA_NAVSTATE_IMU_BIAS_TRACKING=true); without it, see the next parameter:
+  gyro_sensor_labels_re: "${MOLA_MAPPER_GYRO_LABELS|imu}"
+  # Only add gyroscope factors while a bias estimate exists; false: without it,
+  # the bias is taken as zero, with gyro_bias_sigma.
+  gyro_require_bias_estimate: ${MOLA_MAPPER_GYRO_REQUIRE_BIAS|true}
   gyro_noise_density: ${MOLA_MAPPER_GYRO_NOISE_DENSITY|3e-4}  # [rad/s/sqrt(Hz)]
   gyro_bias_sigma: 0.005  # [rad/s]
   gyro_scale_sigma: ${MOLA_MAPPER_GYRO_SCALE_SIGMA|0.005}

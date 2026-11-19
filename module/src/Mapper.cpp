@@ -120,7 +120,7 @@ void Mapper::initialize(const mrpt::containers::yaml & cfg)
   params_.loadFrom(cfg["params"]);
 
   use_gnss_input_ = !params_.gnss_sensor_labels_re.empty();
-  use_imu_input_ = !params_.imu_sensor_labels_re.empty();
+  use_imu_input_ = params_.use_imu && !params_.imu_sensor_labels_re.empty();
   if (use_gnss_input_) {
     gnss_labels_re_ = std::regex(params_.gnss_sensor_labels_re);
   }
@@ -138,7 +138,7 @@ void Mapper::initialize(const mrpt::containers::yaml & cfg)
       mrpt::system::directoryExists(image_dir_) || mrpt::system::createDirectory(image_dir_),
       "Cannot create the keyframe images directory: " + image_dir_);
   }
-  use_gyro_input_ = !params_.gyro_sensor_labels_re.empty();
+  use_gyro_input_ = params_.use_imu && !params_.gyro_sensor_labels_re.empty();
   if (use_gyro_input_) {
     gyro_labels_re_ = std::regex(params_.gyro_sensor_labels_re);
 #if defined(MOLA_MAPPER_HAS_IMU_BIAS_SOURCE)
@@ -564,6 +564,9 @@ void Mapper::attach_gyro_rotation_locked(Keyframe & kf, const GyroBias & b)
   if (!use_gyro_input_ || keyframes_.empty() || gyro_samples_.empty()) {
     return;
   }
+  if (params_.gyro_require_bias_estimate && !b.from_source) {
+    return;
+  }
   const auto & prev = keyframes_.back();
   const auto g = integrate_gyro(gyro_samples_, prev.stamp, kf.stamp, b.bias, params_.gyro_max_gap);
   if (!g) {
@@ -685,9 +688,10 @@ std::optional<SharedKeyframeMap::KeyFrameID> Mapper::insert_keyframe_impl(
     }
 
     // If the IMU readings up to the keyframe have not all arrived yet, tried
-    // again once they have:
+    // again once they have. Before a first reading arrives, there is nothing to
+    // wait for: the vehicle may have no IMU at all.
     const bool imuBehind =
-      use_imu_input_ && (imu_samples_.empty() || imu_samples_.back().stamp < kf.stamp);
+      use_imu_input_ && !imu_samples_.empty() && imu_samples_.back().stamp < kf.stamp;
     const bool gravityAttached = attach_gravity_locked(kf);
     attach_gyro_rotation_locked(kf, gyroBias);
     keyframes_.push_back(std::move(kf));

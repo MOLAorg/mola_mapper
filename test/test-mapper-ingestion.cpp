@@ -319,7 +319,9 @@ std::pair<double, double> run_square_with_gyro(bool withGyro)
 {
   auto m = make_mapper(
     std::string("  gnss_sensor_labels_re: \"\"\n  gyro_sensor_labels_re: \"") +
-    (withGyro ? "imu" : "") + "\"\n  graph:\n    use_gnss: false\n    use_imu_gravity: false\n");
+    (withGyro ? "imu" : "") +
+    "\"\n  gyro_require_bias_estimate: false\n  graph:\n    use_gnss: false\n    use_imu_gravity: "
+    "false\n");
   const CPose3D sensorPose(0.1, 0, 0.2, 0, 0, mrpt::DEG2RAD(90.0));
   const auto Rvs = sensorPose.getRotationMatrix();
 

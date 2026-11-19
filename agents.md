@@ -88,11 +88,14 @@ scripts/mola-mapper-gui-dataset   <profile> <args>: mola_lidar_odometry dataset 
   (jpg/png) once final, by the `disk_io_` thread (waited for in `finalize()`); the
   keyframe keeps a lazy-load copy (`CImage` copies are shallow: never externalize the
   shared input observation). Not recorded, not in the graph input.
+- IMU off for the mapper (gravity and gyro) with `use_imu: false`. Default labels `imu` (launch
+  files); keyframes only wait for IMU readings once a first one has arrived.
 - Gravity (`imu_sensor_labels_re`, first matching label): accelerometer averaged over
   `imu_gravity_window` before each keyframe, stored as a CObservationIMU in the keyframe aux frame.
 - Gyro (`gyro_sensor_labels_re`, first matching label): readings integrated between
   consecutive keyframes (`integrate_gyro()`, exact tick-based durations), bias from the first
-  `ImuBiasSource` with an estimate (else 0 with `gyro_bias_sigma`), rotated to the vehicle
+  `ImuBiasSource` with an estimate (without one: no factor, unless `gyro_require_bias_estimate`
+  is false, then 0 with `gyro_bias_sigma`), rotated to the vehicle
   frame. Sigma: noise density * sqrt(T), bias sigma * T, scale sigma * accumulated angle. The
   bias error is modeled as independent per factor, though it is common to all of them.
 - Wheel odometry (`wheel_odom_sensor_labels_re`, `CObservationOdometry`, first matching label):

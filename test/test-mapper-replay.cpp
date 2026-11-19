@@ -76,6 +76,7 @@ params:
          std::to_string(gyroBiasSigma) + R"###(
   imu_sensor_labels_re: "imu"
   gyro_sensor_labels_re: "imu"
+  gyro_require_bias_estimate: false
   loop_closure_enabled: true
   loop_closure_finalize_rounds: 1
   record_input: ")###" +

@@ -143,6 +143,10 @@ struct Parameters
   /// A GNSS reading is attached to the keyframe nearest in time, if within this [s].
   double gnss_max_time_offset = 0.5;
 
+  /// Whether to use an IMU (gravity and gyroscope factors). False leaves the
+  /// IMU to the front end only, e.g. for de-skew.
+  bool use_imu = true;
+
   /// Regex of the sensor labels of the IMU used for gravity (empty: none).
   std::string imu_sensor_labels_re;
   /// Accelerometer readings averaged before each keyframe [s].
@@ -156,6 +160,9 @@ struct Parameters
    *  there is one with an estimate for it; else it is taken as zero, with
    *  sigma gyro_bias_sigma. */
   std::string gyro_sensor_labels_re;
+  /// Only add gyroscope factors while a mola::ImuBiasSource has an estimate of
+  /// the bias: without it, the bias would be taken as zero.
+  bool gyro_require_bias_estimate = true;
   double gyro_noise_density = 3e-4;  ///< [rad/s/sqrt(Hz)]
   double gyro_bias_sigma = 0.005;    ///< [rad/s] without a bias source estimate
   double gyro_scale_sigma = 0.005;   ///< relative scale factor error

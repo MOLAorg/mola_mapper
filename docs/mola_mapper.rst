@@ -181,13 +181,20 @@ with an environment variable (shown in parentheses below).
       gnss_sensor_labels_re: "${MOLA_MAPPER_GNSS_LABELS|gps}"
       gnss_max_time_offset: 0.5          # [s] (MOLA_MAPPER_GNSS_MAX_TIME_OFFSET)
 
-      # IMU whose averaged accelerometer levels the map (empty: none)
-      imu_sensor_labels_re: "${MOLA_MAPPER_GRAVITY_IMU_LABELS|}"
+      # Whether to use the IMU (gravity, gyroscope); false leaves it to LIO, e.g. for de-skew
+      use_imu: true                      # (MOLA_MAPPER_USE_IMU)
+
+      # IMU whose averaged accelerometer levels the map (empty: none).
+      # The default is the label of the IMU topic of the launch files:
+      imu_sensor_labels_re: "${MOLA_MAPPER_GRAVITY_IMU_LABELS|imu}"
       imu_gravity_window: 1.0            # [s] before each keyframe (MOLA_MAPPER_GRAVITY_WINDOW)
       imu_gravity_min_samples: 10
 
       # IMU whose gyroscope gives the rotation between keyframes (empty: none)
-      gyro_sensor_labels_re: "${MOLA_MAPPER_GYRO_LABELS|}"
+      gyro_sensor_labels_re: "${MOLA_MAPPER_GYRO_LABELS|imu}"
+      # Only with a bias estimate, e.g. MOLA_NAVSTATE_IMU_BIAS_TRACKING=true in the
+      # state estimator; false: zero bias, with gyro_bias_sigma
+      gyro_require_bias_estimate: true   # (MOLA_MAPPER_GYRO_REQUIRE_BIAS)
       gyro_noise_density: 3e-4           # [rad/s/sqrt(Hz)] (MOLA_MAPPER_GYRO_NOISE_DENSITY)
       gyro_bias_sigma: 0.005             # [rad/s], without a bias source estimate
       gyro_scale_sigma: 0.005            # (MOLA_MAPPER_GYRO_SCALE_SIGMA)
@@ -662,9 +669,11 @@ Useful combinations:
 * A live geo-referenced estimate too: ``MOLA_ESTIMATE_GEO_REF=true`` (the state
   estimator geo-references itself on the fly from the same GNSS readings as the
   mapper).
-* Gyroscope factors: ``MOLA_MAPPER_GYRO_LABELS=imu``, optionally with
-  ``MOLA_NAVSTATE_IMU_BIAS_TRACKING=true`` in the state estimator.
-* Gravity factors: ``MOLA_MAPPER_GRAVITY_IMU_LABELS=imu``.
+* Gravity factors are added whenever the IMU topic is given. Gyroscope factors
+  are added too while the state estimator estimates the gyroscope bias:
+  ``MOLA_NAVSTATE_IMU_BIAS_TRACKING=true`` (or ``MOLA_MAPPER_GYRO_REQUIRE_BIAS=false``
+  to use a zero bias instead).
+* The IMU only for LIO (e.g. de-skew), not in the mapper: ``MOLA_MAPPER_USE_IMU=false``.
 
 When the bag ends, stop the application (or set ``MOLA_QUIT_ON_DATASET_END=true``):
 the mapper then runs its final loop closure passes and writes the outputs.

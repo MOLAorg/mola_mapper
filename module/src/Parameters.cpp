@@ -97,10 +97,12 @@ void Parameters::loadFrom(const mrpt::containers::yaml & cfg)
 
   MCP_LOAD_OPT(cfg, gnss_sensor_labels_re);
   MCP_LOAD_OPT(cfg, gnss_max_time_offset);
+  MCP_LOAD_OPT(cfg, use_imu);
   MCP_LOAD_OPT(cfg, imu_sensor_labels_re);
   MCP_LOAD_OPT(cfg, imu_gravity_window);
   MCP_LOAD_OPT(cfg, imu_gravity_min_samples);
   MCP_LOAD_OPT(cfg, gyro_sensor_labels_re);
+  MCP_LOAD_OPT(cfg, gyro_require_bias_estimate);
   MCP_LOAD_OPT(cfg, wheel_odom_sensor_labels_re);
   MCP_LOAD_OPT(cfg, wheel_odom_max_gap);
   MCP_LOAD_OPT(cfg, image_sensor_labels_re);

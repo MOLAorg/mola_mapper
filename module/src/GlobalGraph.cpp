@@ -39,6 +39,7 @@
 #include <algorithm>
 #include <cmath>
 #include <set>
+#include <vector>
 
 #include "mrpt_gtsam_compat.h"
 
@@ -106,9 +107,19 @@ const mrpt::math::TPose2D * usable_wheel_odom(
   return &*kf.wheel_odom_from_prev;
 }
 
+/// Whether an RTK-grade GNSS factor (`rtkStamps`: their keyframe stamps,
+/// sorted) lies within `window` of the time span [t0, t1] of an odometry edge:
+/// there, the chain gives way to the fixes. Also for keyframes further apart
+/// than the window, or with the fixes on every other keyframe.
+bool edge_near_rtk(double t0, double t1, const std::vector<double> & rtkStamps, double window)
+{
+  const auto it = std::lower_bound(rtkStamps.begin(), rtkStamps.end(), std::min(t0, t1) - window);
+  return it != rtkStamps.end() && *it <= std::max(t0, t1) + window;
+}
+
 /// Sigmas of an odometry edge, from the (inflated) diagonal of its MRPT covariance.
 gtsam::Vector6 odometry_edge_sigmas(
-  const mrpt::poses::CPose3DPDFGaussian & rel, const GlobalGraphParams & p)
+  const mrpt::poses::CPose3DPDFGaussian & rel, const GlobalGraphParams & p, bool nearRtk)
 {
   // MRPT covariance order: x y z yaw pitch roll
   gtsam::Vector6 s = rel.cov.asEigen().diagonal().cwiseMax(0.0).array().sqrt().eval();
@@ -117,7 +128,9 @@ gtsam::Vector6 odometry_edge_sigmas(
   const double sqrtStep = std::sqrt(rel.mean.translation().norm());
   const double turned = mrpt::poses::Lie::SO<3>::log(rel.mean.getRotationMatrix()).norm();
   for (int k = 0; k < 3; k++) {
-    s[k] += p.odometry_additional_noise_xyz + p.odometry_noise_xyz_per_sqrt_m * sqrtStep;
+    const double perSqrtM =
+      nearRtk ? p.gnss_rtk_odometry_noise_xyz_per_sqrt_m : p.odometry_noise_xyz_per_sqrt_m;
+    s[k] += p.odometry_additional_noise_xyz + perSqrtM * sqrtStep;
     s[3 + k] +=
       mrpt::DEG2RAD(
         p.odometry_additional_noise_ang_deg + p.odometry_noise_ang_deg_per_sqrt_m * sqrtStep) +
@@ -146,14 +159,20 @@ gtsam::SharedNoiseModel odometry_edge_noise(
 
 void add_odometry_factors(
   gtsam::NonlinearFactorGraph & fg, const GlobalGraphInput & in, const GlobalGraphParams & params,
-  GlobalGraphResult & out)
+  const std::vector<double> & rtkStamps, GlobalGraphResult & out)
 {
   for (std::size_t i = 1; i < in.keyframes.size(); i++) {
     const auto & prev = in.keyframes[i - 1];
     const auto & cur = in.keyframes[i];
     if (prev.source_frame == cur.source_frame) {
       const mrpt::poses::CPose3DPDFGaussian rel = cur.pose_in_source - prev.pose_in_source;
-      gtsam::Vector6 s = odometry_edge_sigmas(rel, params);
+      const bool soft = edge_near_rtk(
+        mrpt::Clock::toDouble(prev.stamp), mrpt::Clock::toDouble(cur.stamp), rtkStamps,
+        params.gnss_rtk_odometry_window);
+      if (soft) {
+        out.num_odometry_near_rtk++;
+      }
+      gtsam::Vector6 s = odometry_edge_sigmas(rel, params, soft);
       // With wheel odometry, the forward component goes into a factor of its
       // own, with a robust kernel, so the wheels win where the front end slips:
       const bool robustForward = usable_wheel_odom(prev, cur, params) != nullptr &&
@@ -272,34 +291,46 @@ void add_loop_factors(
   }
 }
 
-void add_gnss_factors(
+/// Returns the (sorted) stamps of the keyframes with an RTK-grade GNSS factor.
+std::vector<double> add_gnss_factors(
   gtsam::NonlinearFactorGraph & fg, const mrpt::maps::CSimpleMap & auxMap,
   const GlobalGraphInput & in, const GlobalGraphParams & params, GlobalGraphResult & out)
 {
+  std::vector<double> rtkStamps;
   const auto gnss = mola::extract_gnss_frames_from_sm(auxMap, in.geodetic_datum);
   if (!out.geodetic_datum && gnss.refCoord) {
     out.geodetic_datum = gnss.refCoord;
   }
   out.gnss_degenerate = gnss.possibly_degenerate;
   if (gnss.possibly_degenerate) {
-    return;
+    return rtkStamps;
   }
   for (const auto & f : gnss.frames) {
-    if (std::hypot(f.sigma_E, f.sigma_N) > params.gnss_max_uncertainty_horiz) {
+    const double horizSigma = std::hypot(f.sigma_E, f.sigma_N);
+    if (horizSigma > params.gnss_max_uncertainty_horiz) {
       continue;
     }
+    const bool rtk =
+      horizSigma * params.gnss_uncertainty_multiplier <= params.gnss_rtk_max_reported_sigma;
     const gtsam::Vector3 sigmas =
       (gtsam::Vector3(f.sigma_E, f.sigma_N, f.sigma_U) * params.gnss_uncertainty_multiplier)
         .array()
-        .max(params.gnss_minimum_uncertainty);
+        .max(rtk ? params.gnss_rtk_minimum_uncertainty : params.gnss_minimum_uncertainty);
     auto robust = gtsam::noiseModel::Robust::Create(
-      robust_kernel(params.gnss_robust_kernel, params.gnss_robust_k),
+      rtk ? robust_kernel(params.gnss_rtk_robust_kernel, params.gnss_rtk_robust_k)
+          : robust_kernel(params.gnss_robust_kernel, params.gnss_robust_k),
       gtsam::noiseModel::Diagonal::Sigmas(sigmas));
+    if (rtk) {
+      out.num_gnss_rtk_factors++;
+      rtkStamps.push_back(mrpt::Clock::toDouble(in.keyframes.at(f.kf_index).stamp));
+    }
     fg.emplace_shared<mola::factors::FactorGnssMapEnu>(
       T(0), P(f.kf_index), mrpt::gtsam_wrappers::toPoint3(f.obs->sensorPose.translation()),
       mrpt::gtsam_wrappers::toPoint3(f.enu), robust);
     out.num_gnss_factors++;
   }
+  std::sort(rtkStamps.begin(), rtkStamps.end());
+  return rtkStamps;
 }
 
 void add_gravity_factors(
@@ -345,13 +376,9 @@ GlobalGraphResult optimize_global_graph(
     P(0), mrpt::gtsam_wrappers::toPose3(in.keyframes[0].initial_guess),
     gtsam::noiseModel::Isotropic::Sigma(6, params.first_pose_prior_sigma));
 
-  add_odometry_factors(fg, in, params, out);
-  add_loop_factors(fg, in, params, out);
-  add_wheel_odometry_factors(fg, in, params, out);
-  add_gyro_factors(fg, in, params, out);
-
   // GNSS and gravity, from the observations attached to the keyframes, through
-  // the extractors of mola_georeferencing (they read a CSimpleMap):
+  // the extractors of mola_georeferencing (they read a CSimpleMap). GNSS goes
+  // first: the odometry chain is softer near its RTK-grade factors.
   values.insert(
     T(0), mrpt::gtsam_wrappers::toPose3(
             in.T_enu_to_map_guess.value_or(mrpt::poses::CPose3D::Identity())));
@@ -364,9 +391,15 @@ GlobalGraphResult optimize_global_graph(
     auxMap.insert(mrpt::poses::CPose3DPDFGaussian::Create(kf.initial_guess), sf);
   }
 
+  std::vector<double> rtkStamps;
   if (params.use_gnss) {
-    add_gnss_factors(fg, auxMap, in, params, out);
+    rtkStamps = add_gnss_factors(fg, auxMap, in, params, out);
   }
+
+  add_odometry_factors(fg, in, params, rtkStamps, out);
+  add_loop_factors(fg, in, params, out);
+  add_wheel_odometry_factors(fg, in, params, out);
+  add_gyro_factors(fg, in, params, out);
   if (params.use_imu_gravity) {
     add_gravity_factors(fg, values, auxMap, params, out);
   }
@@ -426,9 +459,11 @@ GlobalGraphResult optimize_global_graph(
   if (logger != nullptr) {
     logger->logFmt(
       mrpt::system::LVL_DEBUG,
-      "[GlobalGraph] %zu keyframes, %zu odometry, %zu loop, %zu GNSS%s, %zu gravity, %zu gyro, "
-      "%zu wheel odometry factors (%zu inconsistent, not used): error %.3e -> %.3e",
-      N, out.num_odometry_factors, out.num_loop_factors, out.num_gnss_factors,
+      "[GlobalGraph] %zu keyframes, %zu odometry (%zu near RTK), %zu loop, %zu GNSS (%zu RTK)%s, "
+      "%zu gravity, %zu gyro, %zu wheel odometry factors (%zu inconsistent, not used): error "
+      "%.3e -> %.3e",
+      N, out.num_odometry_factors, out.num_odometry_near_rtk, out.num_loop_factors,
+      out.num_gnss_factors, out.num_gnss_rtk_factors,
       out.gnss_degenerate ? " (degenerate, unused)" : "", out.num_gravity_factors,
       out.num_gyro_factors, out.num_wheel_odom_factors, out.num_wheel_odom_inconsistent,
       out.initial_error, out.final_error);

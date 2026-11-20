@@ -145,6 +145,18 @@ geo-referenced, the marginal covariance of ``T_enu_to_map`` is computed. Its fac
   and saved only once observable: at least ``georef_min_gnss_factors`` GNSS
   factors, and an azimuth sigma of ``T_enu_to_map`` below
   ``georef_max_sigma_yaw_deg``.
+  Readings that report an RTK-grade accuracy (``sqrt(sigma_E^2 + sigma_N^2)``,
+  after ``gnss_uncertainty_multiplier``, up to ``gnss_rtk_max_reported_sigma``,
+  0.05 m, below what DGPS/SBAS readings report) have their own floor
+  (``gnss_rtk_minimum_uncertainty``) and a Huber kernel, and the odometry chain
+  edges with such a fix within ``gnss_rtk_odometry_window`` of their time span
+  use ``gnss_rtk_odometry_noise_xyz_per_sqrt_m``: there, the fixes correct a
+  front end that falls short on a degenerate stretch, instead of being rejected
+  as outliers. Elsewhere the chain keeps its stiffness, so a slip inside a GNSS
+  outage longer than the window is not corrected. Trade-offs: a false RTK fix
+  (wrong ambiguities, still reporting centimeters) is followed as well, and RTK
+  float readings above the threshold keep the plain weighting (raise it, e.g. to
+  0.1 m, for a receiver whose float solutions are trusted).
 * **Gravity**: roll and pitch from the averaged accelerometer.
 * **Gyroscope**: relative rotation between consecutive keyframes, with free
   translation. The sigma combines the noise density, the bias sigma and the scale
@@ -297,6 +309,12 @@ with an environment variable (shown in parentheses below).
         gnss_max_uncertainty_horiz: 20.0   # [m]
         gnss_robust_kernel: "cauchy"    # huber, cauchy, geman_mcclure, tukey (MOLA_MAPPER_GNSS_ROBUST_KERNEL)
         gnss_robust_k: 1.5              # [sigmas] (MOLA_MAPPER_GNSS_ROBUST_K)
+        gnss_rtk_max_reported_sigma: 0.05  # [m] (MOLA_MAPPER_GNSS_RTK_MAX_SIGMA)
+        gnss_rtk_minimum_uncertainty: 0.05  # [m] (MOLA_MAPPER_GNSS_RTK_MIN_SIGMA)
+        gnss_rtk_robust_kernel: "huber"  # (MOLA_MAPPER_GNSS_RTK_ROBUST_KERNEL)
+        gnss_rtk_robust_k: 3.0          # [sigmas] (MOLA_MAPPER_GNSS_RTK_ROBUST_K)
+        gnss_rtk_odometry_noise_xyz_per_sqrt_m: 0.05  # (MOLA_MAPPER_GNSS_RTK_ODOM_SIGMA_XYZ_PER_SQRT_M)
+        gnss_rtk_odometry_window: 2.0   # [s]
         georef_min_gnss_factors: 3
         georef_max_sigma_yaw_deg: 10.0  # [deg] (MOLA_MAPPER_GEOREF_MAX_SIGMA_YAW)
 

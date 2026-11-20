@@ -100,6 +100,20 @@ params:
     gnss_max_uncertainty_horiz: 20.0  # [m]
     gnss_robust_kernel: "${MOLA_MAPPER_GNSS_ROBUST_KERNEL|cauchy}"  # huber, cauchy, geman_mcclure, tukey
     gnss_robust_k: ${MOLA_MAPPER_GNSS_ROBUST_K|1.5}  # [sigmas]
+    # Readings that report an RTK-grade accuracy (sqrt(sE^2+sN^2), after the
+    # multiplier, at most this; 0: none) have their own floor and a Huber kernel:
+    # they must win where the front end drifted, instead of being rejected as
+    # outliers there. Low enough that DGPS/SBAS readings stay out; raise it (e.g.
+    # 0.1) to also take a trusted receiver's RTK float readings:
+    gnss_rtk_max_reported_sigma: ${MOLA_MAPPER_GNSS_RTK_MAX_SIGMA|0.05}  # [m]
+    gnss_rtk_minimum_uncertainty: ${MOLA_MAPPER_GNSS_RTK_MIN_SIGMA|0.05}  # [m]
+    gnss_rtk_robust_kernel: "${MOLA_MAPPER_GNSS_RTK_ROBUST_KERNEL|huber}"
+    gnss_rtk_robust_k: ${MOLA_MAPPER_GNSS_RTK_ROBUST_K|3.0}  # [sigmas]
+    # Near those fixes (one within the window of the edge time span), the chain
+    # translation noise per sqrt(m), instead of odometry_noise_xyz_per_sqrt_m, so
+    # the fixes can correct a slipping front end; elsewhere the chain stays stiff:
+    gnss_rtk_odometry_noise_xyz_per_sqrt_m: ${MOLA_MAPPER_GNSS_RTK_ODOM_SIGMA_XYZ_PER_SQRT_M|0.05}
+    gnss_rtk_odometry_window: 2.0  # [s]
     # The geo-reference is published once its azimuth sigma is below this:
     georef_min_gnss_factors: 3
     georef_max_sigma_yaw_deg: ${MOLA_MAPPER_GEOREF_MAX_SIGMA_YAW|10.0}  # [deg]

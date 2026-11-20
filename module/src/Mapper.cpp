@@ -863,9 +863,9 @@ void Mapper::solve_global_graph()
 
   MRPT_LOG_THROTTLE_INFO_FMT(
     10.0,
-    "Global graph: %zu keyframes, %zu loops, %zu GNSS%s, %zu gravity, %zu gyro, %zu wheel "
-    "odometry factors, solved in %.0f ms",
-    in.keyframes.size(), r.num_loop_factors, r.num_gnss_factors,
+    "Global graph: %zu keyframes, %zu loops, %zu GNSS (%zu RTK)%s, %zu gravity, %zu gyro, %zu "
+    "wheel odometry factors, solved in %.0f ms",
+    in.keyframes.size(), r.num_loop_factors, r.num_gnss_factors, r.num_gnss_rtk_factors,
     r.gnss_degenerate ? " (degenerate, unused)" : "", r.num_gravity_factors, r.num_gyro_factors,
     r.num_wheel_odom_factors, 1e3 * dt);
 

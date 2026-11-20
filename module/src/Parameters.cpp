@@ -58,6 +58,12 @@ void GlobalGraphParams::loadFrom(const mrpt::containers::yaml & cfg)
   MCP_LOAD_OPT(cfg, gnss_max_uncertainty_horiz);
   MCP_LOAD_OPT(cfg, gnss_robust_kernel);
   MCP_LOAD_OPT(cfg, gnss_robust_k);
+  MCP_LOAD_OPT(cfg, gnss_rtk_max_reported_sigma);
+  MCP_LOAD_OPT(cfg, gnss_rtk_minimum_uncertainty);
+  MCP_LOAD_OPT(cfg, gnss_rtk_robust_kernel);
+  MCP_LOAD_OPT(cfg, gnss_rtk_robust_k);
+  MCP_LOAD_OPT(cfg, gnss_rtk_odometry_noise_xyz_per_sqrt_m);
+  MCP_LOAD_OPT(cfg, gnss_rtk_odometry_window);
   MCP_LOAD_OPT(cfg, georef_min_gnss_factors);
   MCP_LOAD_OPT(cfg, georef_max_sigma_yaw_deg);
   {
@@ -67,6 +73,11 @@ void GlobalGraphParams::loadFrom(const mrpt::containers::yaml & cfg)
       mrpt::format(
         "Unknown gnss_robust_kernel '%s' (huber, cauchy, geman_mcclure or tukey)",
         gnss_robust_kernel.c_str()));
+    ASSERTMSG_(
+      kernels.count(gnss_rtk_robust_kernel) != 0,
+      mrpt::format(
+        "Unknown gnss_rtk_robust_kernel '%s' (huber, cauchy, geman_mcclure or tukey)",
+        gnss_rtk_robust_kernel.c_str()));
     // The wheel odometry ones may also be "none" (an empty value means the same):
     for (auto * k : {&wheel_odom_robust_kernel, &wheel_odom_chain_robust_kernel}) {
       if (k->empty()) {

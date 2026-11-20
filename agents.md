@@ -111,7 +111,9 @@ Keys `P(i)` (keyframe poses in `{map}`), `T(0)` (T_enu_to_map). Factors:
   radian turned (`odometry_noise_ang_per_rad`: LIO heading errors concentrate in turns);
   different source frames are joined by a weak edge;
 - loop closures: Huber, with sigma floors (the detector ICP covariance is overconfident);
-- GNSS: `FactorGnssMapEnu` with a selectable robust kernel (default Cauchy);
+- GNSS: `FactorGnssMapEnu` with a selectable robust kernel (default Cauchy); readings
+  reporting an RTK-grade sigma (`gnss_rtk_*`) get their own floor and a Huber kernel, and
+  soften the chain edges near them (`edge_near_rtk()`), so the fixes win where LIO slips;
 - gravity: `mola_georeferencing::add_imu_gravity_factors`;
 - gyro: `BetweenFactor<Pose3>` with free translation (sigma 1e3 m);
 - wheel odometry (if attached; `use_wheel_odometry`): forward and lateral translation of the
@@ -178,12 +180,17 @@ and a `T(0)` azimuth sigma below `georef_max_sigma_yaw_deg`.
 - 1.3 km ground robot loop, low-cost GNSS only (RTK as ground truth), measured with a feedback
   of the mapper poses into the smoother since removed: absolute horizontal RMSE 5.4 m initially; 4.6 m with smoother bias tracking and
   the per-radian odometry sigma; 4.35 m adding gyro factors. LIO alone drifts ~11 m.
+- 550 m ground robot loop (LIO 17 % short on one stretch), replays of the recorded mapper
+  input, horizontal RMSE against the RTK fixes: RTK receiver 6.9 m with the plain GNSS weighting
+  (the fixes there taken as outliers), 0.90 m with the RTK weighting (its float fixes, 5-10 cm,
+  on that stretch stay plain), 0.44 m with gnss_rtk_max_reported_sigma 0.1; low-cost receiver
+  on the same loop unchanged by it (6.4 m; 3.2 m with wheel odometry).
 - KITTI 00 (3.7 km, loop closures only): LIO APE RMSE 6.85 m, mapper 2.21 m (50 loops).
 
 ## Tests
 
 `test/`: test-global-graph (loop closure, GNSS georef and its observability, gyro vs turn
-heading errors), test-gyro-integration, test-mapper-ingestion (GNSS/gravity/gyro attachment,
+heading errors, RTK fixes vs a slipping front end and which edges they soften), test-gyro-integration, test-mapper-ingestion (GNSS/gravity/gyro attachment,
 outputs), test-loop-odometry-check, test-loop-consistency, test-lc-wait-idle,
 test-graph-visualization (GUI scene, no visualizer needed), test-keyframe-map-visualization,
 test-camera-director.

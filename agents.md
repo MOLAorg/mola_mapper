@@ -180,9 +180,10 @@ and a `T(0)` azimuth sigma below `georef_max_sigma_yaw_deg`.
 - 1.3 km ground robot loop, low-cost GNSS only (RTK as ground truth), measured with a feedback
   of the mapper poses into the smoother since removed: absolute horizontal RMSE 5.4 m initially; 4.6 m with smoother bias tracking and
   the per-radian odometry sigma; 4.35 m adding gyro factors. LIO alone drifts ~11 m.
-- 550 m ground robot loop (LIO 17 % short on one stretch), RTK GNSS: horizontal RMSE against
-  the fixes 6.5 m with the plain GNSS weighting (the fixes there taken as outliers), 0.45 m
-  with the RTK weighting (replay of the recorded mapper input).
+- 550 m ground robot loop (LIO 17 % short on one stretch), replays of the recorded mapper
+  input, horizontal RMSE against the RTK fixes: RTK receiver 6.9 m with the plain GNSS weighting
+  (the fixes there taken as outliers), 0.44 m with the RTK weighting (floor + Huber alone: 1.2 m);
+  low-cost receiver on the same loop unchanged by it (6.4 m; 3.2 m with wheel odometry).
 - KITTI 00 (3.7 km, loop closures only): LIO APE RMSE 6.85 m, mapper 2.21 m (50 loops).
 
 ## Tests

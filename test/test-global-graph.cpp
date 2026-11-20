@@ -199,6 +199,62 @@ void test_gnss_georeference_and_drift()
   ASSERT_LT_(maxErr, 0.8);  // the fixes have 0.3 m sigma
 }
 
+/** A front end that falls 15 % short along one 20 m side (LiDAR odometry
+ *  slipping on a degenerate stretch), with RTK fixes (1 cm reported, 2 cm
+ *  noise): the trajectory follows the fixes. With the default weighting, which
+ *  rejects them as outliers there, it keeps the front end error. A receiver
+ *  reporting meters is not taken as RTK. */
+void test_rtk_fixes_win_over_a_slipping_front_end()
+{
+  const auto gt = ground_truth();
+  GlobalGraphInput in;
+  in.keyframes = drifting_odometry(gt, 0.0);
+  {
+    // Forward increments 15 % short on the second side (keyframes 20 to 39):
+    CPose3D odo = gt.front();
+    for (std::size_t i = 1; i < gt.size(); i++) {
+      CPose3D step = gt[i] - gt[i - 1];
+      if (i > 20 && i < 40) {
+        step = CPose3D(0.85 * step.x(), step.y(), step.z(), step.yaw(), step.pitch(), step.roll());
+      }
+      odo = odo + step;
+      in.keyframes[i].pose_in_source.mean = odo;
+      in.keyframes[i].initial_guess = odo;
+    }
+  }
+  attach_gnss_fixes(in, gt, 0, gt.size() - 1, 0.02, 0.01);
+
+  GlobalGraphParams p;
+  p.use_imu_gravity = false;
+  const auto maxError = [&](const mola::mapper::GlobalGraphResult & r) {
+    double e = 0;
+    for (std::size_t i = 0; i < gt.size(); i++) {
+      e = std::max(e, position_error(r.poses[i], gt[i]));
+    }
+    return e;
+  };
+  const auto rtk = mola::mapper::optimize_global_graph(in, p);
+  p.gnss_rtk_max_reported_sigma = 0;
+  const auto asBefore = mola::mapper::optimize_global_graph(in, p);
+  std::cout << "Slipping front end: max keyframe error " << maxError(rtk)
+            << " m with RTK weighting (" << rtk.num_gnss_rtk_factors << " RTK factors), "
+            << maxError(asBefore) << " m with the default one\n";
+  ASSERT_EQUAL_(rtk.num_gnss_rtk_factors, gt.size());
+  ASSERT_EQUAL_(rtk.num_odometry_near_rtk, gt.size() - 1);
+  ASSERT_LT_(maxError(rtk), 0.3);
+  ASSERT_GT_(maxError(asBefore), 1.0);
+
+  // A low-cost receiver (3 m reported) keeps the default weighting:
+  GlobalGraphInput lowCost;
+  lowCost.keyframes = drifting_odometry(gt, 0.0);
+  attach_gnss_fixes(lowCost, gt, 0, gt.size() - 1, 0.5, 3.0);
+  p.gnss_rtk_max_reported_sigma = 0.1;
+  const auto r = mola::mapper::optimize_global_graph(lowCost, p);
+  ASSERT_EQUAL_(r.num_gnss_factors, gt.size());
+  ASSERT_EQUAL_(r.num_gnss_rtk_factors, 0U);
+  ASSERT_EQUAL_(r.num_odometry_near_rtk, 0U);
+}
+
 /** The geo-reference is only returned once observable: not from a single fix,
  *  nor from fixes much closer together than their sigmas (standing still), even
  *  if their reported sigmas are tiny (below the configured floor). */
@@ -218,7 +274,7 @@ void test_georeference_only_once_observable()
   }
   {
     // Standing still: the vehicle creeps 2 cm per keyframe, fixes with 1 cm
-    // reported sigmas (floored to gnss_minimum_uncertainty = 0.5 m).
+    // reported sigmas (RTK-grade, floored to gnss_rtk_minimum_uncertainty).
     std::vector<CPose3D> still;
     for (int i = 0; i < 5; i++) {
       still.emplace_back(0.02 * i, 0, 0, 0, 0, 0);
@@ -391,6 +447,7 @@ int main()
     test_gyro_fixes_turn_heading_errors();
     test_gnss_georeference_and_drift();
     test_georeference_only_once_observable();
+    test_rtk_fixes_win_over_a_slipping_front_end();
     test_graph_input_round_trip();
     std::cout << "All tests passed.\n";
     return 0;

@@ -111,7 +111,9 @@ Keys `P(i)` (keyframe poses in `{map}`), `T(0)` (T_enu_to_map). Factors:
   radian turned (`odometry_noise_ang_per_rad`: LIO heading errors concentrate in turns);
   different source frames are joined by a weak edge;
 - loop closures: Huber, with sigma floors (the detector ICP covariance is overconfident);
-- GNSS: `FactorGnssMapEnu` with a selectable robust kernel (default Cauchy);
+- GNSS: `FactorGnssMapEnu` with a selectable robust kernel (default Cauchy); readings
+  reporting an RTK-grade sigma (`gnss_rtk_*`) get their own floor and a Huber kernel, and
+  soften the chain edges near them (`keyframes_near_rtk()`), so the fixes win where LIO slips;
 - gravity: `mola_georeferencing::add_imu_gravity_factors`;
 - gyro: `BetweenFactor<Pose3>` with free translation (sigma 1e3 m);
 - wheel odometry (if attached; `use_wheel_odometry`): forward and lateral translation of the
@@ -178,6 +180,9 @@ and a `T(0)` azimuth sigma below `georef_max_sigma_yaw_deg`.
 - 1.3 km ground robot loop, low-cost GNSS only (RTK as ground truth), measured with a feedback
   of the mapper poses into the smoother since removed: absolute horizontal RMSE 5.4 m initially; 4.6 m with smoother bias tracking and
   the per-radian odometry sigma; 4.35 m adding gyro factors. LIO alone drifts ~11 m.
+- 550 m ground robot loop (LIO 17 % short on one stretch), RTK GNSS: horizontal RMSE against
+  the fixes 6.5 m with the plain GNSS weighting (the fixes there taken as outliers), 0.45 m
+  with the RTK weighting (replay of the recorded mapper input).
 - KITTI 00 (3.7 km, loop closures only): LIO APE RMSE 6.85 m, mapper 2.21 m (50 loops).
 
 ## Tests

@@ -145,6 +145,13 @@ geo-referenced, the marginal covariance of ``T_enu_to_map`` is computed. Its fac
   and saved only once observable: at least ``georef_min_gnss_factors`` GNSS
   factors, and an azimuth sigma of ``T_enu_to_map`` below
   ``georef_max_sigma_yaw_deg``.
+  Readings that report an RTK-grade accuracy (horizontal sigma up to
+  ``gnss_rtk_max_reported_sigma``, 0.1 m) have their own floor
+  (``gnss_rtk_minimum_uncertainty``) and a Huber kernel, and the odometry chain
+  edges near them (``gnss_rtk_odometry_window``) use
+  ``gnss_rtk_odometry_noise_xyz_per_sqrt_m``: there, the fixes correct a front
+  end that falls short on a degenerate stretch, instead of being rejected as
+  outliers. Elsewhere the chain keeps its stiffness.
 * **Gravity**: roll and pitch from the averaged accelerometer.
 * **Gyroscope**: relative rotation between consecutive keyframes, with free
   translation. The sigma combines the noise density, the bias sigma and the scale

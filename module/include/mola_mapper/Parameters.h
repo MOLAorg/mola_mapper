@@ -102,6 +102,23 @@ struct GlobalGraphParams
   std::string gnss_robust_kernel = "cauchy";
   double gnss_robust_k = 1.5;  ///< kernel parameter, in sigmas
 
+  /// Readings that report an RTK-grade horizontal accuracy (at most this, in
+  /// meters; 0: none) are weighted as such: their own sigma floor, and a Huber
+  /// kernel. A redescending kernel would drop them exactly where the front end
+  /// drifted (e.g. LiDAR odometry that falls short on a degenerate stretch), the
+  /// places they must correct. Receivers that report meters keep the above.
+  double gnss_rtk_max_reported_sigma = 0.1;
+  double gnss_rtk_minimum_uncertainty = 0.05;  ///< [m] per-axis floor
+  std::string gnss_rtk_robust_kernel = "huber";
+  double gnss_rtk_robust_k = 3.0;  ///< kernel parameter, in sigmas
+  /// Odometry chain edges with RTK-grade readings within this time of both of
+  /// their keyframes use this translation noise per sqrt(m) instead of
+  /// odometry_noise_xyz_per_sqrt_m: a chain that stiff cannot follow the fixes
+  /// where the front end slips. Elsewhere (no fixes, or low-cost ones) the chain
+  /// keeps its stiffness, so noisy fixes do not warp the map.
+  double gnss_rtk_odometry_noise_xyz_per_sqrt_m = 0.05;
+  double gnss_rtk_odometry_window = 2.0;  ///< [s]
+
   /// The geo-reference is returned only once observable: at least this many GNSS
   /// factors, and an azimuth sigma below this.
   uint32_t georef_min_gnss_factors = 3;

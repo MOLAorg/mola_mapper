@@ -98,6 +98,8 @@ struct GlobalGraphResult
 
   std::size_t num_odometry_factors = 0;
   std::size_t num_gnss_factors = 0;
+  std::size_t num_gnss_rtk_factors = 0;   ///< of them, RTK-grade (gnss_rtk_*)
+  std::size_t num_odometry_near_rtk = 0;  ///< chain edges softened near RTK fixes
   std::size_t num_gravity_factors = 0;
   std::size_t num_gyro_factors = 0;
   std::size_t num_loop_factors = 0;

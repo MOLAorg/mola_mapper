@@ -38,8 +38,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <iterator>
-#include <limits>
 #include <set>
 #include <vector>
 
@@ -109,26 +107,14 @@ const mrpt::math::TPose2D * usable_wheel_odom(
   return &*kf.wheel_odom_from_prev;
 }
 
-/// Keyframes within gnss_rtk_odometry_window of an RTK-grade GNSS factor (their
-/// stamps, sorted, in `rtkStamps`): there, the odometry chain gives way to the fixes.
-std::vector<bool> keyframes_near_rtk(
-  const GlobalGraphInput & in, const std::vector<double> & rtkStamps, const GlobalGraphParams & p)
+/// Whether an RTK-grade GNSS factor (`rtkStamps`: their keyframe stamps,
+/// sorted) lies within `window` of the time span [t0, t1] of an odometry edge:
+/// there, the chain gives way to the fixes. Also for keyframes further apart
+/// than the window, or with the fixes on every other keyframe.
+bool edge_near_rtk(double t0, double t1, const std::vector<double> & rtkStamps, double window)
 {
-  const std::size_t N = in.keyframes.size();
-  std::vector<bool> near(N, false);
-  for (std::size_t i = 0; i < N && !rtkStamps.empty(); i++) {
-    const double t = mrpt::Clock::toDouble(in.keyframes[i].stamp);
-    const auto it = std::lower_bound(rtkStamps.begin(), rtkStamps.end(), t);
-    double gap = std::numeric_limits<double>::max();
-    if (it != rtkStamps.end()) {
-      gap = *it - t;
-    }
-    if (it != rtkStamps.begin()) {
-      gap = std::min(gap, t - *std::prev(it));
-    }
-    near[i] = gap <= p.gnss_rtk_odometry_window;
-  }
-  return near;
+  const auto it = std::lower_bound(rtkStamps.begin(), rtkStamps.end(), std::min(t0, t1) - window);
+  return it != rtkStamps.end() && *it <= std::max(t0, t1) + window;
 }
 
 /// Sigmas of an odometry edge, from the (inflated) diagonal of its MRPT covariance.
@@ -175,13 +161,14 @@ void add_odometry_factors(
   gtsam::NonlinearFactorGraph & fg, const GlobalGraphInput & in, const GlobalGraphParams & params,
   const std::vector<double> & rtkStamps, GlobalGraphResult & out)
 {
-  const auto nearRtk = keyframes_near_rtk(in, rtkStamps, params);
   for (std::size_t i = 1; i < in.keyframes.size(); i++) {
     const auto & prev = in.keyframes[i - 1];
     const auto & cur = in.keyframes[i];
     if (prev.source_frame == cur.source_frame) {
       const mrpt::poses::CPose3DPDFGaussian rel = cur.pose_in_source - prev.pose_in_source;
-      const bool soft = nearRtk[i - 1] && nearRtk[i];
+      const bool soft = edge_near_rtk(
+        mrpt::Clock::toDouble(prev.stamp), mrpt::Clock::toDouble(cur.stamp), rtkStamps,
+        params.gnss_rtk_odometry_window);
       if (soft) {
         out.num_odometry_near_rtk++;
       }
@@ -323,7 +310,8 @@ std::vector<double> add_gnss_factors(
     if (horizSigma > params.gnss_max_uncertainty_horiz) {
       continue;
     }
-    const bool rtk = horizSigma <= params.gnss_rtk_max_reported_sigma;
+    const bool rtk =
+      horizSigma * params.gnss_uncertainty_multiplier <= params.gnss_rtk_max_reported_sigma;
     const gtsam::Vector3 sigmas =
       (gtsam::Vector3(f.sigma_E, f.sigma_N, f.sigma_U) * params.gnss_uncertainty_multiplier)
         .array()

@@ -238,7 +238,7 @@ void test_rtk_fixes_win_over_a_slipping_front_end()
   const auto asBefore = mola::mapper::optimize_global_graph(in, p);
   std::cout << "Slipping front end: max keyframe error " << maxError(rtk)
             << " m with RTK weighting (" << rtk.num_gnss_rtk_factors << " RTK factors), "
-            << maxError(asBefore) << " m with the default one\n";
+            << maxError(asBefore) << " m with the plain weighting\n";
   ASSERT_EQUAL_(rtk.num_gnss_rtk_factors, gt.size());
   ASSERT_EQUAL_(rtk.num_odometry_near_rtk, gt.size() - 1);
   ASSERT_LT_(maxError(rtk), 0.3);
@@ -253,6 +253,73 @@ void test_rtk_fixes_win_over_a_slipping_front_end()
   ASSERT_EQUAL_(r.num_gnss_factors, gt.size());
   ASSERT_EQUAL_(r.num_gnss_rtk_factors, 0U);
   ASSERT_EQUAL_(r.num_odometry_near_rtk, 0U);
+}
+
+/** Which readings are RTK-grade, and which odometry edges they soften. */
+void test_rtk_threshold_and_window()
+{
+  const auto gt = ground_truth();  // keyframes 1 s apart
+  GlobalGraphParams p;
+  p.use_imu_gravity = false;
+  const auto run = [&](double reportedSigma, std::size_t first, std::size_t last) {
+    GlobalGraphInput in;
+    in.keyframes = drifting_odometry(gt, 0.0);
+    attach_gnss_fixes(in, gt, first, last, 0.01, reportedSigma);
+    return mola::mapper::optimize_global_graph(in, p);
+  };
+  // RTK fixed (2 cm per axis) is RTK-grade; DGPS with a good HDOP (7 cm per axis,
+  // 9.9 cm horizontal) is not:
+  ASSERT_EQUAL_(run(0.02, 0, 79).num_gnss_rtk_factors, 80U);
+  ASSERT_EQUAL_(run(0.07, 0, 79).num_gnss_rtk_factors, 0U);
+  // The classification is after gnss_uncertainty_multiplier:
+  p.gnss_uncertainty_multiplier = 3.0;
+  ASSERT_EQUAL_(run(0.02, 0, 79).num_gnss_rtk_factors, 0U);
+  p.gnss_uncertainty_multiplier = 1.0;
+
+  // Edges with a fix within 2 s of their span: fixes on keyframes 0 to 39 soften
+  // edges 1 to 42 (edge i joins keyframes i-1 and i), the chain stays stiff after.
+  ASSERT_EQUAL_(run(0.01, 0, 39).num_odometry_near_rtk, 42U);
+  {
+    // Fixes on 0 to 19 and 60 to 80: edges 1 to 22 and 58 to 80.
+    GlobalGraphInput in;
+    in.keyframes = drifting_odometry(gt, 0.0);
+    attach_gnss_fixes(in, gt, 0, 19, 0.01, 0.01);
+    attach_gnss_fixes(in, gt, 60, gt.size() - 1, 0.01, 0.01);
+    ASSERT_EQUAL_(mola::mapper::optimize_global_graph(in, p).num_odometry_near_rtk, 45U);
+  }
+  {
+    // A slow vehicle: keyframes 2.5 s apart, RTK fixes on every other one (e.g.
+    // fixed/float flicker), front end 15 % short on the second side. Every edge
+    // has a fix in its span or next to it: all of them are softened.
+    GlobalGraphInput in;
+    in.keyframes = drifting_odometry(gt, 0.0);
+    CPose3D odo = gt.front();
+    for (std::size_t i = 0; i < gt.size(); i++) {
+      in.keyframes[i].stamp = mrpt::Clock::fromDouble(1000.0 + 2.5 * static_cast<double>(i));
+      if (i > 0) {
+        CPose3D step = gt[i] - gt[i - 1];
+        if (i > 20 && i < 40) {
+          step =
+            CPose3D(0.85 * step.x(), step.y(), step.z(), step.yaw(), step.pitch(), step.roll());
+        }
+        odo = odo + step;
+        in.keyframes[i].pose_in_source.mean = odo;
+        in.keyframes[i].initial_guess = odo;
+      }
+    }
+    for (std::size_t i = 0; i < gt.size(); i += 2) {
+      attach_gnss_fixes(in, gt, i, i, 0.02, 0.01);
+    }
+    const auto r = mola::mapper::optimize_global_graph(in, p);
+    double maxErr = 0;
+    for (std::size_t i = 0; i < gt.size(); i++) {
+      maxErr = std::max(maxErr, position_error(r.poses[i], gt[i]));
+    }
+    std::cout << "RTK fixes on every other keyframe, 2.5 s apart: " << r.num_odometry_near_rtk
+              << " softened edges, max keyframe error " << maxErr << " m\n";
+    ASSERT_EQUAL_(r.num_odometry_near_rtk, gt.size() - 1);
+    ASSERT_LT_(maxErr, 0.5);
+  }
 }
 
 /** The geo-reference is only returned once observable: not from a single fix,
@@ -448,6 +515,7 @@ int main()
     test_gnss_georeference_and_drift();
     test_georeference_only_once_observable();
     test_rtk_fixes_win_over_a_slipping_front_end();
+    test_rtk_threshold_and_window();
     test_graph_input_round_trip();
     std::cout << "All tests passed.\n";
     return 0;

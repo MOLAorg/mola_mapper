@@ -312,21 +312,38 @@ std::vector<double> add_gnss_factors(
     }
     const bool rtk =
       horizSigma * params.gnss_uncertainty_multiplier <= params.gnss_rtk_max_reported_sigma;
-    const gtsam::Vector3 sigmas =
+    gtsam::Vector3 sigmas =
       (gtsam::Vector3(f.sigma_E, f.sigma_N, f.sigma_U) * params.gnss_uncertainty_multiplier)
         .array()
         .max(rtk ? params.gnss_rtk_minimum_uncertainty : params.gnss_minimum_uncertainty);
-    auto robust = gtsam::noiseModel::Robust::Create(
-      rtk ? robust_kernel(params.gnss_rtk_robust_kernel, params.gnss_rtk_robust_k)
-          : robust_kernel(params.gnss_robust_kernel, params.gnss_robust_k),
-      gtsam::noiseModel::Diagonal::Sigmas(sigmas));
+    sigmas.z() = std::max(sigmas.z(), params.gnss_vertical_minimum_uncertainty);
+    const auto kernel = rtk ? robust_kernel(params.gnss_rtk_robust_kernel, params.gnss_rtk_robust_k)
+                            : robust_kernel(params.gnss_robust_kernel, params.gnss_robust_k);
     if (rtk) {
       out.num_gnss_rtk_factors++;
       rtkStamps.push_back(mrpt::Clock::toDouble(in.keyframes.at(f.kf_index).stamp));
     }
-    fg.emplace_shared<mola::factors::FactorGnssMapEnu>(
-      T(0), P(f.kf_index), mrpt::gtsam_wrappers::toPoint3(f.obs->sensorPose.translation()),
-      mrpt::gtsam_wrappers::toPoint3(f.enu), robust);
+    const auto antenna = mrpt::gtsam_wrappers::toPoint3(f.obs->sensorPose.translation());
+    const auto enu = mrpt::gtsam_wrappers::toPoint3(f.enu);
+    if (!params.gnss_vertical_separate) {
+      fg.emplace_shared<mola::factors::FactorGnssMapEnu>(
+        T(0), P(f.kf_index), antenna, enu,
+        gtsam::noiseModel::Robust::Create(kernel, gtsam::noiseModel::Diagonal::Sigmas(sigmas)));
+    } else {
+      // Two factors of the same reading: each leaves the other's axes free with
+      // a sigma far above any GNSS error, so their robust kernels act apart.
+      constexpr double kFree = 1e6;  // [m]
+      fg.emplace_shared<mola::factors::FactorGnssMapEnu>(
+        T(0), P(f.kf_index), antenna, enu,
+        gtsam::noiseModel::Robust::Create(
+          kernel,
+          gtsam::noiseModel::Diagonal::Sigmas(gtsam::Vector3(sigmas.x(), sigmas.y(), kFree))));
+      fg.emplace_shared<mola::factors::FactorGnssMapEnu>(
+        T(0), P(f.kf_index), antenna, enu,
+        gtsam::noiseModel::Robust::Create(
+          robust_kernel(params.gnss_vertical_robust_kernel, params.gnss_vertical_robust_k),
+          gtsam::noiseModel::Diagonal::Sigmas(gtsam::Vector3(kFree, kFree, sigmas.z()))));
+    }
     out.num_gnss_factors++;
   }
   std::sort(rtkStamps.begin(), rtkStamps.end());

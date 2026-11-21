@@ -111,7 +111,10 @@ Keys `P(i)` (keyframe poses in `{map}`), `T(0)` (T_enu_to_map). Factors:
   radian turned (`odometry_noise_ang_per_rad`: LIO heading errors concentrate in turns);
   different source frames are joined by a weak edge;
 - loop closures: Huber, with sigma floors (the detector ICP covariance is overconfident);
-- GNSS: `FactorGnssMapEnu` with a selectable robust kernel (default Cauchy); readings
+- GNSS: `FactorGnssMapEnu` with a selectable robust kernel (default Huber: a redescending
+  one lets go of good fixes once the front end drifts a few sigmas off); the height in a
+  factor of its own (`gnss_vertical_*`, 0.1 m floor, Cauchy) so a false RTK height is dropped
+  without touching the horizontal fit; readings
   reporting an RTK-grade sigma (`gnss_rtk_*`) get their own floor and a Huber kernel, and
   soften the chain edges near them (`edge_near_rtk()`), so the fixes win where LIO slips;
 - gravity: `mola_georeferencing::add_imu_gravity_factors`;
@@ -185,12 +188,19 @@ and a `T(0)` azimuth sigma below `georef_max_sigma_yaw_deg`.
   (the fixes there taken as outliers), 0.90 m with the RTK weighting (its float fixes, 5-10 cm,
   on that stretch stay plain), 0.44 m with gnss_rtk_max_reported_sigma 0.1; low-cost receiver
   on the same loop unchanged by it (6.4 m; 3.2 m with wheel odometry).
+- Ground robot recordings (4, 25-47 min, an RTK and a low-cost receiver each, replays of
+  the recorded mapper input), current defaults vs Cauchy / joint 3D GNSS factors / skipped
+  ambiguous BEV candidates: a false RTK height leaves the loops 0.06 m apart vertically
+  instead of 2.2 m; with the low-cost receiver, 24 loops instead of 20 and loop residuals
+  0.49 / 0.03 m (h / v, p95) instead of 2.6 / 1.6 m on one, 11 m instead of 57 m p95
+  horizontal error on another; one more loop on three RTK runs, no false ones.
 - KITTI 00 (3.7 km, loop closures only): LIO APE RMSE 6.85 m, mapper 2.21 m (50 loops).
 
 ## Tests
 
 `test/`: test-global-graph (loop closure, GNSS georef and its observability, gyro vs turn
-heading errors, RTK fixes vs a slipping front end and which edges they soften), test-gyro-integration, test-mapper-ingestion (GNSS/gravity/gyro attachment,
+heading errors, RTK fixes vs a slipping front end and which edges they soften, a false RTK
+height), test-gyro-integration, test-mapper-ingestion (GNSS/gravity/gyro attachment,
 outputs), test-loop-odometry-check, test-loop-consistency, test-lc-wait-idle,
 test-graph-visualization (GUI scene, no visualizer needed), test-keyframe-map-visualization,
 test-camera-director.

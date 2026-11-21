@@ -98,8 +98,11 @@ struct GlobalGraphParams
   double gnss_max_uncertainty_horiz = 20.0;  ///< [m] readings above this are not used
   /// Robust kernel of the GNSS factors: "huber", "cauchy", "geman_mcclure" or
   /// "tukey". The redescending ones (all but Huber) stop pulling at outliers,
-  /// e.g. low-cost receivers meters off under trees with a small reported sigma.
-  std::string gnss_robust_kernel = "cauchy";
+  /// e.g. low-cost receivers meters off under trees with a small reported sigma,
+  /// but also once the front end has drifted a few sigmas away from good fixes:
+  /// with a low-cost receiver the map then keeps the drift for good, and
+  /// overrides loop closures. Huber keeps pulling, with a bounded influence.
+  std::string gnss_robust_kernel = "huber";
   double gnss_robust_k = 1.5;  ///< kernel parameter, in sigmas
 
   /// Readings that report an RTK-grade horizontal accuracy are weighted as such:
@@ -125,6 +128,18 @@ struct GlobalGraphParams
   /// GNSS outage longer than the window is not corrected.
   double gnss_rtk_odometry_noise_xyz_per_sqrt_m = 0.05;
   double gnss_rtk_odometry_window = 2.0;  ///< [s]
+
+  /// GNSS height, for every reading after the floors above: receivers are worse
+  /// vertically than horizontally, and one reporting centimeters can still be
+  /// meters off in height, where LiDAR odometry and loop closures are not.
+  /// Floor of the vertical (Up) sigma [m] (0: only the floors above):
+  double gnss_vertical_minimum_uncertainty = 0.1;
+  /// If true, the height goes in a factor of its own, with its own robust
+  /// kernel: in a single 3D factor the kernel acts on the joint error, so a
+  /// reading meters off in height is also down-weighted horizontally.
+  bool gnss_vertical_separate = true;
+  std::string gnss_vertical_robust_kernel = "cauchy";
+  double gnss_vertical_robust_k = 1.5;  ///< kernel parameter, in sigmas
 
   /// The geo-reference is returned only once observable: at least this many GNSS
   /// factors, and an azimuth sigma below this.

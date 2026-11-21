@@ -139,7 +139,12 @@ geo-referenced, the marginal covariance of ``T_enu_to_map`` is computed. Its fac
   (``loop_closure_min_sigma_xyz``, ``loop_closure_min_sigma_ang_deg``), since the
   detector covariance is overconfident.
 * **GNSS**: ENU position factors (readings with a GGA message) with a selectable
-  robust kernel (default Cauchy). Readings with a horizontal sigma above
+  robust kernel (default Huber, which keeps pulling where the front end has
+  drifted away from good fixes). The height goes in a factor of its own
+  (``gnss_vertical_separate``), with a floor of its sigma
+  (``gnss_vertical_minimum_uncertainty``, 0.1 m) and a Cauchy kernel: a reading
+  meters off in height, as a false RTK fix can be, is dropped there without
+  being down-weighted horizontally. Readings with a horizontal sigma above
   ``gnss_max_uncertainty_horiz`` are discarded. If the spread of the readings is
   too small for their sigmas, they are not used. The geo-reference is published
   and saved only once observable: at least ``georef_min_gnss_factors`` GNSS
@@ -307,7 +312,7 @@ with an environment variable (shown in parentheses below).
         gnss_minimum_uncertainty: 0.5   # [m] (MOLA_MAPPER_GNSS_MIN_SIGMA)
         gnss_uncertainty_multiplier: 1.0   # (MOLA_MAPPER_GNSS_SIGMA_MULTIPLIER)
         gnss_max_uncertainty_horiz: 20.0   # [m]
-        gnss_robust_kernel: "cauchy"    # huber, cauchy, geman_mcclure, tukey (MOLA_MAPPER_GNSS_ROBUST_KERNEL)
+        gnss_robust_kernel: "huber"     # huber, cauchy, geman_mcclure, tukey (MOLA_MAPPER_GNSS_ROBUST_KERNEL)
         gnss_robust_k: 1.5              # [sigmas] (MOLA_MAPPER_GNSS_ROBUST_K)
         gnss_rtk_max_reported_sigma: 0.05  # [m] (MOLA_MAPPER_GNSS_RTK_MAX_SIGMA)
         gnss_rtk_minimum_uncertainty: 0.05  # [m] (MOLA_MAPPER_GNSS_RTK_MIN_SIGMA)
@@ -315,6 +320,10 @@ with an environment variable (shown in parentheses below).
         gnss_rtk_robust_k: 3.0          # [sigmas] (MOLA_MAPPER_GNSS_RTK_ROBUST_K)
         gnss_rtk_odometry_noise_xyz_per_sqrt_m: 0.05  # (MOLA_MAPPER_GNSS_RTK_ODOM_SIGMA_XYZ_PER_SQRT_M)
         gnss_rtk_odometry_window: 2.0   # [s]
+        gnss_vertical_minimum_uncertainty: 0.1  # [m] (MOLA_MAPPER_GNSS_VERTICAL_MIN_SIGMA)
+        gnss_vertical_separate: true    # (MOLA_MAPPER_GNSS_VERTICAL_SEPARATE)
+        gnss_vertical_robust_kernel: "cauchy"  # (MOLA_MAPPER_GNSS_VERTICAL_ROBUST_KERNEL)
+        gnss_vertical_robust_k: 1.5     # [sigmas] (MOLA_MAPPER_GNSS_VERTICAL_ROBUST_K)
         georef_min_gnss_factors: 3
         georef_max_sigma_yaw_deg: 10.0  # [deg] (MOLA_MAPPER_GEOREF_MAX_SIGMA_YAW)
 

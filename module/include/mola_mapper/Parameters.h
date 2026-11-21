@@ -239,7 +239,7 @@ struct Parameters
   /** If true, after each solve with new loop closures the front ends are told
    *  (mola::LocalMapCorrectionSource), so they can rebuild their local maps
    *  from the corrected keyframes. */
-  bool local_map_corrections = true;
+  bool local_map_corrections = false;
 
   /** @name Loop closure (mola_sm_loop_closure engine, detector only)
      * @{ */

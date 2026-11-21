@@ -38,7 +38,10 @@ Separate MOLA modules, composed by `mola-cli-launchs/*.yaml`:
   DiagnosticsProvider, SharedKeyframeMap, LocalMapCorrectionSource) is NOT a NavStateFilter.
   After solves with new loops it advertises a `LocalMapCorrection`; LIO then pulls
   the keyframes around its newest one (ids are indices in `keyframes_`, poses
-  relative to it) and rebuilds its local map.
+  relative to it) and rebuilds its local map. Off by default (`local_map_corrections`): in
+  live A/B runs it did not improve the global map on average, made it vary more between runs
+  and degraded LIO's own trajectory; it may be turned on again once loop edges are more
+  accurate.
 
 No estimate flows from the mapper into the smoother. Both may take the same GNSS readings:
 the smoother for a live geo-referenced estimate, the mapper for the geo-reference of its
@@ -194,7 +197,8 @@ and a `T(0)` azimuth sigma below `georef_max_sigma_yaw_deg`.
   instead of 2.2 m; with the low-cost receiver, 24 loops instead of 20 and loop residuals
   0.49 / 0.03 m (h / v, p95) instead of 2.6 / 1.6 m on one, 11 m instead of 57 m p95
   horizontal error on another; one more loop on three RTK runs, no false ones.
-- KITTI 00 (3.7 km, loop closures only): LIO APE RMSE 6.85 m, mapper 2.21 m (50 loops).
+- KITTI 00 (3.7 km, loop closures only, live at 3x, current defaults): LIO APE RMSE 4.9 m,
+  mapper 0.85 m (~125 loops); with local map corrections on, the same within run-to-run spread.
 
 ## Tests
 

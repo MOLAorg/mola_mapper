@@ -6,7 +6,8 @@
 #    cov2cov scores genuine cross-pass loops too low to accept them;
 #  - a wider ICP basin and a global registration initial guess, so loop
 #    candidates several meters off (accumulated drift) can still converge
-#    (ambiguous matches, e.g. repetitive structures, reject the candidate);
+#    (where that match is ambiguous, e.g. repetitive structures, ICP starts
+#    from the graph estimate instead);
 #  - candidate selection: only pairs far apart in time.
 #
 # Every value can be changed with its environment variable. `$define` rebinds the
@@ -36,6 +37,13 @@ $define:
   # underestimate the motion.
   MIN_FRAMES_BETWEEN_LC: 50
   MAX_LC_DISTANCE: 20.0  # [m]
+
+  # A candidate whose BEV match is ambiguous (repetitive structure) is still
+  # tried with ICP, from the graph estimate, instead of skipped (which loses
+  # loops). A wrong one must then pass the ICP quality gate and the mapper's
+  # odometry check; the neighbor consistency check only applies with at least
+  # two nearby loops, so an isolated candidate rests on those two.
+  LC_SKIP_AMBIGUOUS_CANDIDATES: false
 
 $import: $(ros2 pkg prefix mola_sm_loop_closure)/share/mola_sm_loop_closure/pipelines/loop-closure-f2f-lidar3d-gicp.yaml
 

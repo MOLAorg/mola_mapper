@@ -187,16 +187,22 @@ void test_gnss_georeference_and_drift()
   const auto & est = r.georeferencing->T_enu_to_map.mean;
   const double yawErrDeg =
     mrpt::RAD2DEG(std::abs(mrpt::math::wrapToPi(est.yaw() - T_ENU_TO_MAP.yaw())));
-  double maxErr = 0;
+  double maxErrH = 0;
+  double maxErrV = 0;
   for (std::size_t i = 0; i < gt.size(); i++) {
-    maxErr = std::max(maxErr, position_error(r.poses[i], gt[i]));
+    const auto d = (r.poses[i] - gt[i]).translation();
+    maxErrH = std::max(maxErrH, std::hypot(d.x, d.y));
+    maxErrV = std::max(maxErrV, std::abs(d.z));
   }
   std::cout << "GNSS: T_enu_to_map yaw error " << yawErrDeg << " deg, translation error "
             << (est.translation() - T_ENU_TO_MAP.translation()).norm() << " m, max keyframe error "
-            << maxErr << " m\n";
+            << maxErrH << " m horizontal, " << maxErrV << " m vertical\n";
   ASSERT_LT_(yawErrDeg, 2.0);
   ASSERT_LT_((est.translation() - T_ENU_TO_MAP.translation()).norm(), 0.5);
-  ASSERT_LT_(maxErr, 0.8);  // the fixes have 0.3 m sigma
+  // The fixes have 0.3 m sigma per axis. The height has a redescending kernel of
+  // its own, which leaves the noisiest heights to the odometry: a little looser.
+  ASSERT_LT_(maxErrH, 0.7);
+  ASSERT_LT_(maxErrV, 0.8);
 }
 
 /** A front end that falls 15 % short along one 20 m side (LiDAR odometry
@@ -253,6 +259,66 @@ void test_rtk_fixes_win_over_a_slipping_front_end()
   ASSERT_EQUAL_(r.num_gnss_factors, gt.size());
   ASSERT_EQUAL_(r.num_gnss_rtk_factors, 0U);
   ASSERT_EQUAL_(r.num_odometry_near_rtk, 0U);
+}
+
+/** RTK fixes (1 cm reported) that are right horizontally but 3 m off in height
+ *  for 8 m of the second side, as a false fix can be, where the front end also
+ *  falls 25 % short: with the height in a factor of its own (a floor of its
+ *  sigma and a redescending kernel) the odometry keeps the height there while
+ *  those fixes still correct the slip horizontally; in a single 3D factor the
+ *  false heights bend the trajectory, and the slip is corrected less. */
+void test_false_gnss_height_is_dropped()
+{
+  const auto gt = ground_truth();
+  GlobalGraphInput in;
+  in.keyframes = drifting_odometry(gt, 0.0);
+  {
+    // Forward increments 25 % short where the false heights are:
+    CPose3D odo = gt.front();
+    for (std::size_t i = 1; i < gt.size(); i++) {
+      CPose3D step = gt[i] - gt[i - 1];
+      if (i > 26 && i < 34) {
+        step = CPose3D(0.75 * step.x(), step.y(), step.z(), step.yaw(), step.pitch(), step.roll());
+      }
+      odo = odo + step;
+      in.keyframes[i].pose_in_source.mean = odo;
+      in.keyframes[i].initial_guess = odo;
+    }
+  }
+  // Those fixes come from poses 3 m higher than the truth:
+  auto gtFalseHeight = gt;
+  for (std::size_t i = 26; i < 34; i++) {
+    gtFalseHeight[i] = CPose3D(0, 0, 3.0, 0, 0, 0) + gt[i];
+  }
+  attach_gnss_fixes(in, gtFalseHeight, 0, gt.size() - 1, 0.01, 0.01);
+
+  GlobalGraphParams p;
+  p.use_imu_gravity = false;
+  const auto errors = [&](const mola::mapper::GlobalGraphResult & r) {
+    double h = 0;
+    double v = 0;
+    for (std::size_t i = 0; i < gt.size(); i++) {
+      const auto d = (r.poses[i] - gt[i]).translation();
+      h = std::max(h, std::hypot(d.x, d.y));
+      v = std::max(v, std::abs(d.z));
+    }
+    return std::make_pair(h, v);
+  };
+  p.gnss_vertical_separate = false;
+  const auto [hJoint, vJoint] = errors(mola::mapper::optimize_global_graph(in, p));
+  p.gnss_vertical_separate = true;
+  p.gnss_vertical_minimum_uncertainty = 0.1;
+  p.gnss_vertical_robust_kernel = "cauchy";
+  p.gnss_vertical_robust_k = 1.5;
+  const auto [hSep, vSep] = errors(mola::mapper::optimize_global_graph(in, p));
+  std::cout << "False RTK height: max height error " << vJoint << " m in one 3D factor, " << vSep
+            << " m with the height apart (horizontal " << hJoint << " / " << hSep << " m)\n";
+  ASSERT_GT_(vJoint, 0.5);
+  ASSERT_LT_(vSep, 0.1);
+  // The slip is corrected by the same fixes, and better than in one 3D factor,
+  // whose kernel also down-weights them horizontally:
+  ASSERT_LT_(hSep, 0.2);
+  ASSERT_LT_(hSep, 0.6 * hJoint);
 }
 
 /** Which readings are RTK-grade, and which odometry edges they soften. */
@@ -516,6 +582,7 @@ int main()
     test_georeference_only_once_observable();
     test_rtk_fixes_win_over_a_slipping_front_end();
     test_rtk_threshold_and_window();
+    test_false_gnss_height_is_dropped();
     test_graph_input_round_trip();
     std::cout << "All tests passed.\n";
     return 0;

@@ -59,8 +59,8 @@ estimation of its own and is not a `mola::NavStateFilter`.
 - 📈 Global pose graph (GTSAM): odometry chain, loop closures, GNSS, gravity,
   gyroscope and wheel odometry factors
 - 🌍 Geo-referencing: `T_enu_to_map` is estimated with its covariance and published live
-- 🔄 Loop closure corrections are sent back to the LiDAR odometry, which rebuilds its
-  local map from the corrected keyframes
+- 🔄 Optionally, loop closure corrections are sent back to the LiDAR odometry, which
+  rebuilds its local map from the corrected keyframes (off by default)
 - 🖥️ Live GUI: keyframe map at the optimized poses, colored by height, with corrections
   gliding into place and an optional scripted camera (overviews, close-ups, loop closure shots)
 - 🧰 Offline tools: re-optimize a saved graph (`mola-mapper-reoptimize`), or replay a
@@ -95,9 +95,9 @@ caller win, e.g. `MOLA_WITH_GUI=false MOLA_QUIT_ON_DATASET_END=true` for a headl
   from the raw data source as a `mola::RawDataConsumer`. It also implements
   `mola::MapSourceBase` (geo-reference), `mola::DiagnosticsProvider` and
   `mola::ExecutableBase`.
-- After loop closures, it tells the front ends (`mola::LocalMapCorrectionSource`),
-  which can then rebuild their local maps from the corrected keyframes around
-  them, including those of earlier visits.
+- Optionally (`local_map_corrections`), after loop closures it tells the front ends
+  (`mola::LocalMapCorrectionSource`), which can then rebuild their local maps from the
+  corrected keyframes around them, including those of earlier visits.
 
 See [docs/call-graph.md](docs/call-graph.md) for the threads and call flow.
 

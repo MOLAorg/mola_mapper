@@ -6,7 +6,8 @@
 #    cov2cov scores genuine cross-pass loops too low to accept them;
 #  - a wider ICP basin and a global registration initial guess, so loop
 #    candidates several meters off (accumulated drift) can still converge
-#    (ambiguous matches, e.g. repetitive structures, reject the candidate);
+#    (where that match is ambiguous, e.g. repetitive structures, ICP starts
+#    from the graph estimate instead);
 #  - candidate selection: only pairs far apart in time.
 #
 # Every value can be changed with its environment variable. `$define` rebinds the

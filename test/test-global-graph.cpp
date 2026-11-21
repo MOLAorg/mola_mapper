@@ -262,15 +262,29 @@ void test_rtk_fixes_win_over_a_slipping_front_end()
 }
 
 /** RTK fixes (1 cm reported) that are right horizontally but 3 m off in height
- *  for 8 m of the second side, as a false fix can be: with the height in a factor of its
- *  own (a floor of its sigma and a redescending kernel) the exact odometry
- *  keeps the height there, and the horizontal fit is unchanged; in a single 3D
- *  factor the false heights bend the trajectory. */
+ *  for 8 m of the second side, as a false fix can be, where the front end also
+ *  falls 25 % short: with the height in a factor of its own (a floor of its
+ *  sigma and a redescending kernel) the odometry keeps the height there while
+ *  those fixes still correct the slip horizontally; in a single 3D factor the
+ *  false heights bend the trajectory, and the slip is corrected less. */
 void test_false_gnss_height_is_dropped()
 {
   const auto gt = ground_truth();
   GlobalGraphInput in;
   in.keyframes = drifting_odometry(gt, 0.0);
+  {
+    // Forward increments 25 % short where the false heights are:
+    CPose3D odo = gt.front();
+    for (std::size_t i = 1; i < gt.size(); i++) {
+      CPose3D step = gt[i] - gt[i - 1];
+      if (i > 26 && i < 34) {
+        step = CPose3D(0.75 * step.x(), step.y(), step.z(), step.yaw(), step.pitch(), step.roll());
+      }
+      odo = odo + step;
+      in.keyframes[i].pose_in_source.mean = odo;
+      in.keyframes[i].initial_guess = odo;
+    }
+  }
   // Those fixes come from poses 3 m higher than the truth:
   auto gtFalseHeight = gt;
   for (std::size_t i = 26; i < 34; i++) {
@@ -301,7 +315,10 @@ void test_false_gnss_height_is_dropped()
             << " m with the height apart (horizontal " << hJoint << " / " << hSep << " m)\n";
   ASSERT_GT_(vJoint, 0.5);
   ASSERT_LT_(vSep, 0.1);
-  ASSERT_LT_(hSep, 0.1);
+  // The slip is corrected by the same fixes, and better than in one 3D factor,
+  // whose kernel also down-weights them horizontally:
+  ASSERT_LT_(hSep, 0.2);
+  ASSERT_LT_(hSep, 0.6 * hJoint);
 }
 
 /** Which readings are RTK-grade, and which odometry edges they soften. */

@@ -200,6 +200,15 @@ and a `T(0)` azimuth sigma below `georef_max_sigma_yaw_deg`.
 - KITTI 00 (3.7 km, loop closures only, live at 3x, current defaults): LIO APE RMSE 4.9 m,
   mapper 0.85 m (~125 loops); with local map corrections on, the same within run-to-run spread.
 
+## Versioning
+
+- **ABI and versions**: shared libraries get the SOVERSION `MAJOR.MINOR` of `package.xml`, so a
+  patch release must keep the ABI. Changing the layout of a public type (data members added,
+  removed or reordered, virtual functions) or an exported signature needs a minor bump
+  (`catkin_prepare_release --bump minor`): otherwise packages built against the previous patch
+  release load the new library and silently corrupt memory (e.g. a struct grown by the library
+  overruns the caller's stack copy).
+
 ## Tests
 
 `test/`: test-global-graph (loop closure, GNSS georef and its observability, gyro vs turn
